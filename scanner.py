@@ -13,16 +13,15 @@ APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# מילות מפתח שמצביעות על משהו שקורה לפני שכולם יודעים
 EARLY_SIGNAL_KEYWORDS = [
     "unusual volume", "unusual activity", "unusual options",
     "someone knows", "insider", "someone bought", "big calls",
-    "why is", "what's happening", "what happened to", "what's going on",
+    "why is", "what's happening", "what happened to",
     "takeover", "merger", "buyout", "acquisition", "rumor",
     "catalyst", "breakout", "squeeze", "short squeeze",
     "upgrade", "downgrade", "fda", "approval", "contract",
-    "partnership", "deal", "revenue", "earnings", "beat",
-    "moving", "spiking", "flying", "running", "exploding"
+    "partnership", "deal", "earnings", "beat",
+    "moving", "spiking", "flying", "running"
 ]
 
 def get_week_label():
@@ -108,85 +107,74 @@ def get_top_gainers():
     return top20, bonus_candidates
 
 def score_post_interest(post_text, ticker):
-    """מחשב כמה מעניין הפוסט לפי לוגיקת הסימנים המוקדמים"""
     text_lower = post_text.lower()
     score = 0
-
-    # בונוס אם הטיקר מוזכר ישירות
     if ticker.lower() in text_lower or f"${ticker.lower()}" in text_lower:
         score += 3
-
-    # בונוס לפי מילות מפתח
     for kw in EARLY_SIGNAL_KEYWORDS:
         if kw in text_lower:
             score += 2
-
-    # בונוס לשאלות — סימן שאנשים מבחינים
     if "?" in post_text:
         score += 1
-
-    # בונוס לפוסטים קצרים וממוקדים
-    if 20 < len(post_text) < 200:
+    if 20 < len(post_text) < 300:
         score += 1
-
     return score
 
 def get_buzz_via_apify(ticker):
-    """מביא באז אמיתי מ-Reddit דרך Apify"""
     print(f"Fetching Reddit buzz for {ticker} via Apify...")
-
     if not APIFY_TOKEN:
         return [], 0
 
-    # חיפוש ב-Reddit דרך Apify
-    subreddits = ["wallstreetbets", "stocks", "investing", "StockMarket", "options"]
+    # בניית URLs לחיפוש ב-Reddit
+    search_urls = [
+        f"https://www.reddit.com/search/?q={ticker}&sort=hot&t=week",
+        f"https://www.reddit.com/r/wallstreetbets/search/?q={ticker}&sort=hot&t=week&restrict_sr=1",
+        f"https://www.reddit.com/r/stocks/search/?q={ticker}&sort=hot&t=week&restrict_sr=1",
+    ]
+
+    start_urls = [{"url": url} for url in search_urls]
 
     try:
-        # הרצת Reddit Scraper דרך Apify API
         run_resp = requests.post(
-            "https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/run-sync-get-dataset-items",
-            headers={
-                "Authorization": f"Bearer {APIFY_TOKEN}",
-                "Content-Type": "application/json"
-            },
+            f"https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/run-sync-get-dataset-items?token={APIFY_TOKEN}&timeout=60",
+            headers={"Content-Type": "application/json"},
             json={
-                "subreddits": subreddits,
-                "searchQuery": ticker,
-                "maxPostsPerSubreddit": 10,
-                "sortBy": "hot",
-                "timeFilter": "week"
+                "startUrls": start_urls,
+                "maxItems": 15,
+                "proxy": {"useApifyProxy": True}
             },
-            timeout=60
+            timeout=90
         )
 
-        if run_resp.status_code != 200:
-            print(f"Apify error: {run_resp.status_code}")
+        if run_resp.status_code not in [200, 201]:
+            print(f"Apify error: {run_resp.status_code} - {run_resp.text[:200]}")
             return [], 0
 
         posts = run_resp.json()
+        if not isinstance(posts, list):
+            print(f"Unexpected response: {str(posts)[:200]}")
+            return [], 0
+
         print(f"Got {len(posts)} posts for {ticker}")
 
-        # מיון לפי ציון עניין
         scored_posts = []
         for post in posts:
-            text = f"{post.get('title', '')} {post.get('selftext', '')}"
-            if len(text.strip()) < 10:
+            title = post.get("title", "") or post.get("heading", "") or ""
+            text = post.get("selftext", "") or post.get("body", "") or ""
+            full_text = f"{title} {text}".strip()
+            if len(full_text) < 5:
                 continue
-            interest_score = score_post_interest(text, ticker)
+            interest_score = score_post_interest(full_text, ticker)
             scored_posts.append({
-                "text": post.get("title", ""),
+                "text": title or full_text[:150],
                 "score": interest_score,
-                "upvotes": post.get("score", 0),
-                "subreddit": post.get("subreddit", ""),
+                "upvotes": post.get("score", 0) or post.get("upvotes", 0) or 0,
+                "subreddit": post.get("subreddit", "") or post.get("community", "") or "reddit",
                 "url": post.get("url", "")
             })
 
-        # מיון — קודם לפי ציון עניין, אחר כך לפי upvotes
         scored_posts.sort(key=lambda x: (x["score"], x["upvotes"]), reverse=True)
-
-        # תמיד 3 ציטוטים — גם אם מנייה לא ידועה
         top_quotes = scored_posts[:3]
-
         return top_quotes, len(posts)
 
     except Exception as e:
@@ -194,65 +182,30 @@ def get_buzz_via_apify(ticker):
         return [], 0
 
 def get_stocktwits_buzz(ticker):
-    """מביא באז מ-StockTwits"""
     print(f"StockTwits: {ticker}...")
-    result = {
-        "count": 0,
-        "sentiment_pct": 50,
-        "bullish": 0,
-        "bearish": 0
-    }
-
+    result = {"count": 0, "sentiment_pct": 50, "bullish": 0, "bearish": 0}
     try:
-        # דרך Apify כדי לעקוף חסימה
-        if APIFY_TOKEN:
-            run_resp = requests.post(
-                "https://api.apify.com/v2/acts/apify~url-content-fetcher/run-sync-get-dataset-items",
-                headers={
-                    "Authorization": f"Bearer {APIFY_TOKEN}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "urls": [{"url": f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"}]
-                },
-                timeout=30
-            )
-            if run_resp.status_code == 200:
-                items = run_resp.json()
-                if items:
-                    content = items[0].get("text", "{}")
-                    data = json.loads(content)
-                    msgs = data.get("messages", [])
-                    result["count"] = len(msgs)
-                    b = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish")
-                    br = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish")
-                    result["bullish"] = b
-                    result["bearish"] = br
-                    result["sentiment_pct"] = round(b/(b+br)*100) if (b+br) > 0 else 50
-        else:
-            # ניסיון ישיר
-            st = requests.get(f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json", timeout=8)
-            if st.status_code == 200:
-                msgs = st.json().get("messages", [])
-                result["count"] = len(msgs)
-                b = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish")
-                br = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish")
-                result["bullish"] = b
-                result["bearish"] = br
-                result["sentiment_pct"] = round(b/(b+br)*100) if (b+br) > 0 else 50
+        st = requests.get(
+            f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json",
+            timeout=8
+        )
+        if st.status_code == 200:
+            msgs = st.json().get("messages", [])
+            result["count"] = len(msgs)
+            b = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish")
+            br = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish")
+            result["bullish"] = b
+            result["bearish"] = br
+            result["sentiment_pct"] = round(b/(b+br)*100) if (b+br) > 0 else 50
     except Exception as e:
         print(f"StockTwits error {ticker}: {e}")
-
     return result
 
 def get_buzz_score(ticker):
-    """מחשב ציון באז כולל מ-Reddit + StockTwits"""
     reddit_quotes, reddit_count = get_buzz_via_apify(ticker)
     st_data = get_stocktwits_buzz(ticker)
-
     total = reddit_count + st_data["count"]
 
-    # ציון יחסי — לא מוחלט
     if total > 500: score = 10
     elif total > 200: score = 9
     elif total > 100: score = 8
@@ -263,9 +216,15 @@ def get_buzz_score(ticker):
     elif total > 0: score = 3
     else: score = 1
 
-    # בונוס אם יש ציטוטים עם סימנים מוקדמים
     if any(q["score"] >= 3 for q in reddit_quotes):
         score = min(10, score + 1)
+
+    topics = []
+    for q in reddit_quotes:
+        for kw in EARLY_SIGNAL_KEYWORDS:
+            if kw in q["text"].lower() and kw not in topics:
+                topics.append(kw)
+    topics = topics[:3]
 
     return {
         "reddit_count": reddit_count,
@@ -275,12 +234,8 @@ def get_buzz_score(ticker):
         "sentiment_pct": st_data["sentiment_pct"],
         "bullish": st_data["bullish"],
         "bearish": st_data["bearish"],
-        "quotes": reddit_quotes,  # 3 ציטוטים אמיתיים
-        "topics": list(set([
-            kw for q in reddit_quotes
-            for kw in EARLY_SIGNAL_KEYWORDS
-            if kw in q["text"].lower()
-        ]))[:3]
+        "quotes": reddit_quotes,
+        "topics": topics
     }
 
 def get_previous_week_data():
@@ -318,41 +273,25 @@ def send_email(stocks, bonus, week_label, previous_week):
         )
         buzz = s.get("buzz", {})
         mcap = round(s["market_cap"] / 1_000_000_000, 1)
-        buzz_color = "#097c3e" if buzz.get("score", 0) >= 7 else "#633806" if buzz.get("score", 0) >= 4 else "#888"
-
-        # ציטוט אחד בולט אם יש
-        quote_html = ""
+        buzz_color = "#097c3e" if buzz.get("score", 0) >= 7 else "#cc8800" if buzz.get("score", 0) >= 4 else "#888"
         quotes = buzz.get("quotes", [])
+        quote_html = ""
         if quotes:
             q = quotes[0]
-            quote_html = f'<div style="font-size:11px;color:#666;font-style:italic;margin-top:4px;padding:4px 8px;background:#f8f8f8;border-radius:4px;border-left:2px solid #097c3e">"{q["text"][:80]}..."</div>'
-
+            quote_html = f'<div style="font-size:11px;color:#555;font-style:italic;margin-top:4px;padding:4px 8px;background:#f5f5f5;border-radius:4px;border-left:2px solid #FF4500">"{q["text"][:100]}..."</div>'
         rows += f'''<tr style="border-bottom:1px solid #f0f0f0">
             <td style="padding:10px 14px;color:#999;font-size:13px">{i}</td>
-            <td style="padding:10px 14px">
-                <div style="font-size:15px;font-weight:700;color:#1a1a2e">{s["ticker"]}</div>
-                <div style="font-size:11px;color:#999;margin-top:2px">{s["name"]}</div>
-                {quote_html}
-            </td>
+            <td style="padding:10px 14px"><div style="font-size:15px;font-weight:700;color:#1a1a2e">{s["ticker"]}</div><div style="font-size:11px;color:#999;margin-top:2px">{s["name"]}</div>{quote_html}</td>
             <td style="padding:10px 14px"><span style="font-size:18px;font-weight:800;color:#097c3e">+{s["change_pct"]}%</span></td>
             <td style="padding:10px 14px;color:#555;font-size:13px">${mcap}B</td>
-            <td style="padding:10px 14px;text-align:center">
-                <span style="font-size:14px;font-weight:700;color:{buzz_color}">{buzz.get("score",0)}/10</span>
-                <div style="font-size:10px;color:#aaa;margin-top:2px">{buzz.get("total_count",0)} posts</div>
-            </td>
+            <td style="padding:10px 14px;text-align:center"><span style="font-size:14px;font-weight:700;color:{buzz_color}">{buzz.get("score",0)}/10</span><div style="font-size:10px;color:#aaa;margin-top:2px">{buzz.get("total_count",0)} posts</div></td>
             <td style="padding:10px 14px">{badge}</td>
         </tr>'''
 
     bonus_html = ""
     if bonus:
         bonus_cards = "".join([
-            f'<div style="background:white;border:1px solid #e8e8e8;border-radius:10px;padding:14px 16px;flex:1;min-width:200px">'
-            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
-            f'<span style="font-size:16px;font-weight:700;color:#1a1a2e">{b["ticker"]}</span>'
-            f'<span style="background:#FAEEDA;color:#633806;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600">Buzz Alert</span></div>'
-            f'<div style="font-size:12px;color:#666">{b["name"]}</div>'
-            f'<div style="font-size:12px;color:#097c3e;font-weight:600;margin-top:6px">+{b["change_pct"]}% · {b.get("buzz",{}).get("total_count",0)} posts</div>'
-            f'</div>'
+            f'<div style="background:white;border:1px solid #e8e8e8;border-radius:10px;padding:14px 16px;flex:1;min-width:200px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:16px;font-weight:700;color:#1a1a2e">{b["ticker"]}</span><span style="background:#FAEEDA;color:#633806;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600">Buzz Alert</span></div><div style="font-size:12px;color:#666">{b["name"]}</div><div style="font-size:12px;color:#097c3e;font-weight:600;margin-top:6px">+{b["change_pct"]}% · {b.get("buzz",{}).get("total_count",0)} posts</div></div>'
             for b in bonus[:2]
         ])
         bonus_html = f'<div style="padding:20px 24px;background:#f8f9fa;border-top:1px solid #eee"><div style="font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Bonus Stocks — Worth Watching</div><div style="display:flex;gap:12px;flex-wrap:wrap">{bonus_cards}</div></div>'
@@ -360,7 +299,7 @@ def send_email(stocks, bonus, week_label, previous_week):
     html = f'''<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f0f2f5;font-family:Arial,sans-serif">
 <div style="max-width:700px;margin:0 auto">
 <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:28px;border-radius:16px 16px 0 0">
-<h1 style="color:white;margin:0;font-size:22px;font-weight:800">Stock Scout</h1>
+<h1 style="color:white;margin:0;font-size:22px;font-weight:800">📈 Stock Scout</h1>
 <p style="color:#aaa;margin:6px 0 0;font-size:13px">{week_label} · Weekly Top Gainers</p>
 </div>
 <div style="background:#097c3e;padding:12px 24px">
@@ -381,8 +320,8 @@ def send_email(stocks, bonus, week_label, previous_week):
 </div>
 {bonus_html}
 <div style="background:#1a1a2e;padding:24px;border-radius:0 0 16px 16px;text-align:center">
-<div style="color:#aaa;font-size:13px;margin-bottom:16px">Open the full dashboard for detailed analysis and quotes</div>
-<a href="https://stock-scout-phi.vercel.app" style="background:#097c3e;color:white;padding:14px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block">Open Full Dashboard</a>
+<div style="color:#aaa;font-size:13px;margin-bottom:16px">Open the full dashboard for detailed analysis</div>
+<a href="https://stock-scout-phi.vercel.app" style="background:#097c3e;color:white;padding:14px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block">Open Full Dashboard →</a>
 </div>
 </div></body></html>'''
 
@@ -399,7 +338,7 @@ def send_email(stocks, bonus, week_label, previous_week):
         )
         print(f"Email sent: {r.status_code}")
         if r.status_code != 200:
-            print(f"Email error: {r.text}")
+            print(f"Email error: {r.text[:300]}")
     except Exception as e:
         print(f"Email error: {e}")
 
@@ -419,11 +358,10 @@ def main():
         s["buzz"] = get_buzz_score(s["ticker"])
         s["streak"] = previous_week.get(s["ticker"], {}).get("streak", 0) + 1 if s["ticker"] in previous_week else 1
 
-    # מניות בונוס
     bonus_with_buzz = []
     for b in bonus_candidates[:10]:
         b["buzz"] = get_buzz_score(b["ticker"])
-        if b["buzz"]["total_count"] > 5 or b["buzz"].get("quotes"):
+        if b["buzz"]["total_count"] > 3 or b["buzz"].get("quotes"):
             bonus_with_buzz.append(b)
 
     bonus_with_buzz.sort(key=lambda x: x["buzz"]["total_count"], reverse=True)
