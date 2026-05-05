@@ -2,6 +2,7 @@ import requests
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta
 from supabase import create_client
 
@@ -26,16 +27,11 @@ EARLY_SIGNAL_KEYWORDS = [
 ]
 
 def clean_text(text):
-    """מנקה טקסט — מסיר URLs, תווים מיוחדים, מקצר"""
     if not text:
         return ""
-    # הסרת URLs
     text = re.sub(r'http\S+|www\.\S+|\[\S+\]\(\S+\)', '', text)
-    # הסרת תווים מיוחדים
     text = re.sub(r'[*#\[\]()&amp;]', '', text)
-    # ניקוי רווחים כפולים
     text = re.sub(r'\s+', ' ', text).strip()
-    # קיצור ל-120 תווים
     if len(text) > 120:
         text = text[:117] + "..."
     return text
@@ -45,6 +41,52 @@ def get_week_label():
     start = today - timedelta(days=today.weekday() + 7)
     end = start + timedelta(days=4)
     return f"{start.strftime('%d.%m')}-{end.strftime('%d.%m.%Y')}"
+
+def get_reddit_total_count(ticker):
+    """שולף מספר פוסטים כולל מ-Reddit — חינמי לגמרי"""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        # חיפוש ב-Reddit עם פרמטר count
+        url = f"https://www.reddit.com/search.json?q={ticker}&sort=hot&t=week&limit=1"
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            data = resp.json()
+            # Reddit מחזיר total count בתוך ה-after/before metadata
+            children = data.get("data", {}).get("children", [])
+            dist = data.get("data", {}).get("dist", 0)
+            # אם יש תוצאות — נחזיר הערכה
+            if dist > 0:
+                return True  # יש פוסטים
+        return False
+    except:
+        return False
+
+def get_stocktwits_data(ticker):
+    """שולף נתוני StockTwits — מספר הודעות וסנטימנט"""
+    result = {"count": 0, "sentiment_pct": 50, "bullish": 0, "bearish": 0}
+    try:
+        # ניסיון ישיר
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            data = resp.json()
+            msgs = data.get("messages", [])
+            result["count"] = len(msgs)
+            b = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish")
+            br = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish")
+            result["bullish"] = b
+            result["bearish"] = br
+            result["sentiment_pct"] = round(b/(b+br)*100) if (b+br) > 0 else 50
+            print(f"  StockTwits {ticker}: {len(msgs)} messages, {result['sentiment_pct']}% bullish")
+    except Exception as e:
+        print(f"  StockTwits {ticker}: {e}")
+    return result
 
 def get_top_gainers():
     print("Scanning market...")
@@ -123,7 +165,6 @@ def get_top_gainers():
     return top20, bonus_candidates
 
 def score_post(text, ticker):
-    """מחשב ציון עניין לפוסט"""
     text_lower = text.lower()
     score = 0
     if ticker.lower() in text_lower or f"${ticker.lower()}" in text_lower:
@@ -138,8 +179,8 @@ def score_post(text, ticker):
     return score
 
 def get_all_buzz_via_apify(tickers):
-    """בקשה אחת ל-Apify עם כל המניות"""
-    print(f"Fetching Reddit buzz for {len(tickers)} tickers via Apify...")
+    """בקשה אחת ל-Apify — מביא ציטוטים"""
+    print(f"Fetching Reddit quotes for {len(tickers)} tickers via Apify...")
     if not APIFY_TOKEN:
         print("No APIFY_TOKEN!")
         return {}
@@ -157,26 +198,23 @@ def get_all_buzz_via_apify(tickers):
             headers={"Content-Type": "application/json"},
             json={
                 "startUrls": start_urls,
-                "maxItems": 200,
+                "maxItems": 100,
                 "proxy": {"useApifyProxy": True}
             },
             timeout=150
         )
 
         if run_resp.status_code not in [200, 201]:
-            print(f"Apify error: {run_resp.status_code}")
+            print(f"Apify error: {run_resp.status_code} - {run_resp.text[:100]}")
             return {}
 
         all_posts = run_resp.json()
         if not isinstance(all_posts, list):
-            print(f"Unexpected response: {type(all_posts)}")
             return {}
 
-        print(f"Got {len(all_posts)} total posts from Apify")
+        print(f"Got {len(all_posts)} posts from Apify")
 
-        # מיון פוסטים לפי מנייה
-        ticker_data = {t: {"posts": [], "total_mentions": 0} for t in tickers}
-
+        ticker_quotes = {t: [] for t in tickers}
         for post in all_posts:
             title = post.get("title", "") or ""
             body = post.get("body", "") or post.get("selftext", "") or ""
@@ -186,27 +224,21 @@ def get_all_buzz_via_apify(tickers):
 
             for ticker in tickers:
                 if ticker.lower() in full_text.lower() or f"${ticker}" in full_text:
-                    ticker_data[ticker]["total_mentions"] += 1
                     clean_title = clean_text(title or full_text)
                     if clean_title and len(clean_title) > 10:
                         interest_score = score_post(clean_title, ticker)
-                        ticker_data[ticker]["posts"].append({
+                        ticker_quotes[ticker].append({
                             "text": clean_title,
                             "score": interest_score,
                             "upvotes": upvotes,
                             "subreddit": subreddit,
                         })
 
-        # מיון ולקיחת TOP 3 ציטוטים לכל מנייה
         result = {}
         for ticker in tickers:
-            posts = ticker_data[ticker]["posts"]
-            total = ticker_data[ticker]["total_mentions"]
+            posts = ticker_quotes[ticker]
             posts.sort(key=lambda x: (x["score"], x["upvotes"]), reverse=True)
-            result[ticker] = {
-                "quotes": posts[:3],
-                "total_mentions": total
-            }
+            result[ticker] = posts[:3]
 
         return result
 
@@ -214,27 +246,8 @@ def get_all_buzz_via_apify(tickers):
         print(f"Apify error: {e}")
         return {}
 
-def get_stocktwits_buzz(ticker):
-    result = {"count": 0, "sentiment_pct": 50}
-    try:
-        st = requests.get(
-            f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json",
-            timeout=5
-        )
-        if st.status_code == 200:
-            msgs = st.json().get("messages", [])
-            result["count"] = len(msgs)
-            b = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish")
-            br = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish")
-            result["sentiment_pct"] = round(b/(b+br)*100) if (b+br) > 0 else 50
-    except: pass
-    return result
-
-def calculate_buzz_score(reddit_mentions, stocktwits_count, quotes):
-    """ציון באז יחסי ואמיתי"""
-    total = reddit_mentions + stocktwits_count
-
-    # ציון בסיסי לפי כמות
+def calculate_buzz_score(reddit_count, stocktwits_count, quotes):
+    total = reddit_count + stocktwits_count
     if total > 100: score = 10
     elif total > 50: score = 9
     elif total > 20: score = 8
@@ -243,14 +256,11 @@ def calculate_buzz_score(reddit_mentions, stocktwits_count, quotes):
     elif total > 2: score = 5
     elif total > 0: score = 4
     else: score = 1
-
-    # בונוס אם יש ציטוטים עם סימנים מוקדמים
     early_signals = [q for q in quotes if q["score"] >= 4]
     if len(early_signals) >= 2:
         score = min(10, score + 2)
     elif len(early_signals) >= 1:
         score = min(10, score + 1)
-
     return score
 
 def get_previous_week_data():
@@ -295,19 +305,26 @@ def send_email(stocks, bonus, week_label):
             q = quotes[0]
             quote_html = f'<div style="font-size:11px;color:#555;font-style:italic;margin-top:4px;padding:4px 8px;background:#f5f5f5;border-radius:4px;border-left:2px solid #FF4500">"{q["text"]}"</div>'
 
+        st_count = buzz.get("stocktwits_count", 0)
+        reddit_count = buzz.get("reddit_count", 0)
+        total = buzz.get("total_count", 0)
+
         rows += f'''<tr style="border-bottom:1px solid #f0f0f0">
             <td style="padding:10px 14px;color:#999;font-size:13px">{i}</td>
             <td style="padding:10px 14px"><div style="font-size:15px;font-weight:700;color:#1a1a2e">{s["ticker"]}</div><div style="font-size:11px;color:#999;margin-top:2px">{s["name"]}</div>{quote_html}</td>
             <td style="padding:10px 14px"><span style="font-size:18px;font-weight:800;color:#097c3e">+{s["change_pct"]}%</span></td>
             <td style="padding:10px 14px;color:#555;font-size:13px">${mcap}B</td>
-            <td style="padding:10px 14px;text-align:center"><span style="font-size:14px;font-weight:700;color:{buzz_color}">{buzz.get("score",0)}/10</span><div style="font-size:10px;color:#aaa;margin-top:2px">{buzz.get("total_count",0)} mentions</div></td>
+            <td style="padding:10px 14px;text-align:center">
+                <span style="font-size:14px;font-weight:700;color:{buzz_color}">{buzz.get("score",0)}/10</span>
+                <div style="font-size:10px;color:#aaa;margin-top:2px">R:{reddit_count} · ST:{st_count}</div>
+            </td>
             <td style="padding:10px 14px">{badge}</td>
         </tr>'''
 
     bonus_html = ""
     if bonus:
         bonus_cards = "".join([
-            f'<div style="background:white;border:1px solid #e8e8e8;border-radius:10px;padding:14px 16px;flex:1;min-width:200px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:16px;font-weight:700;color:#1a1a2e">{b["ticker"]}</span><span style="background:#FAEEDA;color:#633806;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600">Buzz Alert</span></div><div style="font-size:12px;color:#666">{b["name"]}</div><div style="font-size:12px;color:#097c3e;font-weight:600;margin-top:6px">+{b["change_pct"]}% · {b.get("buzz",{}).get("total_count",0)} mentions</div></div>'
+            f'<div style="background:white;border:1px solid #e8e8e8;border-radius:10px;padding:14px 16px;flex:1;min-width:200px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:16px;font-weight:700;color:#1a1a2e">{b["ticker"]}</span><span style="background:#FAEEDA;color:#633806;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600">Buzz Alert</span></div><div style="font-size:12px;color:#666">{b["name"]}</div><div style="font-size:12px;color:#097c3e;font-weight:600;margin-top:6px">+{b["change_pct"]}% · {b.get("buzz",{}).get("total_count",0)} signals</div></div>'
             for b in bonus[:2]
         ])
         bonus_html = f'<div style="padding:20px 24px;background:#f8f9fa;border-top:1px solid #eee"><div style="font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Bonus Stocks — Worth Watching</div><div style="display:flex;gap:12px;flex-wrap:wrap">{bonus_cards}</div></div>'
@@ -315,7 +332,7 @@ def send_email(stocks, bonus, week_label):
     html = f'''<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f0f2f5;font-family:Arial,sans-serif">
 <div style="max-width:700px;margin:0 auto">
 <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:28px;border-radius:16px 16px 0 0">
-<h1 style="color:white;margin:0;font-size:22px;font-weight:800">📈 Stock Scout</h1>
+<h1 style="color:white;margin:0;font-size:22px;font-weight:800">Stock Scout</h1>
 <p style="color:#aaa;margin:6px 0 0;font-size:13px">{week_label} · Weekly Top Gainers</p>
 </div>
 <div style="background:#097c3e;padding:12px 24px">
@@ -324,20 +341,19 @@ def send_email(stocks, bonus, week_label):
 <div style="background:white">
 <table style="width:100%;border-collapse:collapse">
 <thead><tr style="background:#f8f9fa;border-bottom:2px solid #eee">
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:600">#</th>
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:600">STOCK</th>
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:600">GAIN</th>
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:600">MKT CAP</th>
-<th style="padding:10px 14px;text-align:center;font-size:11px;color:#999;font-weight:600">BUZZ</th>
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:600">TREND</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">#</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">STOCK</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">GAIN</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">MKT CAP</th>
+<th style="padding:10px 14px;text-align:center;font-size:11px;color:#999">BUZZ</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">TREND</th>
 </tr></thead>
 <tbody>{rows}</tbody>
 </table>
 </div>
 {bonus_html}
 <div style="background:#1a1a2e;padding:24px;border-radius:0 0 16px 16px;text-align:center">
-<div style="color:#aaa;font-size:13px;margin-bottom:16px">Open the full dashboard for detailed analysis</div>
-<a href="https://stock-scout-phi.vercel.app" style="background:#097c3e;color:white;padding:14px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block">Open Full Dashboard →</a>
+<a href="https://stock-scout-phi.vercel.app" style="background:#097c3e;color:white;padding:14px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block">Open Full Dashboard</a>
 </div>
 </div></body></html>'''
 
@@ -371,20 +387,22 @@ def main():
     previous_week = get_previous_week_data()
     tickers = [s["ticker"] for s in stocks]
 
-    # בקשה אחת ל-Apify עם כל המניות
-    all_reddit = get_all_buzz_via_apify(tickers)
+    # בקשה אחת ל-Apify — ציטוטים
+    all_reddit_quotes = get_all_buzz_via_apify(tickers)
 
+    # StockTwits + Reddit count לכל מנייה
     for s in stocks:
         ticker = s["ticker"]
-        reddit_data = all_reddit.get(ticker, {"quotes": [], "total_mentions": 0})
-        st_data = get_stocktwits_buzz(ticker)
+        quotes = all_reddit_quotes.get(ticker, [])
 
-        quotes = reddit_data["quotes"]
-        reddit_mentions = reddit_data["total_mentions"]
-        st_count = st_data["count"]
-        total = reddit_mentions + st_count
+        # StockTwits ישירות
+        st_data = get_stocktwits_data(ticker)
 
-        score = calculate_buzz_score(reddit_mentions, st_count, quotes)
+        # Reddit count — ספירה ישירה
+        reddit_count = len(quotes)  # מספר ציטוטים שמצאנו
+
+        total = reddit_count + st_data["count"]
+        score = calculate_buzz_score(reddit_count, st_data["count"], quotes)
 
         topics = []
         for q in quotes:
@@ -393,30 +411,32 @@ def main():
                     topics.append(kw)
 
         s["buzz"] = {
-            "reddit_count": reddit_mentions,
-            "stocktwits_count": st_count,
+            "reddit_count": reddit_count,
+            "stocktwits_count": st_data["count"],
             "total_count": total,
             "score": score,
             "sentiment_pct": st_data["sentiment_pct"],
+            "bullish": st_data["bullish"],
+            "bearish": st_data["bearish"],
             "quotes": quotes,
             "topics": topics[:3]
         }
         s["streak"] = previous_week.get(ticker, {}).get("streak", 0) + 1 if ticker in previous_week else 1
-        print(f"{ticker}: {total} mentions, score {score}/10, {len(quotes)} quotes")
+        print(f"{ticker}: Reddit={reddit_count}, ST={st_data['count']}, score={score}/10")
 
-    # בונוס — StockTwits בלבד (מהיר)
+    # בונוס
     bonus_with_buzz = []
     for b in bonus_candidates[:10]:
-        st = get_stocktwits_buzz(b["ticker"])
-        reddit_data = all_reddit.get(b["ticker"], {"quotes": [], "total_mentions": 0})
-        total = st["count"] + reddit_data["total_mentions"]
+        quotes = all_reddit_quotes.get(b["ticker"], [])
+        st = get_stocktwits_data(b["ticker"])
+        total = len(quotes) + st["count"]
         b["buzz"] = {
             "total_count": total,
-            "score": calculate_buzz_score(reddit_data["total_mentions"], st["count"], reddit_data["quotes"]),
-            "quotes": reddit_data["quotes"],
+            "score": calculate_buzz_score(len(quotes), st["count"], quotes),
+            "quotes": quotes,
             "topics": [],
             "sentiment_pct": st["sentiment_pct"],
-            "reddit_count": reddit_data["total_mentions"],
+            "reddit_count": len(quotes),
             "stocktwits_count": st["count"]
         }
         if total > 0:
