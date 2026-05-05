@@ -29,4 +29,5 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
           MIN_MARKET_CAP: ${{ secrets.MIN_MARKET_CAP }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
         run: python scanner.py
