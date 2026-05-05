@@ -16,7 +16,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 EARLY_SIGNAL_KEYWORDS = [
     "unusual volume", "unusual activity", "unusual options",
     "someone knows", "insider", "someone bought", "big calls",
-    "why is", "what's happening", "what happened to",
+    "why is", "what's happening", "what happened",
     "takeover", "merger", "buyout", "acquisition", "rumor",
     "catalyst", "breakout", "squeeze", "short squeeze",
     "upgrade", "downgrade", "fda", "approval", "contract",
@@ -106,137 +106,104 @@ def get_top_gainers():
     print(f"Found {len(results)} stocks")
     return top20, bonus_candidates
 
-def score_post_interest(post_text, ticker):
-    text_lower = post_text.lower()
+def score_post_interest(text, ticker):
+    text_lower = text.lower()
     score = 0
     if ticker.lower() in text_lower or f"${ticker.lower()}" in text_lower:
         score += 3
     for kw in EARLY_SIGNAL_KEYWORDS:
         if kw in text_lower:
             score += 2
-    if "?" in post_text:
+    if "?" in text:
         score += 1
-    if 20 < len(post_text) < 300:
+    if 20 < len(text) < 300:
         score += 1
     return score
 
-def get_buzz_via_apify(ticker):
-    print(f"Fetching Reddit buzz for {ticker} via Apify...")
+def get_all_buzz_via_apify(tickers):
+    """שולח בקשה אחת ל-Apify עם כל המניות ביחד"""
+    print(f"Fetching Reddit buzz for {len(tickers)} tickers via Apify (single run)...")
+
     if not APIFY_TOKEN:
-        return [], 0
+        return {}
 
-    # בניית URLs לחיפוש ב-Reddit
-    search_urls = [
-        f"https://www.reddit.com/search/?q={ticker}&sort=hot&t=week",
-        f"https://www.reddit.com/r/wallstreetbets/search/?q={ticker}&sort=hot&t=week&restrict_sr=1",
-        f"https://www.reddit.com/r/stocks/search/?q={ticker}&sort=hot&t=week&restrict_sr=1",
-    ]
+    # בניית רשימת URLs — חיפוש כללי אחד ב-WSB ו-stocks
+    start_urls = []
+    for ticker in tickers[:10]:  # רק 10 ראשונות כדי לחסוך
+        start_urls.append({"url": f"https://www.reddit.com/search/?q={ticker}&sort=hot&t=week"})
 
-    start_urls = [{"url": url} for url in search_urls]
+    # הוספת subreddits כלליים
+    start_urls.append({"url": "https://www.reddit.com/r/wallstreetbets/hot/"})
+    start_urls.append({"url": "https://www.reddit.com/r/stocks/hot/"})
 
     try:
         run_resp = requests.post(
-            f"https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/run-sync-get-dataset-items?token={APIFY_TOKEN}&timeout=60",
+            f"https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/run-sync-get-dataset-items?token={APIFY_TOKEN}&timeout=120",
             headers={"Content-Type": "application/json"},
             json={
                 "startUrls": start_urls,
-                "maxItems": 15,
+                "maxItems": 100,
                 "proxy": {"useApifyProxy": True}
             },
-            timeout=90
+            timeout=150
         )
 
         if run_resp.status_code not in [200, 201]:
-            print(f"Apify error: {run_resp.status_code} - {run_resp.text[:200]}")
-            return [], 0
+            print(f"Apify error: {run_resp.status_code}")
+            return {}
 
-        posts = run_resp.json()
-        if not isinstance(posts, list):
-            print(f"Unexpected response: {str(posts)[:200]}")
-            return [], 0
+        all_posts = run_resp.json()
+        if not isinstance(all_posts, list):
+            print(f"Unexpected response type: {type(all_posts)}")
+            return {}
 
-        print(f"Got {len(posts)} posts for {ticker}")
+        print(f"Got {len(all_posts)} total posts from Apify")
 
-        scored_posts = []
-        for post in posts:
-            title = post.get("title", "") or post.get("heading", "") or ""
-            text = post.get("selftext", "") or post.get("body", "") or ""
-            full_text = f"{title} {text}".strip()
-            if len(full_text) < 5:
-                continue
-            interest_score = score_post_interest(full_text, ticker)
-            scored_posts.append({
-                "text": title or full_text[:150],
-                "score": interest_score,
-                "upvotes": post.get("score", 0) or post.get("upvotes", 0) or 0,
-                "subreddit": post.get("subreddit", "") or post.get("community", "") or "reddit",
-                "url": post.get("url", "")
-            })
+        # מיון הפוסטים לפי מנייה
+        ticker_posts = {t: [] for t in tickers}
+        for post in all_posts:
+            title = post.get("title", "") or ""
+            body = post.get("body", "") or post.get("selftext", "") or ""
+            full_text = f"{title} {body}"
 
-        scored_posts.sort(key=lambda x: (x["score"], x["upvotes"]), reverse=True)
-        top_quotes = scored_posts[:3]
-        return top_quotes, len(posts)
+            for ticker in tickers:
+                if ticker.lower() in full_text.lower() or f"${ticker}" in full_text:
+                    interest_score = score_post_interest(full_text, ticker)
+                    ticker_posts[ticker].append({
+                        "text": title[:150] if title else full_text[:150],
+                        "score": interest_score,
+                        "upvotes": post.get("upVotes", 0) or post.get("score", 0) or 0,
+                        "subreddit": post.get("communityName", "") or post.get("subreddit", "") or "reddit",
+                    })
+
+        # מיון ולקיחת TOP 3 לכל מנייה
+        result = {}
+        for ticker in tickers:
+            posts = ticker_posts[ticker]
+            posts.sort(key=lambda x: (x["score"], x["upvotes"]), reverse=True)
+            result[ticker] = posts[:3]
+
+        return result
 
     except Exception as e:
-        print(f"Apify Reddit error for {ticker}: {e}")
-        return [], 0
+        print(f"Apify error: {e}")
+        return {}
 
 def get_stocktwits_buzz(ticker):
-    print(f"StockTwits: {ticker}...")
-    result = {"count": 0, "sentiment_pct": 50, "bullish": 0, "bearish": 0}
+    result = {"count": 0, "sentiment_pct": 50}
     try:
         st = requests.get(
             f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json",
-            timeout=8
+            timeout=5
         )
         if st.status_code == 200:
             msgs = st.json().get("messages", [])
             result["count"] = len(msgs)
             b = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish")
             br = sum(1 for m in msgs if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish")
-            result["bullish"] = b
-            result["bearish"] = br
             result["sentiment_pct"] = round(b/(b+br)*100) if (b+br) > 0 else 50
-    except Exception as e:
-        print(f"StockTwits error {ticker}: {e}")
+    except: pass
     return result
-
-def get_buzz_score(ticker):
-    reddit_quotes, reddit_count = get_buzz_via_apify(ticker)
-    st_data = get_stocktwits_buzz(ticker)
-    total = reddit_count + st_data["count"]
-
-    if total > 500: score = 10
-    elif total > 200: score = 9
-    elif total > 100: score = 8
-    elif total > 50: score = 7
-    elif total > 20: score = 6
-    elif total > 10: score = 5
-    elif total > 3: score = 4
-    elif total > 0: score = 3
-    else: score = 1
-
-    if any(q["score"] >= 3 for q in reddit_quotes):
-        score = min(10, score + 1)
-
-    topics = []
-    for q in reddit_quotes:
-        for kw in EARLY_SIGNAL_KEYWORDS:
-            if kw in q["text"].lower() and kw not in topics:
-                topics.append(kw)
-    topics = topics[:3]
-
-    return {
-        "reddit_count": reddit_count,
-        "stocktwits_count": st_data["count"],
-        "total_count": total,
-        "score": score,
-        "sentiment_pct": st_data["sentiment_pct"],
-        "bullish": st_data["bullish"],
-        "bearish": st_data["bearish"],
-        "quotes": reddit_quotes,
-        "topics": topics
-    }
 
 def get_previous_week_data():
     try:
@@ -260,7 +227,7 @@ def save_to_supabase(stocks, bonus, week_label):
     except Exception as e:
         print(f"Save error: {e}")
 
-def send_email(stocks, bonus, week_label, previous_week):
+def send_email(stocks, bonus, week_label):
     returning = sum(1 for s in stocks if s.get("streak", 1) >= 2)
     rows = ""
     for i, s in enumerate(stocks, 1):
@@ -279,6 +246,7 @@ def send_email(stocks, bonus, week_label, previous_week):
         if quotes:
             q = quotes[0]
             quote_html = f'<div style="font-size:11px;color:#555;font-style:italic;margin-top:4px;padding:4px 8px;background:#f5f5f5;border-radius:4px;border-left:2px solid #FF4500">"{q["text"][:100]}..."</div>'
+
         rows += f'''<tr style="border-bottom:1px solid #f0f0f0">
             <td style="padding:10px 14px;color:#999;font-size:13px">{i}</td>
             <td style="padding:10px 14px"><div style="font-size:15px;font-weight:700;color:#1a1a2e">{s["ticker"]}</div><div style="font-size:11px;color:#999;margin-top:2px">{s["name"]}</div>{quote_html}</td>
@@ -338,7 +306,7 @@ def send_email(stocks, bonus, week_label, previous_week):
         )
         print(f"Email sent: {r.status_code}")
         if r.status_code != 200:
-            print(f"Email error: {r.text[:300]}")
+            print(f"Email error: {r.text[:200]}")
     except Exception as e:
         print(f"Email error: {e}")
 
@@ -354,21 +322,59 @@ def main():
 
     previous_week = get_previous_week_data()
 
-    for s in stocks:
-        s["buzz"] = get_buzz_score(s["ticker"])
-        s["streak"] = previous_week.get(s["ticker"], {}).get("streak", 0) + 1 if s["ticker"] in previous_week else 1
+    # שולף באז לכל המניות בבקשה אחת
+    tickers = [s["ticker"] for s in stocks]
+    print(f"Fetching buzz for {len(tickers)} stocks...")
+    all_reddit_posts = get_all_buzz_via_apify(tickers)
 
+    for s in stocks:
+        ticker = s["ticker"]
+        reddit_quotes = all_reddit_posts.get(ticker, [])
+        st_data = get_stocktwits_buzz(ticker)
+        total = len(reddit_quotes) + st_data["count"]
+
+        if total > 200: score = 9
+        elif total > 100: score = 8
+        elif total > 50: score = 7
+        elif total > 20: score = 6
+        elif total > 10: score = 5
+        elif total > 3: score = 4
+        elif total > 0: score = 3
+        else: score = 1
+
+        if any(q["score"] >= 3 for q in reddit_quotes):
+            score = min(10, score + 1)
+
+        topics = []
+        for q in reddit_quotes:
+            for kw in EARLY_SIGNAL_KEYWORDS:
+                if kw in q["text"].lower() and kw not in topics:
+                    topics.append(kw)
+
+        s["buzz"] = {
+            "reddit_count": len(reddit_quotes),
+            "stocktwits_count": st_data["count"],
+            "total_count": total,
+            "score": score,
+            "sentiment_pct": st_data["sentiment_pct"],
+            "quotes": reddit_quotes,
+            "topics": topics[:3]
+        }
+        s["streak"] = previous_week.get(ticker, {}).get("streak", 0) + 1 if ticker in previous_week else 1
+
+    # בונוס — רק StockTwits (מהיר)
     bonus_with_buzz = []
     for b in bonus_candidates[:10]:
-        b["buzz"] = get_buzz_score(b["ticker"])
-        if b["buzz"]["total_count"] > 3 or b["buzz"].get("quotes"):
+        st = get_stocktwits_buzz(b["ticker"])
+        b["buzz"] = {"total_count": st["count"], "score": 3 if st["count"] > 5 else 1, "quotes": [], "topics": [], "sentiment_pct": st["sentiment_pct"], "reddit_count": 0, "stocktwits_count": st["count"]}
+        if st["count"] > 3:
             bonus_with_buzz.append(b)
 
     bonus_with_buzz.sort(key=lambda x: x["buzz"]["total_count"], reverse=True)
     bonus = bonus_with_buzz[:2]
 
     save_to_supabase(stocks, bonus, week_label)
-    send_email(stocks, bonus, week_label, previous_week)
+    send_email(stocks, bonus, week_label)
     print("=== Done! ===")
 
 if __name__ == "__main__":
