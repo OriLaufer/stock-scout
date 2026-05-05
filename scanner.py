@@ -144,7 +144,7 @@ def get_buzz_via_apify(ticker):
     try:
         # הרצת Reddit Scraper דרך Apify API
         run_resp = requests.post(
-            "https://api.apify.com/v2/acts/crawlerbros~reddit-scraper/run-sync-get-dataset-items",
+            "https://api.apify.com/v2/acts/trudax~reddit-scraper-lite/run-sync-get-dataset-items",
             headers={
                 "Authorization": f"Bearer {APIFY_TOKEN}",
                 "Content-Type": "application/json"
