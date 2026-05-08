@@ -49,8 +49,13 @@ EARLY_SIGNAL_KEYWORDS = [
 def clean_text(text, max_len=140):
     if not text:
         return ""
-    text = re.sub(r"http\S+|www\.\S+|\[\S+?\]\(\S+?\)", "", text)
-    text = re.sub(r"[*#\[\]\\]", "", text)
+    # Remove markdown links [text](url) entirely
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Remove plain URLs
+    text = re.sub(r"https?://\S+|www\.\S+", "", text)
+    # Remove markdown formatting characters
+    text = re.sub(r"[*#_~`]", "", text)
+    # Collapse whitespace
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) > max_len:
         text = text[: max_len - 3] + "..."
@@ -93,12 +98,32 @@ def get_ua():
     return random.choice(USER_AGENTS)
 
 
+def _is_clean_ticker(sym):
+    """Filter out warrants, preferred shares, units, but keep legit tickers like BRK.B."""
+    if not sym or not sym.isascii():
+        return False
+    # Block clear warrants/units/rights/preferreds (typically end with W, U, R, or specific patterns)
+    if sym.endswith(("W", "U", "R")) and len(sym) >= 5:
+        return False
+    if "$" in sym or " " in sym:
+        return False
+    # Allow dots (BRK.B etc.) but yfinance uses BRK-B format - normalize
+    return True
+
+
+def _normalize_ticker(sym):
+    """Convert NASDAQ Trader format to yfinance format: BRK.B → BRK-B"""
+    return sym.replace(".", "-")
+
+
 # ============== TICKER UNIVERSE ==============
 def get_ticker_universe():
-    """Pull ~3000 US tickers: S&P 500 + NASDAQ + NYSE listings.
+    """Pull all US tickers: NASDAQ + NYSE + AMEX listings.
+    Returns (sorted_tickers_list, names_dict).
     Uses NASDAQ Trader public file - reliable and free."""
     print("Fetching ticker universe...")
     tickers = set()
+    names = {}
 
     # NASDAQ-listed
     try:
@@ -109,15 +134,18 @@ def get_ticker_universe():
                 parts = line.split("|")
                 if len(parts) >= 4 and parts[0] and not parts[0].startswith("File Creation"):
                     sym = parts[0].strip()
+                    name = parts[1].strip() if len(parts) > 1 else sym
                     test_issue = parts[3].strip() if len(parts) > 3 else "N"
-                    # Skip test issues and ETFs
-                    if test_issue == "N" and sym.isascii() and "$" not in sym and "." not in sym:
-                        tickers.add(sym)
+                    etf_flag = parts[6].strip() if len(parts) > 6 else "N"
+                    if test_issue == "N" and etf_flag == "N" and _is_clean_ticker(sym):
+                        norm = _normalize_ticker(sym)
+                        tickers.add(norm)
+                        names[norm] = name
         print(f"  NASDAQ: {len(tickers)} tickers")
     except Exception as e:
         print(f"  NASDAQ fetch failed: {e}")
 
-    # Other (NYSE etc.)
+    # Other (NYSE, AMEX, etc.)
     try:
         url = "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
         r = requests.get(url, headers={"User-Agent": get_ua()}, timeout=20)
@@ -125,17 +153,22 @@ def get_ticker_universe():
             before = len(tickers)
             for line in r.text.split("\n")[1:]:
                 parts = line.split("|")
+                # otherlisted format: ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
                 if len(parts) >= 7 and parts[0] and not parts[0].startswith("File Creation"):
                     sym = parts[0].strip()
+                    name = parts[1].strip() if len(parts) > 1 else sym
+                    etf_flag = parts[4].strip() if len(parts) > 4 else "N"
                     test_issue = parts[6].strip() if len(parts) > 6 else "N"
-                    if test_issue == "N" and sym.isascii() and "$" not in sym and "." not in sym:
-                        tickers.add(sym)
+                    if test_issue == "N" and etf_flag == "N" and _is_clean_ticker(sym):
+                        norm = _normalize_ticker(sym)
+                        tickers.add(norm)
+                        names[norm] = name
             print(f"  NYSE/Other: +{len(tickers) - before} tickers")
     except Exception as e:
         print(f"  Other listings fetch failed: {e}")
 
     print(f"Total universe: {len(tickers)} tickers")
-    return sorted(tickers)
+    return sorted(tickers), names
 
 
 # ============== PRICE DATA (BATCH) ==============
@@ -228,101 +261,115 @@ def fetch_weekly_changes(tickers):
     return all_data
 
 
-def enrich_with_market_cap(price_data, top_n=80):
-    """Take top gainers by % change, fetch market cap + name for each.
-    Returns only those passing MIN_MARKET_CAP filter."""
-    # Sort by % gain
-    sorted_data = sorted(price_data.values(), key=lambda x: x["change_pct"], reverse=True)
-    candidates = sorted_data[:top_n]
-
-    print(f"Enriching top {len(candidates)} gainers with market cap...")
-    enriched = []
-    for c in candidates:
+def find_top20_by_marketcap(price_data, names_dict):
+    """Walk through gainers in order of % gain. For each one, check market cap.
+    If passes filter → add to list. Stop when we have 20.
+    Simple and direct - exactly what we want."""
+    # Sort all gainers by % change (highest first)
+    sorted_gainers = sorted(price_data.values(), key=lambda x: x["change_pct"], reverse=True)
+    
+    print(f"Walking through gainers (highest % first), filtering by market cap >= ${MIN_MARKET_CAP/1e6:.0f}M...")
+    top20 = []
+    checked = 0
+    
+    for c in sorted_gainers:
+        if len(top20) >= 20:
+            break
+        checked += 1
         try:
             t = c["ticker"]
             info = yf.Ticker(t).fast_info
-            mcap = info.get("market_cap") or 0
-            if mcap < MIN_MARKET_CAP:
-                continue
-            # Get the longer name
-            try:
-                full_info = yf.Ticker(t).info
-                name = full_info.get("shortName") or full_info.get("longName") or t
-            except Exception:
-                name = t
-
-            enriched.append(
-                {
-                    "ticker": t,
-                    "name": name,
-                    "change_pct": c["change_pct"],
-                    "price": c["price"],
-                    "volume": c["volume"],
-                    "market_cap": int(mcap),
-                }
-            )
-            print(f"  {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B")
-            if len(enriched) >= 30:
-                break
+            mcap = info.get("market_cap") or info.get("marketCap") or 0
+            
+            if not mcap or mcap < MIN_MARKET_CAP:
+                continue  # too small, skip
+            
+            name = names_dict.get(t, t)
+            if len(name) > 60:
+                name = name[:57] + "..."
+            
+            top20.append({
+                "ticker": t,
+                "name": name,
+                "change_pct": c["change_pct"],
+                "price": c["price"],
+                "volume": c["volume"],
+                "market_cap": int(mcap),
+            })
+            print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | {name[:40]}")
         except Exception as e:
-            print(f"  {c['ticker']}: skip ({e})")
+            # Couldn't fetch market cap - skip this one and move on
             continue
-        time.sleep(0.3)
-
-    return enriched
+    
+    print(f"Checked {checked} stocks to find {len(top20)} that pass market cap filter")
+    return top20
 
 
 # ============== BUZZ - REDDIT (FREE) ==============
 def fetch_reddit_buzz(ticker, name):
     """Fetch posts mentioning the ticker from Reddit's free JSON API.
-    Searches both ticker and across investing subreddits."""
+    Searches investing subreddits with rate-limit handling."""
     posts = []
-    subreddits = ["wallstreetbets", "stocks", "investing", "StockMarket", "pennystocks"]
+    # Reduced from 5 to 3 most relevant subreddits - faster, fewer rate limits
+    subreddits = ["wallstreetbets", "stocks", "pennystocks"]
 
     for sub in subreddits:
-        try:
-            url = f"https://www.reddit.com/r/{sub}/search.json"
-            params = {
-                "q": ticker,
-                "restrict_sr": "1",
-                "sort": "hot",
-                "t": "week",
-                "limit": 25,
-            }
-            r = requests.get(
-                url,
-                params=params,
-                headers={"User-Agent": get_ua()},
-                timeout=10,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                children = data.get("data", {}).get("children", [])
-                for c in children:
-                    d = c.get("data", {})
-                    title = d.get("title", "")
-                    body = d.get("selftext", "") or ""
-                    text = f"{title} {body}"
-                    # Verify ticker is actually mentioned (case-sensitive for $TICKER, also raw word)
-                    if (
-                        f"${ticker}" in text
-                        or re.search(rf"\b{re.escape(ticker)}\b", text)
-                    ):
-                        posts.append(
-                            {
-                                "title": clean_text(title),
-                                "subreddit": sub,
-                                "upvotes": d.get("ups", 0),
-                                "num_comments": d.get("num_comments", 0),
-                                "url": f"https://reddit.com{d.get('permalink', '')}",
-                                "created": d.get("created_utc", 0),
-                            }
-                        )
-            time.sleep(2)  # be nice to Reddit
-        except Exception as e:
-            print(f"    Reddit r/{sub} {ticker}: {e}")
-            time.sleep(3)
-            continue
+        for attempt in range(3):  # retry up to 3 times on rate limit
+            try:
+                url = f"https://www.reddit.com/r/{sub}/search.json"
+                params = {
+                    "q": ticker,
+                    "restrict_sr": "1",
+                    "sort": "hot",
+                    "t": "week",
+                    "limit": 25,
+                }
+                r = requests.get(
+                    url,
+                    params=params,
+                    headers={
+                        "User-Agent": get_ua(),
+                        "Accept": "application/json",
+                    },
+                    timeout=10,
+                )
+                if r.status_code == 429:
+                    # rate limited - back off
+                    print(f"    Reddit rate limit, sleeping 10s (attempt {attempt+1})")
+                    time.sleep(10)
+                    continue
+                if r.status_code == 200:
+                    data = r.json()
+                    children = data.get("data", {}).get("children", [])
+                    for c in children:
+                        d = c.get("data", {})
+                        title = d.get("title", "")
+                        body = d.get("selftext", "") or ""
+                        text = f"{title} {body}"
+                        # Verify ticker is actually mentioned
+                        if (
+                            f"${ticker}" in text
+                            or re.search(rf"\b{re.escape(ticker)}\b", text)
+                        ):
+                            posts.append(
+                                {
+                                    "title": clean_text(title),
+                                    "subreddit": sub,
+                                    "upvotes": d.get("ups", 0),
+                                    "num_comments": d.get("num_comments", 0),
+                                    "url": f"https://reddit.com{d.get('permalink', '')}",
+                                    "created": d.get("created_utc", 0),
+                                }
+                            )
+                    break  # success - exit retry loop
+                else:
+                    # Other error - log and skip
+                    break
+            except Exception as e:
+                print(f"    Reddit r/{sub} {ticker}: {e}")
+                time.sleep(3)
+                continue
+        time.sleep(3)  # gentle pacing between subreddits
 
     # Dedup by title
     seen = set()
@@ -583,68 +630,105 @@ def send_email(stocks, bonus, week_label):
 
 # ============== MAIN ==============
 def main():
+    t_start = time.time()
     print("=" * 50)
     print("STOCK SCOUT - Weekly Scan")
     print("=" * 50)
     week_label = get_week_label()
     print(f"Week: {week_label}\n")
 
-    # 1. Universe
-    universe = get_ticker_universe()
+    # 1. Universe (returns list + names dict)
+    universe, names = get_ticker_universe()
     if not universe:
         print("FATAL: no tickers")
         return
+    print(f"  [+{int(time.time()-t_start)}s]\n")
 
     # 2. Weekly price changes
     price_data = fetch_weekly_changes(universe)
     if not price_data:
         print("FATAL: no price data")
         return
+    print(f"  [+{int(time.time()-t_start)}s]\n")
 
-    # 3. Filter to gainers only and enrich top with market cap
+    # 3. Filter to gainers, find top 20 by % gain that pass market cap
     gainers = [p for p in price_data.values() if p["change_pct"] > 0]
-    print(f"\nTotal gainers: {len(gainers)}")
+    print(f"Total gainers: {len(gainers)}")
 
-    # Sort and enrich top 80 (we'll filter to ~30 with mcap >= MIN)
     gainers_dict = {g["ticker"]: g for g in gainers}
-    enriched = enrich_with_market_cap(gainers_dict, top_n=80)
+    top20 = find_top20_by_marketcap(gainers_dict, names)
 
-    if not enriched:
+    if not top20:
         print("FATAL: no stocks passed market cap filter")
         return
+    print(f"  [+{int(time.time()-t_start)}s]\n")
 
-    # Top 20 + bonus candidates (positions 20-30)
-    top20 = enriched[:20]
-    bonus_candidates = enriched[20:30]
-    print(f"\nTOP 20 + {len(bonus_candidates)} bonus candidates")
-
-    # 4. Buzz for top 20
-    print("\n--- Fetching buzz ---")
-    for s in top20:
+    # 4. Buzz for top 20 only
+    print("--- Fetching buzz for TOP 20 ---")
+    for i, s in enumerate(top20, 1):
         s["buzz"] = build_buzz(s["ticker"], s["name"])
         print(
-            f"{s['ticker']}: R={s['buzz']['reddit_count']} ST={s['buzz']['stocktwits_count']} score={s['buzz']['score']}"
+            f"  [{i}/20] {s['ticker']}: R={s['buzz']['reddit_count']} ST={s['buzz']['stocktwits_count']} score={s['buzz']['score']}/10"
         )
+    print(f"  [+{int(time.time()-t_start)}s]\n")
 
     # 5. Streak from previous week
     prev = get_previous_week_data()
     for s in top20:
         s["streak"] = prev.get(s["ticker"], {}).get("streak", 0) + 1 if s["ticker"] in prev else 1
+    returning_count = sum(1 for s in top20 if s["streak"] >= 2)
+    print(f"Streak: {returning_count} stocks returning from last week")
 
-    # 6. Bonus: pick those with highest buzz from candidates
-    print("\n--- Bonus buzz ---")
-    bonus_with_buzz = []
-    for b in bonus_candidates:
+    # 6. Bonus discovery: check buzz on a small set of stocks just below the top 20
+    # These are stocks that didn't make the cut by % gain, but might have unusual buzz
+    # signaling something brewing. Quick check on ~15 stocks, pick top 2-5 by buzz.
+    print("\n--- Bonus discovery (next stocks below top 20) ---")
+    sorted_gainers = sorted(gainers, key=lambda x: x["change_pct"], reverse=True)
+    top20_tickers = {s["ticker"] for s in top20}
+    
+    # Find next ~15 stocks that pass market cap filter, just below the top 20
+    bonus_pool = []
+    for c in sorted_gainers:
+        if len(bonus_pool) >= 15:
+            break
+        if c["ticker"] in top20_tickers:
+            continue
+        try:
+            mcap = yf.Ticker(c["ticker"]).fast_info.get("market_cap") or 0
+            if mcap >= MIN_MARKET_CAP:
+                name = names.get(c["ticker"], c["ticker"])
+                if len(name) > 60:
+                    name = name[:57] + "..."
+                bonus_pool.append({
+                    "ticker": c["ticker"],
+                    "name": name,
+                    "change_pct": c["change_pct"],
+                    "price": c["price"],
+                    "volume": c["volume"],
+                    "market_cap": int(mcap),
+                })
+        except Exception:
+            continue
+    
+    # Check buzz for bonus pool
+    print(f"Checking buzz on {len(bonus_pool)} bonus candidates...")
+    for i, b in enumerate(bonus_pool, 1):
         b["buzz"] = build_buzz(b["ticker"], b["name"])
-        if b["buzz"]["total_count"] >= 3:
-            bonus_with_buzz.append(b)
-    bonus_with_buzz.sort(key=lambda x: x["buzz"]["score"], reverse=True)
-    bonus = bonus_with_buzz[:3]
+        print(
+            f"  [{i}/{len(bonus_pool)}] {b['ticker']}: buzz={b['buzz']['score']}/10 | +{b['change_pct']}%"
+        )
+
+    # Pick bonus: stocks with notable buzz (score >= 6)
+    bonus_picks = [b for b in bonus_pool if b["buzz"]["score"] >= 6]
+    bonus_picks.sort(key=lambda x: (x["buzz"]["score"], x["buzz"]["total_count"]), reverse=True)
+    bonus = bonus_picks[:5]
+    print(f"\nBonus picks: {len(bonus)} stocks with buzz score >= 6")
+    print(f"  [+{int(time.time()-t_start)}s]\n")
 
     # 7. Save and send
     save_to_supabase(top20, bonus, week_label)
     send_email(top20, bonus, week_label)
-    print("\n=== DONE ===")
+    print(f"\n=== DONE in {int(time.time()-t_start)}s ===")
 
 
 if __name__ == "__main__":
