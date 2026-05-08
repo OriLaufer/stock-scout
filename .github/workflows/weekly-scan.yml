@@ -1,26 +1,31 @@
 name: Stock Scout Weekly Scan
 
 on:
+  # Sunday 05:30 UTC = 08:30 IDT (Israel summer time)
+  # Scan takes ~10-15 min, email arrives well before 10:00
   schedule:
-    - cron: '0 7 * * 0'
+    - cron: '30 5 * * 0'
   workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
-          pip install requests supabase yfinance
+          pip install --upgrade pip
+          pip install requests supabase yfinance pandas
 
       - name: Run Stock Scanner
         env:
@@ -29,5 +34,5 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
           MIN_MARKET_CAP: ${{ secrets.MIN_MARKET_CAP }}
-          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
         run: python scanner.py
