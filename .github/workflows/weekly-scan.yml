@@ -34,4 +34,5 @@ jobs:
           BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
           MIN_MARKET_CAP: ${{ secrets.MIN_MARKET_CAP }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
         run: python scanner.py
