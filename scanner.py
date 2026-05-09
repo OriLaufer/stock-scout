@@ -240,14 +240,26 @@ def fetch_weekly_changes(tickers):
                         continue
 
                     pct = ((this_close - prev_close) / prev_close) * 100
-                    avg_vol = int(volumes.mean()) if len(volumes) > 0 else 0
+                    
+                    # Weekly total volume - sum of all trading days AFTER prev_friday up to this_friday
+                    # This is what TradingView shows when you select "1 Week"
+                    if len(volumes) > 0:
+                        prev_ts = pd.Timestamp(prev_friday.date())
+                        this_ts = pd.Timestamp(this_friday.date())
+                        week_volumes = volumes[
+                            (volumes.index.normalize() > prev_ts) &
+                            (volumes.index.normalize() <= this_ts)
+                        ]
+                        weekly_vol = int(week_volumes.sum()) if len(week_volumes) > 0 else 0
+                    else:
+                        weekly_vol = 0
 
                     all_data[t] = {
                         "ticker": t,
                         "price": round(this_close, 2),
                         "prev_price": round(prev_close, 2),
                         "change_pct": round(pct, 2),
-                        "volume": avg_vol,
+                        "volume": weekly_vol,
                     }
                 except Exception:
                     continue
@@ -305,81 +317,181 @@ def find_top20_by_marketcap(price_data, names_dict):
     return top20
 
 
-# ============== BUZZ - REDDIT (FREE) ==============
-def fetch_reddit_buzz(ticker, name):
-    """Fetch posts mentioning the ticker from Reddit's free JSON API.
-    Searches investing subreddits with rate-limit handling."""
-    posts = []
-    # Reduced from 5 to 3 most relevant subreddits - faster, fewer rate limits
-    subreddits = ["wallstreetbets", "stocks", "pennystocks"]
+# ============== BUZZ - APIFY (PAID, RELIABLE) ==============
+APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 
-    for sub in subreddits:
-        for attempt in range(3):  # retry up to 3 times on rate limit
-            try:
-                url = f"https://www.reddit.com/r/{sub}/search.json"
-                params = {
-                    "q": ticker,
-                    "restrict_sr": "1",
-                    "sort": "hot",
-                    "t": "week",
-                    "limit": 25,
-                }
-                r = requests.get(
-                    url,
-                    params=params,
-                    headers={
+
+def apify_run_actor(actor_id, run_input, timeout=180):
+    """Run an Apify actor synchronously and return all dataset items.
+    Uses run-sync-get-dataset-items endpoint which waits for the run to finish."""
+    if not APIFY_TOKEN:
+        return []
+    try:
+        # URL-encode the actor id (replace / with ~)
+        actor_path = actor_id.replace("/", "~")
+        url = f"https://api.apify.com/v2/acts/{actor_path}/run-sync-get-dataset-items"
+        params = {"token": APIFY_TOKEN, "timeout": timeout}
+        r = requests.post(
+            url,
+            params=params,
+            json=run_input,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout + 30,
+        )
+        if r.status_code in (200, 201):
+            data = r.json()
+            return data if isinstance(data, list) else []
+        print(f"    Apify {actor_id}: HTTP {r.status_code} | {r.text[:200]}")
+        return []
+    except Exception as e:
+        print(f"    Apify {actor_id} error: {type(e).__name__}: {e}")
+        return []
+
+
+def fetch_reddit_buzz_apify_batch(tickers):
+    """Single Apify call for ALL tickers - much cheaper than per-ticker calls.
+    Uses search across multiple investing subreddits with the ticker as keyword.
+    Returns: dict mapping ticker -> list of posts."""
+    if not APIFY_TOKEN:
+        print("  No APIFY_TOKEN - skipping Reddit")
+        return {t: [] for t in tickers}
+
+    print(f"\n--- Reddit via Apify: searching for {len(tickers)} tickers in batch ---")
+
+    # Build start URLs - one search per ticker across investing subs
+    start_urls = []
+    subreddits = ["wallstreetbets", "stocks", "pennystocks", "options", "StockMarket", "investing"]
+    for ticker in tickers:
+        for sub in subreddits:
+            start_urls.append({
+                "url": f"https://www.reddit.com/r/{sub}/search/?q=%24{ticker}&restrict_sr=1&t=week&sort=hot",
+            })
+
+    # Use Reddit Scraper Lite - cheap and reliable
+    actor_id = "trudax/reddit-scraper-lite"
+    run_input = {
+        "startUrls": start_urls,
+        "maxItems": len(tickers) * 60,  # ~60 posts per ticker average (some have more, some less)
+        "maxPostCount": 50,  # max 50 posts per subreddit search
+        "skipComments": True,
+        "skipUserPosts": True,
+        "skipCommunity": True,
+        "proxy": {"useApifyProxy": True},
+    }
+
+    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs...")
+    posts = apify_run_actor(actor_id, run_input, timeout=300)
+    print(f"  Got {len(posts)} total posts from Apify")
+
+    # Group posts by ticker
+    by_ticker = {t: [] for t in tickers}
+    for p in posts:
+        # Try multiple field names (different scrapers use different schemas)
+        title = (p.get("title") or "").strip()
+        body = (p.get("body") or p.get("selftext") or p.get("text") or "").strip()
+        if not title:
+            continue
+        full_text = f"{title} {body}"
+
+        # Identify which ticker(s) this post mentions
+        for ticker in tickers:
+            if (
+                f"${ticker}" in full_text
+                or re.search(rf"\b{re.escape(ticker)}\b", full_text)
+            ):
+                by_ticker[ticker].append({
+                    "title": clean_text(title),
+                    "subreddit": p.get("communityName") or p.get("subreddit") or "reddit",
+                    "upvotes": int(p.get("upVotes") or p.get("score") or p.get("ups") or 0),
+                    "num_comments": int(p.get("numberOfComments") or p.get("num_comments") or 0),
+                    "url": p.get("url") or p.get("postUrl") or "",
+                })
+
+    # Dedup by title within each ticker
+    for ticker, posts_list in by_ticker.items():
+        seen = set()
+        unique = []
+        for post in posts_list:
+            key = post["title"][:60].lower()
+            if key not in seen:
+                seen.add(key)
+                unique.append(post)
+        by_ticker[ticker] = unique
+        print(f"  {ticker}: {len(unique)} unique posts")
+
+    return by_ticker
+
+
+def fetch_stocktwits_apify_batch(tickers):
+    """Fetch StockTwits messages for all tickers via Apify actor.
+    Returns: dict mapping ticker -> dict with count/bullish/bearish/messages."""
+    result = {t: {"count": 0, "bullish": 0, "bearish": 0, "sentiment_pct": 50, "messages": []} for t in tickers}
+
+    if not APIFY_TOKEN:
+        print("  No APIFY_TOKEN - skipping StockTwits")
+        return result
+
+    print(f"\n--- StockTwits via Apify: {len(tickers)} tickers ---")
+
+    # The saswave actor scrapes StockTwits - one ticker at a time, but it's fast
+    actor_id = "saswave/stocktwits-stock-ticker-news-scraper"
+    
+    for ticker in tickers:
+        try:
+            run_input = {"symbols": [ticker]}
+            print(f"  StockTwits for {ticker}...", end=" ")
+            items = apify_run_actor(actor_id, run_input, timeout=60)
+            
+            if not items:
+                # Fallback: try direct API call (it sometimes works)
+                try:
+                    url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
+                    r = requests.get(url, headers={
                         "User-Agent": get_ua(),
                         "Accept": "application/json",
-                    },
-                    timeout=10,
-                )
-                if r.status_code == 429:
-                    # rate limited - back off
-                    print(f"    Reddit rate limit, sleeping 10s (attempt {attempt+1})")
-                    time.sleep(10)
-                    continue
-                if r.status_code == 200:
-                    data = r.json()
-                    children = data.get("data", {}).get("children", [])
-                    for c in children:
-                        d = c.get("data", {})
-                        title = d.get("title", "")
-                        body = d.get("selftext", "") or ""
-                        text = f"{title} {body}"
-                        # Verify ticker is actually mentioned
-                        if (
-                            f"${ticker}" in text
-                            or re.search(rf"\b{re.escape(ticker)}\b", text)
-                        ):
-                            posts.append(
-                                {
-                                    "title": clean_text(title),
-                                    "subreddit": sub,
-                                    "upvotes": d.get("ups", 0),
-                                    "num_comments": d.get("num_comments", 0),
-                                    "url": f"https://reddit.com{d.get('permalink', '')}",
-                                    "created": d.get("created_utc", 0),
-                                }
-                            )
-                    break  # success - exit retry loop
-                else:
-                    # Other error - log and skip
-                    break
-            except Exception as e:
-                print(f"    Reddit r/{sub} {ticker}: {e}")
-                time.sleep(3)
-                continue
-        time.sleep(3)  # gentle pacing between subreddits
+                        "Origin": "https://stocktwits.com",
+                        "Referer": "https://stocktwits.com/",
+                    }, timeout=10)
+                    if r.status_code == 200:
+                        data = r.json()
+                        msgs = data.get("messages", [])
+                        items = [{"body": m.get("body", ""), "sentiment": (m.get("entities", {}).get("sentiment") or {}).get("basic")} for m in msgs]
+                except Exception:
+                    pass
 
-    # Dedup by title
-    seen = set()
-    unique = []
-    for p in posts:
-        key = p["title"][:60].lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(p)
-    return unique
+            count = 0
+            bull = 0
+            bear = 0
+            messages = []
+            for item in items:
+                # Various field names depending on scraper version
+                body = item.get("body") or item.get("message") or item.get("text") or ""
+                sentiment = item.get("sentiment") or item.get("bullish_bearish") or ""
+                if not body:
+                    continue
+                count += 1
+                if sentiment in ("Bullish", "bullish", "bull"):
+                    bull += 1
+                elif sentiment in ("Bearish", "bearish", "bear"):
+                    bear += 1
+                if len(messages) < 5:
+                    messages.append({"body": clean_text(body), "sentiment": sentiment})
+            
+            tot = bull + bear
+            sent_pct = round(bull / tot * 100) if tot > 0 else 50
+            result[ticker] = {
+                "count": count,
+                "bullish": bull,
+                "bearish": bear,
+                "sentiment_pct": sent_pct,
+                "messages": messages,
+            }
+            print(f"{count} msgs, {sent_pct}% bull")
+        except Exception as e:
+            print(f"error: {e}")
+        time.sleep(1)
+
+    return result
 
 
 def score_post(text, ticker):
@@ -397,70 +509,49 @@ def score_post(text, ticker):
     return score
 
 
-# ============== BUZZ - STOCKTWITS (FREE) ==============
-def fetch_stocktwits(ticker):
-    out = {"count": 0, "bullish": 0, "bearish": 0, "sentiment_pct": 50}
-    try:
-        url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
-        r = requests.get(url, headers={"User-Agent": get_ua()}, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            msgs = data.get("messages", [])
-            out["count"] = len(msgs)
-            for m in msgs:
-                sent = (
-                    m.get("entities", {}).get("sentiment", {}) or {}
-                ).get("basic")
-                if sent == "Bullish":
-                    out["bullish"] += 1
-                elif sent == "Bearish":
-                    out["bearish"] += 1
-            tot = out["bullish"] + out["bearish"]
-            if tot > 0:
-                out["sentiment_pct"] = round(out["bullish"] / tot * 100)
-    except Exception as e:
-        print(f"    StockTwits {ticker}: {e}")
-    return out
-
-
-# ============== BUZZ AGGREGATION ==============
-def calculate_buzz_score(reddit_count, stocktwits_count, top_posts):
+def calculate_buzz_score_v2(reddit_count, stocktwits_count, market_cap, top_posts):
+    """Smarter buzz scoring that's RELATIVE to market cap.
+    Big stocks have lots of chatter naturally; small stocks with same chatter = bigger signal.
+    Returns score 1-10."""
     total = reddit_count + stocktwits_count
-    if total > 100:
-        score = 10
-    elif total > 50:
-        score = 9
-    elif total > 25:
-        score = 8
-    elif total > 12:
-        score = 7
-    elif total > 6:
-        score = 6
-    elif total > 3:
-        score = 5
-    elif total > 0:
-        score = 4
-    else:
-        score = 1
+    
+    # Base score from absolute volume
+    if total > 200: base = 10
+    elif total > 100: base = 9
+    elif total > 50: base = 8
+    elif total > 25: base = 7
+    elif total > 12: base = 6
+    elif total > 6: base = 5
+    elif total > 2: base = 4
+    elif total > 0: base = 3
+    else: base = 1
 
+    # Adjust for market cap (smaller = more impressive buzz)
+    # AAPL with 100 posts is normal; small cap with 100 posts is huge
+    mcap_b = market_cap / 1e9 if market_cap else 1.0
+    if mcap_b < 1.0 and total > 20:  # small cap with real buzz
+        base = min(10, base + 2)
+    elif mcap_b < 5.0 and total > 30:  # mid cap
+        base = min(10, base + 1)
+
+    # Boost for early-signal keywords
     early_signals = sum(1 for p in top_posts if p.get("interest_score", 0) >= 5)
-    if early_signals >= 2:
-        score = min(10, score + 2)
+    if early_signals >= 3:
+        base = min(10, base + 2)
     elif early_signals >= 1:
-        score = min(10, score + 1)
-    return score
+        base = min(10, base + 1)
+
+    return base
 
 
-def build_buzz(ticker, name):
-    print(f"  Buzz for {ticker}...")
-    reddit_posts = fetch_reddit_buzz(ticker, name)
-    st = fetch_stocktwits(ticker)
-
-    # Score and pick top quotes
+def build_buzz_from_data(ticker, market_cap, reddit_posts, stocktwits_data):
+    """Build the buzz dict from pre-fetched Reddit posts + StockTwits data."""
+    # Score Reddit posts and pick top quotes
     for p in reddit_posts:
         p["interest_score"] = score_post(p["title"], ticker)
     reddit_posts.sort(key=lambda x: (x["interest_score"], x["upvotes"]), reverse=True)
 
+    # Top 3 quotes - mix of high upvotes and high relevance
     quotes = [
         {
             "text": p["title"],
@@ -471,29 +562,46 @@ def build_buzz(ticker, name):
         for p in reddit_posts[:3]
     ]
 
-    # Topics
+    # Topics from keywords appearing in posts
     topics = []
     for p in reddit_posts:
         for kw in EARLY_SIGNAL_KEYWORDS:
             if kw in p["title"].lower() and kw not in topics:
                 topics.append(kw)
-                if len(topics) >= 3:
+                if len(topics) >= 5:
                     break
-        if len(topics) >= 3:
+        if len(topics) >= 5:
             break
 
-    score = calculate_buzz_score(len(reddit_posts), st["count"], reddit_posts)
+    score = calculate_buzz_score_v2(
+        len(reddit_posts), stocktwits_data["count"], market_cap, reddit_posts
+    )
 
     return {
         "reddit_count": len(reddit_posts),
-        "stocktwits_count": st["count"],
-        "total_count": len(reddit_posts) + st["count"],
+        "stocktwits_count": stocktwits_data["count"],
+        "total_count": len(reddit_posts) + stocktwits_data["count"],
         "score": score,
-        "sentiment_pct": st["sentiment_pct"],
-        "bullish": st["bullish"],
-        "bearish": st["bearish"],
+        "sentiment_pct": stocktwits_data["sentiment_pct"],
+        "bullish": stocktwits_data["bullish"],
+        "bearish": stocktwits_data["bearish"],
         "quotes": quotes,
-        "topics": topics,
+        "topics": topics[:3],
+    }
+
+
+def build_buzz(ticker, name):
+    """DEPRECATED - kept for backwards compat. Returns empty buzz."""
+    return {
+        "reddit_count": 0,
+        "stocktwits_count": 0,
+        "total_count": 0,
+        "score": 1,
+        "sentiment_pct": 50,
+        "bullish": 0,
+        "bearish": 0,
+        "quotes": [],
+        "topics": [],
     }
 
 
@@ -663,66 +771,56 @@ def main():
         return
     print(f"  [+{int(time.time()-t_start)}s]\n")
 
-    # 4. Buzz for top 20 only
-    print("--- Fetching buzz for TOP 20 ---")
-    for i, s in enumerate(top20, 1):
-        s["buzz"] = build_buzz(s["ticker"], s["name"])
-        print(
-            f"  [{i}/20] {s['ticker']}: R={s['buzz']['reddit_count']} ST={s['buzz']['stocktwits_count']} score={s['buzz']['score']}/10"
-        )
+    # 4. ONE Apify batch call for the TOP 20 only (cheap and focused)
+    print("--- Fetching buzz for TOP 20 via Apify ---")
+    top20_tickers = [s["ticker"] for s in top20]
+    
+    # Reddit - one big batch call
+    reddit_data = fetch_reddit_buzz_apify_batch(top20_tickers)
     print(f"  [+{int(time.time()-t_start)}s]\n")
+    
+    # StockTwits - per ticker (smaller calls but still batched)
+    stocktwits_data = fetch_stocktwits_apify_batch(top20_tickers)
+    print(f"  [+{int(time.time()-t_start)}s]\n")
+
+    # Build buzz objects from the fetched data
+    print("--- Building buzz for TOP 20 ---")
+    for i, s in enumerate(top20, 1):
+        ticker = s["ticker"]
+        s["buzz"] = build_buzz_from_data(
+            ticker, s["market_cap"], reddit_data.get(ticker, []),
+            stocktwits_data.get(ticker, {"count": 0, "bullish": 0, "bearish": 0, "sentiment_pct": 50, "messages": []}),
+        )
+        print(
+            f"  [{i}/20] {ticker}: R={s['buzz']['reddit_count']} ST={s['buzz']['stocktwits_count']} total={s['buzz']['total_count']} score={s['buzz']['score']}/10"
+        )
 
     # 5. Streak from previous week
     prev = get_previous_week_data()
     for s in top20:
         s["streak"] = prev.get(s["ticker"], {}).get("streak", 0) + 1 if s["ticker"] in prev else 1
     returning_count = sum(1 for s in top20 if s["streak"] >= 2)
-    print(f"Streak: {returning_count} stocks returning from last week")
+    print(f"\nStreak: {returning_count} stocks returning from last week")
 
-    # 6. Bonus discovery: check buzz on a small set of stocks just below the top 20
-    # These are stocks that didn't make the cut by % gain, but might have unusual buzz
-    # signaling something brewing. Quick check on ~15 stocks, pick top 2-5 by buzz.
-    print("\n--- Bonus discovery (next stocks below top 20) ---")
-    sorted_gainers = sorted(gainers, key=lambda x: x["change_pct"], reverse=True)
-    top20_tickers = {s["ticker"] for s in top20}
-    
-    # Find next ~15 stocks that pass market cap filter, just below the top 20
-    bonus_pool = []
-    for c in sorted_gainers:
-        if len(bonus_pool) >= 15:
-            break
-        if c["ticker"] in top20_tickers:
-            continue
-        try:
-            mcap = yf.Ticker(c["ticker"]).fast_info.get("market_cap") or 0
-            if mcap >= MIN_MARKET_CAP:
-                name = names.get(c["ticker"], c["ticker"])
-                if len(name) > 60:
-                    name = name[:57] + "..."
-                bonus_pool.append({
-                    "ticker": c["ticker"],
-                    "name": name,
-                    "change_pct": c["change_pct"],
-                    "price": c["price"],
-                    "volume": c["volume"],
-                    "market_cap": int(mcap),
-                })
-        except Exception:
-            continue
-    
-    # Check buzz for bonus pool
-    print(f"Checking buzz on {len(bonus_pool)} bonus candidates...")
-    for i, b in enumerate(bonus_pool, 1):
-        b["buzz"] = build_buzz(b["ticker"], b["name"])
-        print(
-            f"  [{i}/{len(bonus_pool)}] {b['ticker']}: buzz={b['buzz']['score']}/10 | +{b['change_pct']}%"
-        )
+    # 6. Bonus = top 2-3 stocks from TOP 20 with highest buzz score (>= 7)
+    # No extra API calls - we already have the data!
+    # The boss wanted: "2-5 stocks where I see something interesting" - this is exactly that.
+    buzz_alerts = sorted(
+        [s for s in top20 if s["buzz"]["score"] >= 7],
+        key=lambda x: (x["buzz"]["score"], x["buzz"]["total_count"]),
+        reverse=True,
+    )[:3]  # top 3 maximum
 
-    # Pick bonus: stocks with notable buzz (score >= 6)
-    bonus_picks = [b for b in bonus_pool if b["buzz"]["score"] >= 6]
-    bonus_picks.sort(key=lambda x: (x["buzz"]["score"], x["buzz"]["total_count"]), reverse=True)
-    bonus = bonus_picks[:5]
-    print(f"\nBonus picks: {len(bonus)} stocks with buzz score >= 6")
+    # Mark them in top20 with a flag (so dashboard/email can show 🔥)
+    alert_tickers = {b["ticker"] for b in buzz_alerts}
+    for s in top20:
+        s["buzz_alert"] = s["ticker"] in alert_tickers
+
+    # The bonus list shown separately = same stocks but with their full buzz info
+    bonus = buzz_alerts
+    print(f"\n🔥 Buzz alerts: {len(bonus)} stocks with buzz score >= 7")
+    for b in bonus:
+        print(f"  {b['ticker']}: score {b['buzz']['score']}/10, {b['buzz']['total_count']} posts")
     print(f"  [+{int(time.time()-t_start)}s]\n")
 
     # 7. Save and send
