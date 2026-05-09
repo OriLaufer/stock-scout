@@ -1,16 +1,18 @@
 name: Stock Scout Weekly Scan
 
 on:
-  # Sunday 05:30 UTC = 08:30 IDT (Israel summer time)
-  # Scan takes ~15 min, email arrives well before 10:00
+  # Sunday 05:00 UTC = 08:00 IDT (Israel summer time)
+  # Total scan time: ~30-45 min (Reddit is slow). Email arrives by ~08:45.
+  # 60+ minute buffer before 10:00 deadline for safety.
+  # Workflow timeout: 90 min (safety buffer)
   schedule:
-    - cron: '30 5 * * 0'
+    - cron: '0 5 * * 0'
   workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout code
