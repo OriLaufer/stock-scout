@@ -424,7 +424,7 @@ def fetch_reddit_buzz_apify_batch(tickers):
 
 def fetch_stocktwits_apify_batch(tickers):
     """Fetch StockTwits messages for all tickers via the FREE Apify actor.
-    automation-lab/stocktwits-scraper is pay-per-result, not rental.
+    We only need: count, sentiment, and top 3 messages per ticker.
     Returns: dict mapping ticker -> dict with count/bullish/bearish/messages."""
     result = {t: {"count": 0, "bullish": 0, "bearish": 0, "sentiment_pct": 50, "messages": []} for t in tickers}
 
@@ -435,35 +435,60 @@ def fetch_stocktwits_apify_batch(tickers):
     print(f"\n--- StockTwits via Apify (pay-per-result, free actor): {len(tickers)} tickers ---")
 
     actor_id = "automation-lab/stocktwits-scraper"
-    # Single call with all symbols - "symbol" mode fetches recent stream
+    # We compute Reddit-style sentiment + StockTwits user-marked sentiment
+    # 30 messages per ticker max - enough for sentiment + 3 best quotes
+    PER_TICKER_LIMIT = 30
+    HARD_TOTAL_LIMIT = len(tickers) * PER_TICKER_LIMIT  # absolute ceiling, controls cost
+    
     run_input = {
         "mode": "symbol",
         "symbols": tickers,
-        "maxMessagesPerSymbol": 30,  # 30 per ticker × 20 = 600 messages total = within free credits
+        "maxMessagesPerSymbol": PER_TICKER_LIMIT,
+        "maxItems": HARD_TOTAL_LIMIT,  # belt-and-suspenders: actor MUST stop here
     }
 
-    print(f"  Calling Apify actor {actor_id} for {len(tickers)} symbols...")
+    print(f"  Calling Apify actor {actor_id} for {len(tickers)} symbols (max {PER_TICKER_LIMIT} msgs/ticker, hard cap {HARD_TOTAL_LIMIT})...")
     items = apify_run_actor(actor_id, run_input, timeout=180)
     print(f"  Got {len(items)} messages from StockTwits")
+    
+    # Defensive: if actor ignored our limits, trim ourselves
+    if len(items) > HARD_TOTAL_LIMIT:
+        print(f"  ⚠️ Actor returned more than requested - trimming to {HARD_TOTAL_LIMIT}")
+        items = items[:HARD_TOTAL_LIMIT]
 
-    # Group items by ticker
+    # Group items by ticker - the actor returns items with various symbol fields
+    # We need to be defensive about field names because schemas differ
     for item in items:
-        # Try multiple field names depending on schema version
-        symbol = (
-            item.get("symbol")
-            or item.get("ticker")
-            or (item.get("symbols", [{}])[0].get("symbol") if item.get("symbols") else None)
-            or ""
-        ).upper()
+        # Try all possible field names for the ticker symbol
+        symbol = None
+        # Direct fields first
+        for field in ("symbol", "ticker", "stockSymbol"):
+            val = item.get(field)
+            if val and isinstance(val, str):
+                symbol = val.upper()
+                break
+
+        # If symbols is a list, dig into it carefully
+        if not symbol:
+            symbols_list = item.get("symbols")
+            if isinstance(symbols_list, list) and len(symbols_list) > 0:
+                first = symbols_list[0]
+                if isinstance(first, dict):
+                    symbol = (first.get("symbol") or first.get("ticker") or "").upper()
+                elif isinstance(first, str):
+                    symbol = first.upper()
+
         if not symbol or symbol not in result:
             continue
 
         body = item.get("body") or item.get("message") or item.get("text") or ""
         if not body:
             continue
+
+        # Sentiment - try multiple field paths
         sentiment = (
             item.get("sentiment")
-            or item.get("entities", {}).get("sentiment", {}).get("basic")
+            or (item.get("entities", {}).get("sentiment", {}) if isinstance(item.get("entities"), dict) else {}).get("basic")
             or ""
         )
         sentiment_lower = (sentiment or "").lower()
@@ -473,13 +498,19 @@ def fetch_stocktwits_apify_batch(tickers):
             result[symbol]["bullish"] += 1
         elif "bear" in sentiment_lower:
             result[symbol]["bearish"] += 1
+
+        # Keep best 5 messages (sorted later by score for top 3 quotes)
         if len(result[symbol]["messages"]) < 5:
             result[symbol]["messages"].append({
-                "body": clean_text(body),
+                "body": clean_text(body, max_len=140),
                 "sentiment": sentiment,
             })
+        
+        # Hard per-ticker cap - never count more than PER_TICKER_LIMIT messages
+        if result[symbol]["count"] >= PER_TICKER_LIMIT:
+            continue
 
-    # Calculate sentiment percentage for each
+    # Calculate sentiment percentage and print summary
     for ticker in tickers:
         d = result[ticker]
         tot = d["bullish"] + d["bearish"]
@@ -505,31 +536,47 @@ def score_post(text, ticker):
 
 
 def calculate_buzz_score_v2(reddit_count, stocktwits_count, market_cap, top_posts):
-    """Smarter buzz scoring that's RELATIVE to market cap.
-    Big stocks have lots of chatter naturally; small stocks with same chatter = bigger signal.
-    Returns score 1-10."""
-    total = reddit_count + stocktwits_count
+    """Smart buzz scoring RELATIVE to market cap.
     
-    # Base score from absolute volume
-    if total > 200: base = 10
-    elif total > 100: base = 9
-    elif total > 50: base = 8
-    elif total > 25: base = 7
-    elif total > 12: base = 6
-    elif total > 6: base = 5
-    elif total > 2: base = 4
-    elif total > 0: base = 3
-    else: base = 1
+    The idea: a small-cap stock ($500M) with 50 posts = MUCH bigger signal than
+    AAPL with 50 posts (because AAPL ALWAYS has chatter, small caps usually don't).
+    
+    Returns score 1-10 where:
+    - 1-3: nothing happening, normal/no buzz
+    - 4-6: some discussion, worth noting
+    - 7-8: significant buzz, definitely something brewing
+    - 9-10: extreme buzz, this stock is on fire on social media
+    """
+    total = reddit_count + stocktwits_count
 
-    # Adjust for market cap (smaller = more impressive buzz)
-    # AAPL with 100 posts is normal; small cap with 100 posts is huge
-    mcap_b = market_cap / 1e9 if market_cap else 1.0
-    if mcap_b < 1.0 and total > 20:  # small cap with real buzz
-        base = min(10, base + 2)
-    elif mcap_b < 5.0 and total > 30:  # mid cap
-        base = min(10, base + 1)
+    if total == 0:
+        return 1  # no buzz at all
 
-    # Boost for early-signal keywords
+    # Calculate "buzz per billion of market cap" - this is the relative metric
+    # Example: 100 posts on $5B stock = 20 posts/$B (medium)
+    #          100 posts on $500M stock = 200 posts/$B (huge!)
+    mcap_b = max(market_cap / 1e9, 0.1) if market_cap else 1.0
+    posts_per_billion = total / mcap_b
+
+    # Score based on RELATIVE buzz density
+    if posts_per_billion > 100:    base = 10  # extreme
+    elif posts_per_billion > 50:   base = 9
+    elif posts_per_billion > 25:   base = 8
+    elif posts_per_billion > 12:   base = 7
+    elif posts_per_billion > 6:    base = 6
+    elif posts_per_billion > 3:    base = 5
+    elif posts_per_billion > 1:    base = 4
+    elif posts_per_billion > 0.3:  base = 3
+    else:                          base = 2
+
+    # Cap based on absolute volume - need at least some real activity
+    # Otherwise a $100M stock with 5 posts gets score 10 which is silly
+    if total < 5:
+        base = min(base, 4)
+    elif total < 15:
+        base = min(base, 7)
+
+    # Boost for early-signal keywords (insider words like "takeover", "FDA", "unusual volume")
     early_signals = sum(1 for p in top_posts if p.get("interest_score", 0) >= 5)
     if early_signals >= 3:
         base = min(10, base + 2)
@@ -539,25 +586,106 @@ def calculate_buzz_score_v2(reddit_count, stocktwits_count, market_cap, top_post
     return base
 
 
+# Bullish/bearish keyword detection for Reddit posts
+BULLISH_KEYWORDS = [
+    "moon", "mooning", "rocket", "🚀", "calls", "long", "buy",
+    "breakout", "squeeze", "rally", "surge", "rip", "ripping",
+    "pump", "pumping", "bull", "bullish", "rocket",
+    "to the moon", "explode", "exploding", "ath", "all time high",
+    "gains", "tendies", "winner", "beat", "upgrade",
+    "fda approval", "partnership", "buyout", "takeover",
+]
+
+BEARISH_KEYWORDS = [
+    "dump", "dumping", "crash", "tank", "tanking",
+    "puts", "short", "shorting", "sell", "selling",
+    "bear", "bearish", "drop", "fall", "falling",
+    "downgrade", "miss", "missed", "warning", "lawsuit",
+    "fraud", "scam", "delisted", "bankruptcy",
+]
+
+
+def detect_post_sentiment(text):
+    """Returns 'bullish', 'bearish', or 'neutral' based on keywords."""
+    text_lower = text.lower()
+    bull_hits = sum(1 for kw in BULLISH_KEYWORDS if kw in text_lower)
+    bear_hits = sum(1 for kw in BEARISH_KEYWORDS if kw in text_lower)
+    if bull_hits > bear_hits:
+        return "bullish"
+    elif bear_hits > bull_hits:
+        return "bearish"
+    return "neutral"
+
+
 def build_buzz_from_data(ticker, market_cap, reddit_posts, stocktwits_data):
-    """Build the buzz dict from pre-fetched Reddit posts + StockTwits data."""
-    # Score Reddit posts and pick top quotes
+    """Build the buzz dict from pre-fetched Reddit posts + StockTwits data.
+    
+    Key insight: counts are sample-limited (we only fetch 30 max), so we focus on:
+    - SENTIMENT % (bullish/bearish) - this is real and meaningful
+    - Top 3 quotes - real signals from real people  
+    - Buzz score 1-10 - relative to market cap
+    """
+    # === REDDIT SENTIMENT (from keyword detection) ===
+    reddit_bull = 0
+    reddit_bear = 0
     for p in reddit_posts:
         p["interest_score"] = score_post(p["title"], ticker)
+        sent = detect_post_sentiment(p["title"])
+        p["sentiment"] = sent
+        if sent == "bullish":
+            reddit_bull += 1
+        elif sent == "bearish":
+            reddit_bear += 1
+    
+    reddit_total_sentiment = reddit_bull + reddit_bear
+    reddit_bullish_pct = round(reddit_bull / reddit_total_sentiment * 100) if reddit_total_sentiment > 0 else 50
+    
+    # Sort Reddit posts by relevance + upvotes
     reddit_posts.sort(key=lambda x: (x["interest_score"], x["upvotes"]), reverse=True)
-
-    # Top 3 quotes - mix of high upvotes and high relevance
-    quotes = [
-        {
+    
+    # === TOP 3 QUOTES (mix of best Reddit + best StockTwits) ===
+    quotes = []
+    
+    # Best 2 from Reddit
+    for p in reddit_posts[:2]:
+        quotes.append({
             "text": p["title"],
+            "source": "reddit",
             "subreddit": p["subreddit"],
             "upvotes": p["upvotes"],
             "url": p["url"],
-        }
-        for p in reddit_posts[:3]
-    ]
-
-    # Topics from keywords appearing in posts
+            "sentiment": p.get("sentiment", "neutral"),
+        })
+    
+    # Best 1 from StockTwits (prefer bullish if mostly bullish, else just first)
+    st_messages = stocktwits_data.get("messages", [])
+    if st_messages:
+        # Take first message as best
+        best_st = st_messages[0]
+        quotes.append({
+            "text": best_st["body"],
+            "source": "stocktwits",
+            "subreddit": "StockTwits",
+            "upvotes": 0,
+            "url": "",
+            "sentiment": (best_st.get("sentiment", "") or "neutral").lower(),
+        })
+    
+    # If we don't have 3 quotes yet, fill from Reddit
+    if len(quotes) < 3 and len(reddit_posts) > 2:
+        for p in reddit_posts[2:5]:
+            if len(quotes) >= 3:
+                break
+            quotes.append({
+                "text": p["title"],
+                "source": "reddit",
+                "subreddit": p["subreddit"],
+                "upvotes": p["upvotes"],
+                "url": p["url"],
+                "sentiment": p.get("sentiment", "neutral"),
+            })
+    
+    # === TOPICS (early signal keywords found) ===
     topics = []
     for p in reddit_posts:
         for kw in EARLY_SIGNAL_KEYWORDS:
@@ -568,20 +696,34 @@ def build_buzz_from_data(ticker, market_cap, reddit_posts, stocktwits_data):
         if len(topics) >= 5:
             break
 
+    # === BUZZ SCORE (relative to market cap) ===
     score = calculate_buzz_score_v2(
         len(reddit_posts), stocktwits_data["count"], market_cap, reddit_posts
     )
 
     return {
+        # Counts (sample-limited - mainly used for buzz score, not displayed prominently)
         "reddit_count": len(reddit_posts),
         "stocktwits_count": stocktwits_data["count"],
         "total_count": len(reddit_posts) + stocktwits_data["count"],
+        # Score 1-10 (the key indicator)
         "score": score,
+        # Sentiment - REDDIT (keyword-based, our analysis)
+        "reddit_bullish_pct": reddit_bullish_pct,
+        "reddit_bullish": reddit_bull,
+        "reddit_bearish": reddit_bear,
+        # Sentiment - STOCKTWITS (user-marked, from the platform)
+        "stocktwits_bullish_pct": stocktwits_data["sentiment_pct"],
+        "stocktwits_bullish": stocktwits_data["bullish"],
+        "stocktwits_bearish": stocktwits_data["bearish"],
+        # Quotes - the most important part
+        "quotes": quotes,
+        # Topics - keywords found
+        "topics": topics[:3],
+        # Legacy fields for backwards compat
         "sentiment_pct": stocktwits_data["sentiment_pct"],
         "bullish": stocktwits_data["bullish"],
         "bearish": stocktwits_data["bearish"],
-        "quotes": quotes,
-        "topics": topics[:3],
     }
 
 
@@ -666,7 +808,7 @@ def send_email(stocks, bonus, week_label):
 <td style="padding:10px 14px;color:#555;font-size:13px">${mcap}B</td>
 <td style="padding:10px 14px;text-align:center">
 <span style="font-size:14px;font-weight:700;color:{buzz_color}">{bscore}/10</span>
-<div style="font-size:10px;color:#aaa;margin-top:2px">R:{buzz.get("reddit_count",0)} ST:{buzz.get("stocktwits_count",0)}</div>
+<div style="font-size:10px;color:#aaa;margin-top:2px">{buzz.get("reddit_bullish_pct", 50)}% bull</div>
 </td>
 <td style="padding:10px 14px">{badge}</td>
 </tr>"""
@@ -675,11 +817,11 @@ def send_email(stocks, bonus, week_label):
     if bonus:
         bonus_cards = "".join(
             [
-                f'<div style="background:white;border:1px solid #e8e8e8;border-radius:10px;padding:14px 16px;flex:1;min-width:220px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:16px;font-weight:700;color:#1a1a2e">{b["ticker"]}</span><span style="background:#FAEEDA;color:#633806;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600">Buzz Alert</span></div><div style="font-size:12px;color:#666">{b["name"]}</div><div style="font-size:12px;color:#097c3e;font-weight:600;margin-top:6px">+{b["change_pct"]}% · {b.get("buzz",{}).get("total_count",0)} signals</div></div>'
+                f'<div style="background:white;border:1px solid #e8e8e8;border-radius:10px;padding:14px 16px;flex:1;min-width:220px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:16px;font-weight:700;color:#1a1a2e">{b["ticker"]}</span><span style="background:#FAEEDA;color:#633806;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600">🔥 Buzz Alert</span></div><div style="font-size:12px;color:#666">{b["name"]}</div><div style="font-size:12px;color:#097c3e;font-weight:600;margin-top:6px">+{b["change_pct"]}% · Buzz {b.get("buzz",{}).get("score",0)}/10 · {b.get("buzz",{}).get("reddit_bullish_pct",50)}% bullish</div></div>'
                 for b in bonus[:3]
             ]
         )
-        bonus_html = f'<div style="padding:20px 24px;background:#f8f9fa;border-top:1px solid #eee"><div style="font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">Bonus — Worth Watching</div><div style="display:flex;gap:12px;flex-wrap:wrap">{bonus_cards}</div></div>'
+        bonus_html = f'<div style="padding:20px 24px;background:#f8f9fa;border-top:1px solid #eee"><div style="font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">🔥 Buzz Alerts — Top stocks with extraordinary buzz</div><div style="display:flex;gap:12px;flex-wrap:wrap">{bonus_cards}</div></div>'
 
     html = f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f0f2f5;font-family:Arial,sans-serif">
 <div style="max-width:720px;margin:0 auto">
