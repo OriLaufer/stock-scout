@@ -358,9 +358,9 @@ def fetch_reddit_buzz_apify_batch(tickers):
 
     print(f"\n--- Reddit via Apify: searching for {len(tickers)} tickers in batch ---")
 
-    # Build start URLs - one search per ticker across investing subs
+    # 3 most active investing subreddits - keeps URL count manageable for the actor
     start_urls = []
-    subreddits = ["wallstreetbets", "stocks", "pennystocks", "options", "StockMarket", "investing"]
+    subreddits = ["wallstreetbets", "stocks", "pennystocks"]
     for ticker in tickers:
         for sub in subreddits:
             start_urls.append({
@@ -371,16 +371,16 @@ def fetch_reddit_buzz_apify_batch(tickers):
     actor_id = "trudax/reddit-scraper-lite"
     run_input = {
         "startUrls": start_urls,
-        "maxItems": len(tickers) * 60,  # ~60 posts per ticker average (some have more, some less)
-        "maxPostCount": 50,  # max 50 posts per subreddit search
+        "maxItems": len(tickers) * 30,  # ~30 posts per ticker average
+        "maxPostCount": 30,  # max 30 posts per subreddit search (was 50)
         "skipComments": True,
         "skipUserPosts": True,
         "skipCommunity": True,
         "proxy": {"useApifyProxy": True},
     }
 
-    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs...")
-    posts = apify_run_actor(actor_id, run_input, timeout=300)
+    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs (timeout 9 min)...")
+    posts = apify_run_actor(actor_id, run_input, timeout=540)  # 9 minutes
     print(f"  Got {len(posts)} total posts from Apify")
 
     # Group posts by ticker
@@ -423,7 +423,8 @@ def fetch_reddit_buzz_apify_batch(tickers):
 
 
 def fetch_stocktwits_apify_batch(tickers):
-    """Fetch StockTwits messages for all tickers via Apify actor.
+    """Fetch StockTwits messages for all tickers via the FREE Apify actor.
+    automation-lab/stocktwits-scraper is pay-per-result, not rental.
     Returns: dict mapping ticker -> dict with count/bullish/bearish/messages."""
     result = {t: {"count": 0, "bullish": 0, "bearish": 0, "sentiment_pct": 50, "messages": []} for t in tickers}
 
@@ -431,65 +432,59 @@ def fetch_stocktwits_apify_batch(tickers):
         print("  No APIFY_TOKEN - skipping StockTwits")
         return result
 
-    print(f"\n--- StockTwits via Apify: {len(tickers)} tickers ---")
+    print(f"\n--- StockTwits via Apify (pay-per-result, free actor): {len(tickers)} tickers ---")
 
-    # The saswave actor scrapes StockTwits - one ticker at a time, but it's fast
-    actor_id = "saswave/stocktwits-stock-ticker-news-scraper"
-    
+    actor_id = "automation-lab/stocktwits-scraper"
+    # Single call with all symbols - "symbol" mode fetches recent stream
+    run_input = {
+        "mode": "symbol",
+        "symbols": tickers,
+        "maxMessagesPerSymbol": 30,  # 30 per ticker × 20 = 600 messages total = within free credits
+    }
+
+    print(f"  Calling Apify actor {actor_id} for {len(tickers)} symbols...")
+    items = apify_run_actor(actor_id, run_input, timeout=180)
+    print(f"  Got {len(items)} messages from StockTwits")
+
+    # Group items by ticker
+    for item in items:
+        # Try multiple field names depending on schema version
+        symbol = (
+            item.get("symbol")
+            or item.get("ticker")
+            or (item.get("symbols", [{}])[0].get("symbol") if item.get("symbols") else None)
+            or ""
+        ).upper()
+        if not symbol or symbol not in result:
+            continue
+
+        body = item.get("body") or item.get("message") or item.get("text") or ""
+        if not body:
+            continue
+        sentiment = (
+            item.get("sentiment")
+            or item.get("entities", {}).get("sentiment", {}).get("basic")
+            or ""
+        )
+        sentiment_lower = (sentiment or "").lower()
+
+        result[symbol]["count"] += 1
+        if "bull" in sentiment_lower:
+            result[symbol]["bullish"] += 1
+        elif "bear" in sentiment_lower:
+            result[symbol]["bearish"] += 1
+        if len(result[symbol]["messages"]) < 5:
+            result[symbol]["messages"].append({
+                "body": clean_text(body),
+                "sentiment": sentiment,
+            })
+
+    # Calculate sentiment percentage for each
     for ticker in tickers:
-        try:
-            run_input = {"symbols": [ticker]}
-            print(f"  StockTwits for {ticker}...", end=" ")
-            items = apify_run_actor(actor_id, run_input, timeout=60)
-            
-            if not items:
-                # Fallback: try direct API call (it sometimes works)
-                try:
-                    url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
-                    r = requests.get(url, headers={
-                        "User-Agent": get_ua(),
-                        "Accept": "application/json",
-                        "Origin": "https://stocktwits.com",
-                        "Referer": "https://stocktwits.com/",
-                    }, timeout=10)
-                    if r.status_code == 200:
-                        data = r.json()
-                        msgs = data.get("messages", [])
-                        items = [{"body": m.get("body", ""), "sentiment": (m.get("entities", {}).get("sentiment") or {}).get("basic")} for m in msgs]
-                except Exception:
-                    pass
-
-            count = 0
-            bull = 0
-            bear = 0
-            messages = []
-            for item in items:
-                # Various field names depending on scraper version
-                body = item.get("body") or item.get("message") or item.get("text") or ""
-                sentiment = item.get("sentiment") or item.get("bullish_bearish") or ""
-                if not body:
-                    continue
-                count += 1
-                if sentiment in ("Bullish", "bullish", "bull"):
-                    bull += 1
-                elif sentiment in ("Bearish", "bearish", "bear"):
-                    bear += 1
-                if len(messages) < 5:
-                    messages.append({"body": clean_text(body), "sentiment": sentiment})
-            
-            tot = bull + bear
-            sent_pct = round(bull / tot * 100) if tot > 0 else 50
-            result[ticker] = {
-                "count": count,
-                "bullish": bull,
-                "bearish": bear,
-                "sentiment_pct": sent_pct,
-                "messages": messages,
-            }
-            print(f"{count} msgs, {sent_pct}% bull")
-        except Exception as e:
-            print(f"error: {e}")
-        time.sleep(1)
+        d = result[ticker]
+        tot = d["bullish"] + d["bearish"]
+        d["sentiment_pct"] = round(d["bullish"] / tot * 100) if tot > 0 else 50
+        print(f"  {ticker}: {d['count']} msgs, {d['sentiment_pct']}% bullish")
 
     return result
 
