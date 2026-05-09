@@ -452,39 +452,65 @@ def apify_run_actor(actor_id, run_input, timeout=180, target_items=None):
         return []
 
 
-def fetch_reddit_buzz_apify_batch(tickers):
+def fetch_reddit_buzz_apify_batch(tickers, names_dict=None):
     """Single Apify call for ALL tickers - much cheaper than per-ticker calls.
-    Uses search across multiple investing subreddits with the ticker as keyword.
+    Now searches for BOTH ticker AND company name (e.g. "AVTX" + "Avalo Therapeutics").
     Returns: dict mapping ticker -> list of posts."""
     if not APIFY_TOKEN:
         print("  No APIFY_TOKEN - skipping Reddit")
         return {t: [] for t in tickers}
+    
+    if names_dict is None:
+        names_dict = {}
 
     print(f"\n--- Reddit via Apify: searching for {len(tickers)} tickers in batch ---")
 
-    # 3 most active investing subreddits - keeps URL count manageable for the actor
+    # ⚡ SMART: search for ticker AND company name to maximize coverage
+    # Some small stocks barely have $TICKER mentions, but their company name is discussed
+    # Example: "AVTX" → 0 results, but "Avalo Therapeutics" → many results
     start_urls = []
-    subreddits = ["wallstreetbets", "stocks", "pennystocks"]
     for ticker in tickers:
-        for sub in subreddits:
-            start_urls.append({
-                "url": f"https://www.reddit.com/r/{sub}/search/?q=%24{ticker}&restrict_sr=1&t=week&sort=hot",
-            })
+        # Search 1: ticker with cashtag
+        start_urls.append({
+            "url": f"https://www.reddit.com/search/?q=%24{ticker}&t=week&sort=hot",
+        })
+        # Search 2: company name (if available and different from ticker)
+        company_name = names_dict.get(ticker, "")
+        if company_name and company_name.upper() != ticker:
+            # Clean the name: remove "Inc.", "Corp.", "Ltd.", etc.
+            clean_name = company_name
+            for suffix in [", Inc.", " Inc.", ", Corp.", " Corp.", ", Ltd.", " Ltd.",
+                          ", Co.", " Co.", " Class A Common Stock", " Common Stock",
+                          " - Common Stock", " - Class A Common Stock"]:
+                clean_name = clean_name.replace(suffix, "")
+            clean_name = clean_name.strip()
+            
+            # Use first word(s) only if name is short, full name if longer
+            if len(clean_name) > 5 and len(clean_name) < 40:
+                # URL-encode the name for the query
+                from urllib.parse import quote
+                encoded_name = quote(clean_name)
+                start_urls.append({
+                    "url": f"https://www.reddit.com/search/?q={encoded_name}&t=week&sort=hot",
+                })
 
     # Use Reddit Scraper Lite - cheap and reliable
     actor_id = "trudax/reddit-scraper-lite"
     run_input = {
         "startUrls": start_urls,
-        "maxItems": len(tickers) * 40,  # ~40 posts per ticker average - good resolution for buzz signal
-        "maxPostCount": 40,  # max 40 posts per subreddit search
+        "maxItems": len(tickers) * 40,  # ~40 posts per ticker average
+        "maxPostCount": 40,  # max 40 posts per search
         "skipComments": True,
         "skipUserPosts": True,
         "skipCommunity": True,
         "proxy": {"useApifyProxy": True},
     }
 
-    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs (timeout 9 min, target {len(tickers)*40} posts)...")
-    posts = apify_run_actor(actor_id, run_input, timeout=540, target_items=len(tickers)*40)  # 9 minutes, hard cap 800 posts
+    # Reddit: don't abort early - we need to cover ALL tickers
+    # Set target very high so abort only triggers if actor is misbehaving
+    # Hard cap is enforced by maxItems in run_input + post-fetch trimming
+    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs (timeout 35 min - waits for completion)...")
+    posts = apify_run_actor(actor_id, run_input, timeout=2100, target_items=len(tickers)*200)  # 35 min, very high target = no early abort
     print(f"  Got {len(posts)} total posts from Apify")
 
     # Group posts by ticker
@@ -499,10 +525,29 @@ def fetch_reddit_buzz_apify_batch(tickers):
 
         # Identify which ticker(s) this post mentions
         for ticker in tickers:
-            if (
-                f"${ticker}" in full_text
-                or re.search(rf"\b{re.escape(ticker)}\b", full_text)
-            ):
+            matched = False
+            
+            # Match 1: explicit cashtag like $RXT (highest confidence)
+            if f"${ticker}" in full_text or f"${ticker.lower()}" in full_text.lower():
+                matched = True
+            # Match 2: ticker as standalone word (boundaries)
+            elif re.search(rf"\b{re.escape(ticker)}\b", full_text):
+                matched = True
+            # Match 3: company name (if available and distinctive enough)
+            elif names_dict:
+                company_name = names_dict.get(ticker, "")
+                if company_name and len(company_name) > 5:
+                    # Use first significant word of company name (e.g. "Avalo" from "Avalo Therapeutics")
+                    first_word = company_name.split()[0] if company_name.split() else ""
+                    # Only match if first word is distinctive (not generic like "The", "United", etc.)
+                    generic_words = {"the", "a", "an", "and", "of", "in", "on", "for", "with", "united", 
+                                    "national", "american", "international", "global", "general", "common"}
+                    if (len(first_word) > 4 and 
+                        first_word.lower() not in generic_words and 
+                        first_word in full_text):
+                        matched = True
+            
+            if matched:
                 by_ticker[ticker].append({
                     "title": clean_text(title),
                     "subreddit": p.get("communityName") or p.get("subreddit") or "reddit",
@@ -1077,9 +1122,10 @@ def main():
     # 4. ONE Apify batch call for the TOP 20 only (cheap and focused)
     print("--- Fetching buzz for TOP 20 via Apify ---")
     top20_tickers = [s["ticker"] for s in top20]
+    top20_names = {s["ticker"]: s["name"] for s in top20}
     
-    # Reddit - one big batch call
-    reddit_data = fetch_reddit_buzz_apify_batch(top20_tickers)
+    # Reddit - one big batch call (search by ticker AND company name)
+    reddit_data = fetch_reddit_buzz_apify_batch(top20_tickers, top20_names)
     print(f"  [+{int(time.time()-t_start)}s]\n")
     
     # StockTwits - per ticker (smaller calls but still batched)
