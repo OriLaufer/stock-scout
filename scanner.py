@@ -465,52 +465,33 @@ def fetch_reddit_buzz_apify_batch(tickers, names_dict=None):
 
     print(f"\n--- Reddit via Apify: searching for {len(tickers)} tickers in batch ---")
 
-    # ⚡ SMART: search for ticker AND company name to maximize coverage
-    # Some small stocks barely have $TICKER mentions, but their company name is discussed
-    # Example: "AVTX" → 0 results, but "Avalo Therapeutics" → many results
+    # ⚡ SIMPLIFIED: 1 URL per ticker (cashtag only), more posts per URL
+    # Why: $TICKER is the standard convention on Reddit for stocks.
+    # Going from 40 URLs → 20 URLs cuts time in half and ensures ALL tickers get covered
+    # before any abort. With 50 posts per URL, popular stocks can show high buzz (50)
+    # while quiet stocks naturally show low (5-10).
     start_urls = []
     for ticker in tickers:
-        # Search 1: ticker with cashtag
         start_urls.append({
             "url": f"https://www.reddit.com/search/?q=%24{ticker}&t=week&sort=hot",
         })
-        # Search 2: company name (if available and different from ticker)
-        company_name = names_dict.get(ticker, "")
-        if company_name and company_name.upper() != ticker:
-            # Clean the name: remove "Inc.", "Corp.", "Ltd.", etc.
-            clean_name = company_name
-            for suffix in [", Inc.", " Inc.", ", Corp.", " Corp.", ", Ltd.", " Ltd.",
-                          ", Co.", " Co.", " Class A Common Stock", " Common Stock",
-                          " - Common Stock", " - Class A Common Stock"]:
-                clean_name = clean_name.replace(suffix, "")
-            clean_name = clean_name.strip()
-            
-            # Use first word(s) only if name is short, full name if longer
-            if len(clean_name) > 5 and len(clean_name) < 40:
-                # URL-encode the name for the query
-                from urllib.parse import quote
-                encoded_name = quote(clean_name)
-                start_urls.append({
-                    "url": f"https://www.reddit.com/search/?q={encoded_name}&t=week&sort=hot",
-                })
 
     # Use Reddit Scraper Lite - cheap and reliable
     actor_id = "trudax/reddit-scraper-lite"
     run_input = {
         "startUrls": start_urls,
-        "maxItems": len(tickers) * 40,  # ~40 posts per ticker average
-        "maxPostCount": 40,  # max 40 posts per search
+        "maxItems": len(tickers) * 20,  # 20 posts × 20 tickers = 400 max
+        "maxPostCount": 20,  # max 20 posts per ticker - enough for buzz signal + 3 quotes
         "skipComments": True,
         "skipUserPosts": True,
         "skipCommunity": True,
         "proxy": {"useApifyProxy": True},
     }
 
-    # Reddit: don't abort early - we need to cover ALL tickers
-    # Set target very high so abort only triggers if actor is misbehaving
-    # Hard cap is enforced by maxItems in run_input + post-fetch trimming
-    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs (timeout 35 min - waits for completion)...")
-    posts = apify_run_actor(actor_id, run_input, timeout=2100, target_items=len(tickers)*200)  # 35 min, very high target = no early abort
+    # Reddit: abort at 400 results = ~$1.20 max cost
+    # 20 posts is enough to: detect buzz, measure sentiment, pick 3 quality quotes
+    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs (timeout 12 min, abort at 400 results = ~$1.20)...")
+    posts = apify_run_actor(actor_id, run_input, timeout=720, target_items=400)  # 12 min, abort at 400
     print(f"  Got {len(posts)} total posts from Apify")
 
     # Group posts by ticker
@@ -586,7 +567,7 @@ def fetch_stocktwits_apify_batch(tickers):
     actor_id = "automation-lab/stocktwits-scraper"
     # We compute Reddit-style sentiment + StockTwits user-marked sentiment
     # 40 messages per ticker = good resolution for differentiating buzz levels
-    PER_TICKER_LIMIT = 40
+    PER_TICKER_LIMIT = 40  # StockTwits is fast and cheap - more = better sentiment + quote selection
     HARD_TOTAL_LIMIT = len(tickers) * PER_TICKER_LIMIT  # absolute ceiling, controls cost
     
     run_input = {
@@ -718,14 +699,17 @@ def calculate_buzz_score_v2(reddit_count, stocktwits_count, market_cap, top_post
     # Score based on weighted buzz density
     # Note: With 40 messages cap per ticker, max possible weighted = 40*3 + 40 = 160
     # Thresholds are calibrated so that hitting cap on small-cap stock = high score
-    if weighted_per_billion > 200:   base = 10  # extreme - small cap with massive Reddit buzz
-    elif weighted_per_billion > 130: base = 9
-    elif weighted_per_billion > 90:  base = 8
-    elif weighted_per_billion > 60:  base = 7
-    elif weighted_per_billion > 35:  base = 6
-    elif weighted_per_billion > 18:  base = 5
-    elif weighted_per_billion > 8:   base = 4
-    elif weighted_per_billion > 3:   base = 3
+    # Score based on weighted buzz density
+    # Caps: Reddit max 20, StockTwits max 40 → max weighted = 20*3 + 40 = 100
+    # A small-cap maxed out = ~70-100 per billion = 9-10
+    if weighted_per_billion > 130:   base = 10  # extreme
+    elif weighted_per_billion > 85:  base = 9
+    elif weighted_per_billion > 55:  base = 8
+    elif weighted_per_billion > 35:  base = 7
+    elif weighted_per_billion > 20:  base = 6
+    elif weighted_per_billion > 10:  base = 5
+    elif weighted_per_billion > 5:   base = 4
+    elif weighted_per_billion > 2:   base = 3
     else:                            base = 2
 
     # Cap based on absolute REDDIT volume (Reddit is the gold signal)
