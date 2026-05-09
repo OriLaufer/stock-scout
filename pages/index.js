@@ -20,8 +20,8 @@ const T = {
     fourPlus: 'ארבעה+',
     stocks: 'מניות',
     noData: 'אין נתונים. לחץ על "הפעל סריקה".',
-    bonus: 'מניות בונוס — לא ב-TOP 20 אבל שווה עין',
-    buzzAlert: 'באז חריג',
+    bonus: '🔥 התראות באז — מניות מהטופ עם באז יוצא דופן',
+    buzzAlert: '🔥 באז גבוה',
     details: 'פרטים',
     close: 'סגור',
     thisWeek: 'השבוע',
@@ -29,15 +29,18 @@ const T = {
     notInList: 'לא הופיעה',
     appHistory: 'היסטוריית הופעות',
     buzzTitle: 'באז',
-    postsTotal: 'פוסטים סה"כ',
-    sentiment: 'סנטימנט',
+    sentimentTitle: 'סנטימנט המסחר',
     bullish: 'חיובי',
-    topTopics: 'נושאים מובילים',
-    whatSaying: 'מה אומרים — Reddit',
+    bearish: 'שלילי',
+    neutral: 'נייטרלי',
+    redditSentiment: 'Reddit (לפי ניתוח טקסט)',
+    stocktwitsSentiment: 'StockTwits (סימון משתמשים)',
+    topTopics: '🏷️ נושאים מובילים',
+    whatSaying: '💬 מה אומרים מאחורי הקלעים',
     upvotes: 'לייקים',
     mktCap: 'מרקט קאפ',
     price: 'מחיר',
-    volume: 'נפח',
+    volume: 'נפח שבועי',
     buzzScore: 'ציון באז',
     streak: 'שבועות ברצף',
     new: 'חדשה',
@@ -47,6 +50,9 @@ const T = {
     gain: 'עלייה',
     buzz: 'באז',
     trend: 'מגמה',
+    relativeBuzz: 'יחסית למרקט קאפ',
+    noQuotes: 'אין ציטוטים זמינים',
+    noBuzz: 'אין באז משמעותי השבוע',
   },
   en: {
     title: 'Stock Scout',
@@ -61,8 +67,8 @@ const T = {
     fourPlus: 'four weeks+',
     stocks: 'stocks',
     noData: 'No data yet. Click "Run Scan" to start.',
-    bonus: 'Bonus Stocks — Not in TOP 20 but worth watching',
-    buzzAlert: 'Buzz Alert',
+    bonus: '🔥 Buzz Alerts — Top stocks with extraordinary buzz',
+    buzzAlert: '🔥 High Buzz',
     details: 'Details',
     close: 'Close',
     thisWeek: 'This week',
@@ -70,15 +76,18 @@ const T = {
     notInList: 'Not in list',
     appHistory: 'Appearance History',
     buzzTitle: 'Buzz',
-    postsTotal: 'posts total',
-    sentiment: 'Sentiment',
-    bullish: 'bullish',
-    topTopics: 'Top Topics',
-    whatSaying: 'What people are saying — Reddit',
+    sentimentTitle: 'Trading Sentiment',
+    bullish: 'Bullish',
+    bearish: 'Bearish',
+    neutral: 'Neutral',
+    redditSentiment: 'Reddit (text analysis)',
+    stocktwitsSentiment: 'StockTwits (user-marked)',
+    topTopics: '🏷️ Top Topics',
+    whatSaying: '💬 What people are saying',
     upvotes: 'upvotes',
     mktCap: 'Market Cap',
     price: 'Price',
-    volume: 'Volume',
+    volume: 'Weekly Volume',
     buzzScore: 'Buzz Score',
     streak: 'weeks streak',
     new: 'New',
@@ -88,6 +97,9 @@ const T = {
     gain: 'Gain',
     buzz: 'Buzz',
     trend: 'Trend',
+    relativeBuzz: 'relative to market cap',
+    noQuotes: 'No quotes available',
+    noBuzz: 'No significant buzz this week',
   }
 }
 
@@ -97,12 +109,16 @@ const COLORS = {
     text: '#1a1a2e', muted: '#888', border: '#eeeeee',
     inputBg: '#ffffff', chipBg: '#f0f0f0',
     panelBg: '#f0faf5', rowHover: '#fafafa', rowSelected: '#f0faf5',
+    bullColor: '#097c3e', bearColor: '#cc3333', neutralColor: '#888',
+    bullBg: '#EAF3DE', bearBg: '#FCEBEB', neutralBg: '#f0f0f0',
   },
   dark: {
     pageBg: '#0f0f1a', card: '#1a1a2e', thead: '#12122a',
     text: '#e8e8f0', muted: '#777', border: '#2a2a3e',
     inputBg: '#12122a', chipBg: '#2a2a3e',
     panelBg: '#0d2018', rowHover: '#1e1e32', rowSelected: '#0d2018',
+    bullColor: '#7dcc7d', bearColor: '#ff8888', neutralColor: '#888',
+    bullBg: '#1a3a1a', bearBg: '#3a0a0a', neutralBg: '#2a2a3e',
   }
 }
 
@@ -267,7 +283,7 @@ export default function Dashboard({ scans }) {
                   </div>
                   <div style={{ fontSize: 12, color: c.muted, marginBottom: 6 }}>{b.name}</div>
                   <div style={{ fontSize: 13, color: '#097c3e', fontWeight: 700 }}>+{b.change_pct}%</div>
-                  <div style={{ fontSize: 12, color: c.muted, marginTop: 4 }}>{b.buzz?.total_count || 0} posts · {b.buzz?.score || 0}/10 buzz</div>
+                  <div style={{ fontSize: 12, color: c.muted, marginTop: 4 }}>{b.buzz?.score || 0}/10 buzz · {b.buzz?.reddit_bullish_pct || 50}% bullish</div>
                 </div>
               ))}
             </div>
@@ -293,7 +309,9 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark }) {
     streak >= 2 ? { bg: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', text: `🟡 ${streak} ${t.weeks}` } :
     { bg: c.chipBg, color: c.muted, text: t.new }
 
-  const buzzColor = buzz.score >= 7 ? '#097c3e' : buzz.score >= 4 ? '#cc8800' : c.muted
+  const buzzScore = buzz.score || 0
+  const buzzColor = buzzScore >= 7 ? '#097c3e' : buzzScore >= 4 ? '#cc8800' : c.muted
+  const isBuzzAlert = stock.buzz_alert || buzzScore >= 7
 
   return (
     <tr onClick={onClick} style={{ borderBottom: `1px solid ${c.border}`, cursor: 'pointer', background: isOpen ? c.rowSelected : c.card }}
@@ -301,7 +319,10 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark }) {
       onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = c.card }}>
       <td style={{ padding: '11px 14px', color: c.muted, fontSize: 13 }}>{rank}</td>
       <td style={{ padding: '11px 14px' }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: c.text }}>{stock.ticker}</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {stock.ticker}
+          {isBuzzAlert && <span title="High buzz" style={{ fontSize: 13 }}>🔥</span>}
+        </div>
         <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{stock.name}</div>
       </td>
       <td style={{ padding: '11px 14px' }}>
@@ -309,8 +330,7 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark }) {
       </td>
       <td style={{ padding: '11px 14px', color: c.muted, fontSize: 13 }}>${mcapB}B</td>
       <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: buzzColor }}>{buzz.score || 0}/10</div>
-        <div style={{ fontSize: 10, color: c.muted, marginTop: 2 }}>{buzz.total_count || 0} posts</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: buzzColor }}>{buzzScore}/10</div>
       </td>
       <td style={{ padding: '11px 14px' }}>
         <span style={{ background: streakBadge.bg, color: streakBadge.color, padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>{streakBadge.text}</span>
@@ -324,6 +344,46 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark }) {
   )
 }
 
+function SentimentBar({ label, bullPct, c, t }) {
+  const bearPct = 100 - bullPct
+  const sentLabel = bullPct >= 60 ? t.bullish : bullPct <= 40 ? t.bearish : t.neutral
+  const sentColor = bullPct >= 60 ? c.bullColor : bullPct <= 40 ? c.bearColor : c.neutralColor
+  
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, fontSize: 12 }}>
+        <span style={{ color: c.muted, fontWeight: 600 }}>{label}</span>
+        <span style={{ color: sentColor, fontWeight: 700 }}>{bullPct}% {sentLabel}</span>
+      </div>
+      <div style={{ display: 'flex', height: 8, borderRadius: 4, overflow: 'hidden', background: c.chipBg }}>
+        <div style={{ width: `${bullPct}%`, background: c.bullColor }} />
+        <div style={{ width: `${bearPct}%`, background: c.bearColor }} />
+      </div>
+    </div>
+  )
+}
+
+function QuoteCard({ quote, c, dark }) {
+  const isReddit = quote.source === 'reddit'
+  const sourceColor = isReddit ? '#FF4500' : '#378ADD'
+  const sentimentEmoji = quote.sentiment === 'bullish' ? '📈' : quote.sentiment === 'bearish' ? '📉' : ''
+  
+  return (
+    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderLeft: `3px solid ${sourceColor}`, borderRadius: 8, padding: '10px 14px', marginBottom: 10 }}>
+      <div style={{ fontSize: 13, color: c.text, lineHeight: 1.6, fontStyle: 'italic' }}>
+        {sentimentEmoji && <span style={{ marginRight: 6 }}>{sentimentEmoji}</span>}
+        "{quote.text}"
+      </div>
+      <div style={{ fontSize: 11, color: c.muted, marginTop: 6, display: 'flex', gap: 12, alignItems: 'center' }}>
+        <span style={{ color: sourceColor, fontWeight: 600 }}>
+          {isReddit ? `r/${quote.subreddit}` : 'StockTwits'}
+        </span>
+        {quote.upvotes > 0 && <span>↑ {quote.upvotes}</span>}
+      </div>
+    </div>
+  )
+}
+
 function StockPanel({ stock, scans, c, t, dark, onClose }) {
   const buzz = stock.buzz || {}
   const quotes = buzz.quotes || []
@@ -333,7 +393,10 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
     return { week: scan.week_label, stock: found }
   }).slice(0, 8)
 
-  const firstAppIndex = timeline.map(x => x.stock).lastIndexOf(timeline.find(x => x.stock)?.stock)
+  const buzzScore = buzz.score || 0
+  const hasBuzz = (buzz.reddit_count || 0) + (buzz.stocktwits_count || 0) > 0
+  const redditBull = buzz.reddit_bullish_pct ?? 50
+  const stBull = buzz.stocktwits_bullish_pct ?? buzz.sentiment_pct ?? 50
 
   return (
     <div style={{ background: c.panelBg, borderTop: '2px solid #097c3e', padding: '20px 24px' }}>
@@ -344,11 +407,16 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 22, fontWeight: 800, color: c.text }}>{stock.ticker}</span>
             <span style={{ background: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
-              {t.buzzTitle} {buzz.score}/10
+              {t.buzzTitle} {buzzScore}/10
             </span>
             {stock.streak >= 2 && (
               <span style={{ background: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
                 {stock.streak} {t.streak}
+              </span>
+            )}
+            {(stock.buzz_alert || buzzScore >= 7) && (
+              <span style={{ background: dark ? '#3a2a0a' : '#FAEEDA', color: dark ? '#ffcc66' : '#633806', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
+                🔥 {t.buzzAlert}
               </span>
             )}
           </div>
@@ -363,9 +431,9 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
 
-        {/* Timeline */}
+        {/* LEFT: Timeline */}
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 14 }}>{t.appHistory}</div>
           {timeline.map(({ week, stock: s }, i) => (
@@ -380,9 +448,6 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
                   <div style={{ display: 'flex', gap: 8, marginTop: 3, alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 15, fontWeight: 700, color: '#097c3e' }}>+{s.change_pct}%</span>
                     <span style={{ fontSize: 11, color: c.muted }}>#{(scans[i]?.stocks || []).findIndex(x => x.ticker === stock.ticker) + 1}</span>
-                    {i === timeline.filter(x => x.stock).length - 1 && i > 0 && (
-                      <span style={{ background: dark ? '#0d2018' : '#E1F5EE', color: dark ? '#7dcc7d' : '#085041', padding: '1px 7px', borderRadius: 8, fontSize: 10, fontWeight: 600 }}>{t.firstApp}</span>
-                    )}
                   </div>
                 ) : (
                   <div style={{ fontSize: 12, color: dark ? '#444' : '#bbb', fontStyle: 'italic', marginTop: 3 }}>{t.notInList}</div>
@@ -392,47 +457,58 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
           ))}
         </div>
 
-        {/* Buzz breakdown */}
+        {/* RIGHT: Sentiment + Buzz Score */}
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 14 }}>
-            {t.buzzTitle} — {buzz.total_count || 0} {t.postsTotal}
+            📊 {t.sentimentTitle}
           </div>
-          <BuzzBar label="Reddit" value={buzz.reddit_count || 0} total={buzz.total_count || 1} color="#FF4500" c={c} />
-          <BuzzBar label="StockTwits" value={buzz.stocktwits_count || 0} total={buzz.total_count || 1} color="#378ADD" c={c} />
-          <div style={{ marginTop: 12, fontSize: 13, color: c.muted }}>
-            {t.sentiment}: <strong style={{ color: (buzz.sentiment_pct || 50) >= 60 ? '#097c3e' : (buzz.sentiment_pct || 50) <= 40 ? '#cc3333' : '#cc8800' }}>
-              {buzz.sentiment_pct || 50}% {t.bullish}
-            </strong>
-          </div>
-
-          {buzz.topics && buzz.topics.length > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', marginBottom: 8 }}>{t.topTopics}</div>
-              {buzz.topics.map((topic, i) => (
-                <div key={i} style={{ fontSize: 12, color: c.text, padding: '4px 10px', background: c.card, borderRadius: 6, marginBottom: 5, border: `1px solid ${c.border}` }}>
-                  • {topic}
+          
+          {hasBuzz ? (
+            <>
+              <SentimentBar label={t.redditSentiment} bullPct={redditBull} c={c} t={t} />
+              <SentimentBar label={t.stocktwitsSentiment} bullPct={stBull} c={c} t={t} />
+              
+              {/* Buzz Score Big */}
+              <div style={{ marginTop: 16, padding: '14px 16px', background: c.card, border: `1px solid ${c.border}`, borderRadius: 10 }}>
+                <div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>🔥 {t.buzzScore}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                  <span style={{ fontSize: 28, fontWeight: 800, color: buzzScore >= 7 ? '#097c3e' : buzzScore >= 4 ? '#cc8800' : c.muted }}>
+                    {buzzScore}
+                  </span>
+                  <span style={{ fontSize: 14, color: c.muted }}>/10</span>
                 </div>
-              ))}
+                <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{t.relativeBuzz}</div>
+              </div>
+
+              {/* Topics */}
+              {buzz.topics && buzz.topics.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', marginBottom: 8 }}>{t.topTopics}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {buzz.topics.map((topic, i) => (
+                      <span key={i} style={{ fontSize: 12, color: c.text, padding: '4px 10px', background: c.card, borderRadius: 12, border: `1px solid ${c.border}` }}>
+                        {topic}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ padding: 20, textAlign: 'center', color: c.muted, fontSize: 13, fontStyle: 'italic', background: c.card, borderRadius: 8, border: `1px solid ${c.border}` }}>
+              {t.noBuzz}
             </div>
           )}
         </div>
       </div>
 
-      {/* ציטוטים */}
+      {/* Quotes - full width */}
       {quotes.length > 0 && (
         <div style={{ marginTop: 20, borderTop: `1px solid ${c.border}`, paddingTop: 16 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 12 }}>
             {t.whatSaying}
           </div>
-          {quotes.map((q, i) => (
-            <div key={i} style={{ background: c.card, border: `1px solid ${c.border}`, borderLeft: '3px solid #FF4500', borderRadius: 8, padding: '10px 14px', marginBottom: 10 }}>
-              <div style={{ fontSize: 13, color: c.text, lineHeight: 1.6, fontStyle: 'italic' }}>"{q.text}"</div>
-              <div style={{ fontSize: 11, color: c.muted, marginTop: 6, display: 'flex', gap: 12 }}>
-                <span>r/{q.subreddit}</span>
-                {q.upvotes > 0 && <span>↑ {q.upvotes} {t.upvotes}</span>}
-              </div>
-            </div>
-          ))}
+          {quotes.map((q, i) => <QuoteCard key={i} quote={q} c={c} dark={dark} />)}
         </div>
       )}
 
@@ -440,22 +516,9 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
       <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
         <MetaCard label={t.mktCap} value={`$${(stock.market_cap / 1_000_000_000).toFixed(1)}B`} c={c} />
         <MetaCard label={t.price} value={`$${stock.price?.toFixed(2) || 'N/A'}`} c={c} />
-        <MetaCard label={t.volume} value={stock.volume ? `${(stock.volume / 1_000_000).toFixed(1)}M` : 'N/A'} c={c} />
-        <MetaCard label={t.buzzScore} value={`${buzz.score || 0}/10`} c={c} />
+        <MetaCard label={t.volume} value={stock.volume ? `${(stock.volume / 1_000_000).toFixed(0)}M` : 'N/A'} c={c} />
+        <MetaCard label={t.buzzScore} value={`${buzzScore}/10`} c={c} />
       </div>
-    </div>
-  )
-}
-
-function BuzzBar({ label, value, total, color, c }) {
-  const pct = total > 0 ? Math.round((value / total) * 100) : 0
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: c.muted, width: 80 }}>{label}</span>
-      <div style={{ flex: 1, height: 6, background: c.chipBg, borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3 }} />
-      </div>
-      <span style={{ fontSize: 12, color: c.muted, width: 36, textAlign: 'right' }}>{value}</span>
     </div>
   )
 }
