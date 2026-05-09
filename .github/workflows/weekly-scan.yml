@@ -2,7 +2,7 @@ name: Stock Scout Weekly Scan
 
 on:
   # Sunday 05:30 UTC = 08:30 IDT (Israel summer time)
-  # Scan takes ~10-15 min, email arrives well before 10:00
+  # Scan takes ~15 min, email arrives well before 10:00
   schedule:
     - cron: '30 5 * * 0'
   workflow_dispatch:
@@ -20,7 +20,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install dependencies
         run: |
