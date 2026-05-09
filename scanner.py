@@ -321,30 +321,134 @@ def find_top20_by_marketcap(price_data, names_dict):
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 
 
-def apify_run_actor(actor_id, run_input, timeout=180):
-    """Run an Apify actor synchronously and return all dataset items.
-    Uses run-sync-get-dataset-items endpoint which waits for the run to finish."""
+def apify_run_actor(actor_id, run_input, timeout=180, target_items=None):
+    """Run an Apify actor with INTELLIGENT control:
+    1. Start the run async (returns immediately)
+    2. Poll dataset progress
+    3. Abort the run when we have enough items (saves money!)
+    4. Return whatever was collected, even if run aborted/failed
+    
+    This solves two problems:
+    - Actors that ignore maxItems and run forever (cost overrun)
+    - Connection drops mid-run that lose all collected data
+    """
     if not APIFY_TOKEN:
         return []
+    
+    actor_path = actor_id.replace("/", "~")
+    headers = {"Content-Type": "application/json"}
+    
+    # === STEP 1: Start the run ===
     try:
-        # URL-encode the actor id (replace / with ~)
-        actor_path = actor_id.replace("/", "~")
-        url = f"https://api.apify.com/v2/acts/{actor_path}/run-sync-get-dataset-items"
-        params = {"token": APIFY_TOKEN, "timeout": timeout}
+        start_url = f"https://api.apify.com/v2/acts/{actor_path}/runs"
         r = requests.post(
-            url,
-            params=params,
+            start_url,
+            params={"token": APIFY_TOKEN},
             json=run_input,
-            headers={"Content-Type": "application/json"},
-            timeout=timeout + 30,
+            headers=headers,
+            timeout=30,
         )
-        if r.status_code in (200, 201):
-            data = r.json()
-            return data if isinstance(data, list) else []
-        print(f"    Apify {actor_id}: HTTP {r.status_code} | {r.text[:200]}")
+        if r.status_code not in (200, 201):
+            print(f"    Apify {actor_id} start failed: HTTP {r.status_code} | {r.text[:200]}")
+            return []
+        run_data = r.json().get("data", {})
+        run_id = run_data.get("id")
+        dataset_id = run_data.get("defaultDatasetId")
+        if not run_id or not dataset_id:
+            print(f"    Apify {actor_id}: missing run_id or dataset_id")
+            return []
+        print(f"    Apify {actor_id} started: run_id={run_id[:12]}..., target={target_items} items")
+    except Exception as e:
+        print(f"    Apify {actor_id} start error: {type(e).__name__}: {e}")
+        return []
+
+    # === STEP 2: Poll until done OR we have enough items ===
+    start_time = time.time()
+    poll_interval = 5  # seconds between polls (was 8 - faster = safer for cost control)
+    last_count = 0
+    
+    # Safety margin: trigger abort at 90% of target so the actor doesn't overshoot
+    # while we're calling abort. Better to get slightly fewer than overshoot.
+    abort_threshold = int(target_items * 0.9) if target_items else None
+    
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout:
+            print(f"    Apify {actor_id}: timeout {timeout}s reached, aborting and fetching results...")
+            break
+        
+        time.sleep(poll_interval)
+        
+        # Check run status
+        try:
+            status_r = requests.get(
+                f"https://api.apify.com/v2/actor-runs/{run_id}",
+                params={"token": APIFY_TOKEN},
+                timeout=15,
+            )
+            if status_r.status_code == 200:
+                status_data = status_r.json().get("data", {})
+                status = status_data.get("status", "")
+                item_count = status_data.get("stats", {}).get("inputBodyLen", 0)  # rough indicator
+                
+                # Get actual dataset count
+                count_r = requests.get(
+                    f"https://api.apify.com/v2/datasets/{dataset_id}",
+                    params={"token": APIFY_TOKEN},
+                    timeout=15,
+                )
+                if count_r.status_code == 200:
+                    item_count = count_r.json().get("data", {}).get("itemCount", 0)
+                
+                if item_count != last_count:
+                    print(f"    Apify {actor_id}: {item_count} items collected ({status}, {int(elapsed)}s elapsed)")
+                    last_count = item_count
+                
+                # Done?
+                if status in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
+                    print(f"    Apify {actor_id}: finished with status {status}")
+                    break
+                
+                # Have enough? Abort to save money!
+                # Use 90% threshold so the actor doesn't overshoot while we're aborting
+                if abort_threshold and item_count >= abort_threshold:
+                    print(f"    Apify {actor_id}: reached {item_count} items (threshold {abort_threshold}, target {target_items}) - ABORTING NOW to save cost")
+                    try:
+                        abort_r = requests.post(
+                            f"https://api.apify.com/v2/actor-runs/{run_id}/abort",
+                            params={"token": APIFY_TOKEN},
+                            timeout=15,
+                        )
+                        if abort_r.status_code in (200, 201):
+                            print(f"    ✅ Abort successful")
+                        else:
+                            print(f"    ⚠️ Abort returned HTTP {abort_r.status_code}")
+                    except Exception as e:
+                        print(f"    ⚠️ Apify abort failed (continuing anyway): {e}")
+                    # Don't wait - move on to fetching results immediately
+                    break
+        except Exception as e:
+            print(f"    Apify {actor_id} poll error: {type(e).__name__}")
+            continue
+    
+    # === STEP 3: Fetch whatever was collected (even if aborted/failed) ===
+    try:
+        items_r = requests.get(
+            f"https://api.apify.com/v2/datasets/{dataset_id}/items",
+            params={"token": APIFY_TOKEN, "format": "json", "clean": "true"},
+            timeout=60,
+        )
+        if items_r.status_code == 200:
+            items = items_r.json()
+            if isinstance(items, list):
+                # Hard cap at target_items if specified (extra safety)
+                if target_items and len(items) > target_items:
+                    items = items[:target_items]
+                return items
+        print(f"    Apify {actor_id}: items fetch failed HTTP {items_r.status_code}")
         return []
     except Exception as e:
-        print(f"    Apify {actor_id} error: {type(e).__name__}: {e}")
+        print(f"    Apify {actor_id} items fetch error: {type(e).__name__}: {e}")
         return []
 
 
@@ -371,16 +475,16 @@ def fetch_reddit_buzz_apify_batch(tickers):
     actor_id = "trudax/reddit-scraper-lite"
     run_input = {
         "startUrls": start_urls,
-        "maxItems": len(tickers) * 30,  # ~30 posts per ticker average
-        "maxPostCount": 30,  # max 30 posts per subreddit search (was 50)
+        "maxItems": len(tickers) * 40,  # ~40 posts per ticker average - good resolution for buzz signal
+        "maxPostCount": 40,  # max 40 posts per subreddit search
         "skipComments": True,
         "skipUserPosts": True,
         "skipCommunity": True,
         "proxy": {"useApifyProxy": True},
     }
 
-    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs (timeout 9 min)...")
-    posts = apify_run_actor(actor_id, run_input, timeout=540)  # 9 minutes
+    print(f"  Calling Apify actor {actor_id} with {len(start_urls)} URLs (timeout 9 min, target {len(tickers)*40} posts)...")
+    posts = apify_run_actor(actor_id, run_input, timeout=540, target_items=len(tickers)*40)  # 9 minutes, hard cap 800 posts
     print(f"  Got {len(posts)} total posts from Apify")
 
     # Group posts by ticker
@@ -436,8 +540,8 @@ def fetch_stocktwits_apify_batch(tickers):
 
     actor_id = "automation-lab/stocktwits-scraper"
     # We compute Reddit-style sentiment + StockTwits user-marked sentiment
-    # 30 messages per ticker max - enough for sentiment + 3 best quotes
-    PER_TICKER_LIMIT = 30
+    # 40 messages per ticker = good resolution for differentiating buzz levels
+    PER_TICKER_LIMIT = 40
     HARD_TOTAL_LIMIT = len(tickers) * PER_TICKER_LIMIT  # absolute ceiling, controls cost
     
     run_input = {
@@ -448,7 +552,7 @@ def fetch_stocktwits_apify_batch(tickers):
     }
 
     print(f"  Calling Apify actor {actor_id} for {len(tickers)} symbols (max {PER_TICKER_LIMIT} msgs/ticker, hard cap {HARD_TOTAL_LIMIT})...")
-    items = apify_run_actor(actor_id, run_input, timeout=180)
+    items = apify_run_actor(actor_id, run_input, timeout=180, target_items=HARD_TOTAL_LIMIT)
     print(f"  Got {len(items)} messages from StockTwits")
     
     # Defensive: if actor ignored our limits, trim ourselves
@@ -500,7 +604,8 @@ def fetch_stocktwits_apify_batch(tickers):
             result[symbol]["bearish"] += 1
 
         # Keep best 5 messages (sorted later by score for top 3 quotes)
-        if len(result[symbol]["messages"]) < 5:
+        # Keep top 10 messages (we'll pick 3 best by quality later)
+        if len(result[symbol]["messages"]) < 10:
             result[symbol]["messages"].append({
                 "body": clean_text(body, max_len=140),
                 "sentiment": sentiment,
@@ -536,47 +641,64 @@ def score_post(text, ticker):
 
 
 def calculate_buzz_score_v2(reddit_count, stocktwits_count, market_cap, top_posts):
-    """Smart buzz scoring RELATIVE to market cap.
+    """Smart buzz scoring with WEIGHTED sources.
     
-    The idea: a small-cap stock ($500M) with 50 posts = MUCH bigger signal than
-    AAPL with 50 posts (because AAPL ALWAYS has chatter, small caps usually don't).
+    Key insight: not all buzz is equal!
+    - Reddit posts = HIGH SIGNAL (people write thoughtful posts, real discussion)
+    - StockTwits messages = LOW SIGNAL (lots of noise, bots, repetitive cashtags)
+    
+    Weights: Reddit × 3, StockTwits × 1
+    
+    Then we calculate posts-per-billion of market cap:
+    - Small-cap with high weighted buzz = 10/10 (real signal)
+    - Big-cap with same buzz = lower (it's normal for them)
     
     Returns score 1-10 where:
-    - 1-3: nothing happening, normal/no buzz
+    - 1-3: nothing happening
     - 4-6: some discussion, worth noting
-    - 7-8: significant buzz, definitely something brewing
-    - 9-10: extreme buzz, this stock is on fire on social media
+    - 7-8: significant buzz, something brewing
+    - 9-10: extreme buzz, this stock is on fire
     """
-    total = reddit_count + stocktwits_count
+    # Weighted total - Reddit posts count 3x more than StockTwits messages
+    weighted_total = (reddit_count * 3) + stocktwits_count
+    raw_total = reddit_count + stocktwits_count
 
-    if total == 0:
+    if raw_total == 0:
         return 1  # no buzz at all
 
-    # Calculate "buzz per billion of market cap" - this is the relative metric
-    # Example: 100 posts on $5B stock = 20 posts/$B (medium)
-    #          100 posts on $500M stock = 200 posts/$B (huge!)
+    # Calculate "weighted buzz per billion of market cap"
     mcap_b = max(market_cap / 1e9, 0.1) if market_cap else 1.0
-    posts_per_billion = total / mcap_b
+    weighted_per_billion = weighted_total / mcap_b
 
-    # Score based on RELATIVE buzz density
-    if posts_per_billion > 100:    base = 10  # extreme
-    elif posts_per_billion > 50:   base = 9
-    elif posts_per_billion > 25:   base = 8
-    elif posts_per_billion > 12:   base = 7
-    elif posts_per_billion > 6:    base = 6
-    elif posts_per_billion > 3:    base = 5
-    elif posts_per_billion > 1:    base = 4
-    elif posts_per_billion > 0.3:  base = 3
-    else:                          base = 2
+    # Score based on weighted buzz density
+    # Note: With 40 messages cap per ticker, max possible weighted = 40*3 + 40 = 160
+    # Thresholds are calibrated so that hitting cap on small-cap stock = high score
+    if weighted_per_billion > 200:   base = 10  # extreme - small cap with massive Reddit buzz
+    elif weighted_per_billion > 130: base = 9
+    elif weighted_per_billion > 90:  base = 8
+    elif weighted_per_billion > 60:  base = 7
+    elif weighted_per_billion > 35:  base = 6
+    elif weighted_per_billion > 18:  base = 5
+    elif weighted_per_billion > 8:   base = 4
+    elif weighted_per_billion > 3:   base = 3
+    else:                            base = 2
 
-    # Cap based on absolute volume - need at least some real activity
-    # Otherwise a $100M stock with 5 posts gets score 10 which is silly
-    if total < 5:
-        base = min(base, 4)
-    elif total < 15:
+    # Cap based on absolute REDDIT volume (Reddit is the gold signal)
+    # If there's barely any Reddit activity, even huge StockTwits noise can't get you above 7
+    if reddit_count == 0:
+        base = min(base, 6)  # No Reddit = capped at 6 - StockTwits alone isn't enough
+    elif reddit_count < 5:
         base = min(base, 7)
+    elif reddit_count < 15:
+        base = min(base, 8)
 
-    # Boost for early-signal keywords (insider words like "takeover", "FDA", "unusual volume")
+    # Cap based on absolute total (sanity check for tiny activity)
+    if raw_total < 5:
+        base = min(base, 4)
+    elif raw_total < 15:
+        base = min(base, 6)
+
+    # BOOST for early-signal keywords (insider words like "takeover", "FDA", "unusual volume")
     early_signals = sum(1 for p in top_posts if p.get("interest_score", 0) >= 5)
     if early_signals >= 3:
         base = min(10, base + 2)
@@ -643,25 +765,43 @@ def build_buzz_from_data(ticker, market_cap, reddit_posts, stocktwits_data):
     # Sort Reddit posts by relevance + upvotes
     reddit_posts.sort(key=lambda x: (x["interest_score"], x["upvotes"]), reverse=True)
     
-    # === TOP 3 QUOTES (mix of best Reddit + best StockTwits) ===
+    # === TOP 3 QUOTES (smart selection - always try for 3) ===
     quotes = []
-    
-    # Best 2 from Reddit
-    for p in reddit_posts[:2]:
-        quotes.append({
-            "text": p["title"],
-            "source": "reddit",
-            "subreddit": p["subreddit"],
-            "upvotes": p["upvotes"],
-            "url": p["url"],
-            "sentiment": p.get("sentiment", "neutral"),
-        })
-    
-    # Best 1 from StockTwits (prefer bullish if mostly bullish, else just first)
     st_messages = stocktwits_data.get("messages", [])
-    if st_messages:
-        # Take first message as best
-        best_st = st_messages[0]
+    
+    # Score StockTwits messages by quality (length + has bullish/bearish sentiment marked)
+    # Avoids "lol", "to the moon 🚀", short noise
+    def st_quality_score(msg):
+        body = msg.get("body", "") or ""
+        score = 0
+        # Length signal: longer messages tend to be more substantive
+        if len(body) > 80: score += 3
+        elif len(body) > 40: score += 2
+        elif len(body) > 20: score += 1
+        # Has explicit sentiment marked
+        if msg.get("sentiment"):
+            score += 2
+        # Penalize obvious noise patterns
+        body_lower = body.lower()
+        if any(noise in body_lower for noise in ["lol", "🚀🚀", "to the moon", "buy buy buy", "lfg"]):
+            score -= 2
+        return score
+    
+    # Sort StockTwits messages by quality
+    st_sorted = sorted(st_messages, key=st_quality_score, reverse=True)
+    
+    # Strategy A: Both sources have content → 2 Reddit + 1 StockTwits
+    if len(reddit_posts) >= 2 and len(st_sorted) >= 1:
+        for p in reddit_posts[:2]:
+            quotes.append({
+                "text": p["title"],
+                "source": "reddit",
+                "subreddit": p["subreddit"],
+                "upvotes": p["upvotes"],
+                "url": p["url"],
+                "sentiment": p.get("sentiment", "neutral"),
+            })
+        best_st = st_sorted[0]
         quotes.append({
             "text": best_st["body"],
             "source": "stocktwits",
@@ -671,11 +811,9 @@ def build_buzz_from_data(ticker, market_cap, reddit_posts, stocktwits_data):
             "sentiment": (best_st.get("sentiment", "") or "neutral").lower(),
         })
     
-    # If we don't have 3 quotes yet, fill from Reddit
-    if len(quotes) < 3 and len(reddit_posts) > 2:
-        for p in reddit_posts[2:5]:
-            if len(quotes) >= 3:
-                break
+    # Strategy B: Only Reddit has content → 3 from Reddit
+    elif len(reddit_posts) >= 1 and len(st_sorted) == 0:
+        for p in reddit_posts[:3]:
             quotes.append({
                 "text": p["title"],
                 "source": "reddit",
@@ -683,6 +821,34 @@ def build_buzz_from_data(ticker, market_cap, reddit_posts, stocktwits_data):
                 "upvotes": p["upvotes"],
                 "url": p["url"],
                 "sentiment": p.get("sentiment", "neutral"),
+            })
+    
+    # Strategy C: Only StockTwits has content → 3 from StockTwits
+    elif len(reddit_posts) == 0 and len(st_sorted) >= 1:
+        for msg in st_sorted[:3]:
+            quotes.append({
+                "text": msg["body"],
+                "source": "stocktwits",
+                "subreddit": "StockTwits",
+                "upvotes": 0,
+                "url": "",
+                "sentiment": (msg.get("sentiment", "") or "neutral").lower(),
+            })
+    
+    # Strategy D: Mixed but one is short → fill from the other
+    elif len(reddit_posts) == 1 and len(st_sorted) >= 2:
+        # 1 Reddit + 2 StockTwits
+        p = reddit_posts[0]
+        quotes.append({
+            "text": p["title"], "source": "reddit", "subreddit": p["subreddit"],
+            "upvotes": p["upvotes"], "url": p["url"],
+            "sentiment": p.get("sentiment", "neutral"),
+        })
+        for msg in st_sorted[:2]:
+            quotes.append({
+                "text": msg["body"], "source": "stocktwits", "subreddit": "StockTwits",
+                "upvotes": 0, "url": "",
+                "sentiment": (msg.get("sentiment", "") or "neutral").lower(),
             })
     
     # === TOPICS (early signal keywords found) ===
