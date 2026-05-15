@@ -1131,76 +1131,35 @@ def main():
         return
     print(f"  [+{int(time.time()-t_start)}s]\n")
 
-    if historical_mode:
-        # Historical mode — no Apify, no email, just price data
-        print("--- Historical mode: skipping buzz (no Apify calls) ---")
-        empty_buzz = {
-            "reddit_count": 0, "stocktwits_count": 0, "total_count": 0,
-            "score": 0, "sentiment_pct": 50, "bullish": 0, "bearish": 0,
-            "reddit_bullish_pct": 50, "stocktwits_bullish_pct": 50,
-            "quotes": [], "topics": [],
-        }
-        for s in top20:
-            s["buzz"] = empty_buzz
-            s["streak"] = 1
-            s["buzz_alert"] = False
+    # Buzz is fetched on-demand from Hall of Fame, not during weekly scans
+    # This saves Apify costs — boss uses the "Get Buzz" button for stocks he cares about
+    empty_buzz = {
+        "reddit_count": 0, "stocktwits_count": 0, "total_count": 0,
+        "score": 0, "sentiment_pct": 50, "bullish": 0, "bearish": 0,
+        "reddit_bullish_pct": 50, "stocktwits_bullish_pct": 50,
+        "quotes": [], "topics": [],
+    }
+    for s in top20:
+        s["buzz"] = empty_buzz
+        s["buzz_alert"] = False
 
+    if historical_mode:
+        for s in top20:
+            s["streak"] = 1
         save_to_supabase(top20, [], week_label)
         print(f"\n=== DONE (historical) in {int(time.time()-t_start)}s ===")
         return
 
-    # 4. ONE Apify batch call for the TOP 20 only (cheap and focused)
-    print("--- Fetching buzz for TOP 20 via Apify ---")
-    top20_tickers = [s["ticker"] for s in top20]
-    top20_names = {s["ticker"]: s["name"] for s in top20}
-
-    # Reddit - one big batch call (search by ticker AND company name)
-    reddit_data = fetch_reddit_buzz_apify_batch(top20_tickers, top20_names)
-    print(f"  [+{int(time.time()-t_start)}s]\n")
-
-    # StockTwits - per ticker (smaller calls but still batched)
-    stocktwits_data = fetch_stocktwits_apify_batch(top20_tickers)
-    print(f"  [+{int(time.time()-t_start)}s]\n")
-
-    # Build buzz objects from the fetched data
-    print("--- Building buzz for TOP 20 ---")
-    for i, s in enumerate(top20, 1):
-        ticker = s["ticker"]
-        s["buzz"] = build_buzz_from_data(
-            ticker, s["market_cap"], reddit_data.get(ticker, []),
-            stocktwits_data.get(ticker, {"count": 0, "bullish": 0, "bearish": 0, "sentiment_pct": 50, "messages": []}),
-        )
-        print(
-            f"  [{i}/20] {ticker}: R={s['buzz']['reddit_count']} ST={s['buzz']['stocktwits_count']} total={s['buzz']['total_count']} score={s['buzz']['score']}/10"
-        )
-
-    # 5. Streak from previous week
+    # 4. Streak from previous week
     prev = get_previous_week_data()
     for s in top20:
         s["streak"] = prev.get(s["ticker"], {}).get("streak", 0) + 1 if s["ticker"] in prev else 1
     returning_count = sum(1 for s in top20 if s["streak"] >= 2)
-    print(f"\nStreak: {returning_count} stocks returning from last week")
+    print(f"Streak: {returning_count} stocks returning from last week")
 
-    # 6. Bonus = top 2-3 stocks from TOP 20 with highest buzz score (>= 7)
-    buzz_alerts = sorted(
-        [s for s in top20 if s["buzz"]["score"] >= 7],
-        key=lambda x: (x["buzz"]["score"], x["buzz"]["total_count"]),
-        reverse=True,
-    )[:3]
-
-    alert_tickers = {b["ticker"] for b in buzz_alerts}
-    for s in top20:
-        s["buzz_alert"] = s["ticker"] in alert_tickers
-
-    bonus = buzz_alerts
-    print(f"\n🔥 Buzz alerts: {len(bonus)} stocks with buzz score >= 7")
-    for b in bonus:
-        print(f"  {b['ticker']}: score {b['buzz']['score']}/10, {b['buzz']['total_count']} posts")
-    print(f"  [+{int(time.time()-t_start)}s]\n")
-
-    # 7. Save and send
-    save_to_supabase(top20, bonus, week_label)
-    send_email(top20, bonus, week_label)
+    # 5. Save and send (no buzz section in email — boss fetches on demand from Hall of Fame)
+    save_to_supabase(top20, [], week_label)
+    send_email(top20, [], week_label)
     print(f"\n=== DONE in {int(time.time()-t_start)}s ===")
 
 

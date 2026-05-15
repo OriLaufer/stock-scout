@@ -569,7 +569,7 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                   {buzz
                     ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, background: isOpen ? '#097c3e' : (dark ? '#1a2a1a' : '#eaf3de'), border: `1px solid ${isOpen ? '#097c3e' : (dark ? '#2a4a2a' : '#c3e6cb')}` }}>
                         <span style={{ fontSize: 13 }}>🔥</span>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: isOpen ? 'white' : '#097c3e' }}>{buzz.score}/10</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: isOpen ? 'white' : '#097c3e' }}>{buzz.enhanced_score || buzz.score}/10</span>
                         <span style={{ fontSize: 10, color: isOpen ? 'rgba(255,255,255,0.8)' : c.muted }}>{isOpen ? '▲' : '▼'}</span>
                       </div>
                     : (() => {
@@ -593,16 +593,50 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                 </div>
               </div>
 
-              {/* Buzz expansion panel */}
+              {/* Buzz expansion panel — enhanced with price signals */}
               {isOpen && buzz && (
-                <div style={{ background: dark ? '#0e1a0e' : '#f0f8f0', borderBottom: `1px solid ${c.border}`, borderLeft: `3px solid #097c3e`, padding: '16px 24px' }}>
-                  <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <div style={{ background: dark ? '#0e1a0e' : '#f0f8f0', borderBottom: `1px solid ${c.border}`, borderLeft: `3px solid #097c3e`, padding: '18px 24px' }}>
+
+                  {/* Score header */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 18, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <span style={{ fontSize: 32, fontWeight: 800, color: (buzz.enhanced_score || buzz.score) >= 7 ? '#097c3e' : (buzz.enhanced_score || buzz.score) >= 4 ? '#cc8800' : c.muted }}>
+                        {buzz.enhanced_score || buzz.score}
+                      </span>
+                      <span style={{ fontSize: 14, color: c.muted }}>/10</span>
+                      <span style={{ fontSize: 11, color: c.muted, marginLeft: 4 }}>{lang === 'he' ? 'ציון כולל' : 'total score'}</span>
+                    </div>
+                    {/* Price signal chips */}
+                    {buzz.volume_spike_pct != null && (
+                      <span title={lang === 'he' ? 'נפח מסחר השבוע vs ממוצע 4 שבועות' : 'This week volume vs 4-week avg'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: buzz.volume_spike_pct >= 150 ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: buzz.volume_spike_pct >= 150 ? '#097c3e' : c.muted }}>
+                        📊 Vol {buzz.volume_spike_pct >= 0 ? '+' : ''}{buzz.volume_spike_pct}%
+                      </span>
+                    )}
+                    {buzz.week_high_pct != null && (
+                      <span title={lang === 'he' ? 'מחיר נוכחי כ% מהשיא השנתי' : 'Current price as % of 52-week high'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: buzz.week_high_pct >= 90 ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: buzz.week_high_pct >= 90 ? '#097c3e' : c.muted }}>
+                        📍 {buzz.week_high_pct}% of 52w high
+                      </span>
+                    )}
+                    {buzz.short_interest_pct != null && (
+                      <span title={lang === 'he' ? 'אחוז הפלואט ששורט — גבוה = פוטנציאל סקוויז' : 'Float short % — high = potential squeeze'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: buzz.short_interest_pct >= 15 ? (dark ? '#3a1a1a' : '#fff0f0') : (dark ? '#2a2a3e' : '#f0f0f0'), color: buzz.short_interest_pct >= 15 ? '#c0392b' : c.muted }}>
+                        🩳 Short {buzz.short_interest_pct}%{buzz.short_ratio ? ` · ${buzz.short_ratio}d` : ''}
+                      </span>
+                    )}
+                    {buzz.news_count > 0 && (
+                      <span title={lang === 'he' ? 'כתבות חדשותיות אחרונות' : 'Recent news articles'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: buzz.news_bullish_pct >= 65 ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: buzz.news_bullish_pct >= 65 ? '#097c3e' : c.muted }}>
+                        🗞️ {buzz.news_count} {lang === 'he' ? 'כתבות' : 'articles'} · {buzz.news_bullish_pct}% bull
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-start' }}>
                     {/* Sentiment bars */}
                     <div style={{ minWidth: 200 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10 }}>{lang === 'he' ? 'סנטימנט' : 'Sentiment'}</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>{lang === 'he' ? 'סנטימנט סושיאל' : 'Social sentiment'}</div>
                       {[
                         { label: lang === 'he' ? 'רדיט' : 'Reddit', pct: buzz.reddit_bullish_pct, count: buzz.reddit_count },
                         { label: 'StockTwits', pct: buzz.stocktwits_bullish_pct, count: buzz.stocktwits_count },
+                        ...(buzz.news_count > 0 ? [{ label: lang === 'he' ? 'חדשות' : 'News', pct: buzz.news_bullish_pct, count: buzz.news_count }] : []),
                       ].map(row => (
                         <div key={row.label} style={{ marginBottom: 10 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: c.muted, marginBottom: 4 }}>
@@ -614,21 +648,33 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                           </div>
                         </div>
                       ))}
-                      <div style={{ fontSize: 11, color: c.muted, marginTop: 8 }}>
-                        {lang === 'he' ? 'סה"כ אזכורים:' : 'Total mentions:'} <strong style={{ color: c.text }}>{buzz.total_count}</strong>
-                      </div>
                     </div>
 
                     {/* Quotes */}
                     {buzz.quotes && buzz.quotes.length > 0 && (
-                      <div style={{ flex: 1, minWidth: 280 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10 }}>{lang === 'he' ? 'ציטוטים' : 'Top mentions'}</div>
+                      <div style={{ flex: 1, minWidth: 260 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>{lang === 'he' ? 'ציטוטים' : 'Top mentions'}</div>
                         {buzz.quotes.slice(0, 3).map((q, qi) => (
-                          <div key={qi} style={{ background: dark ? '#1a2a1a' : 'white', border: `1px solid ${dark ? '#2a3a2a' : '#d4edda'}`, borderRadius: 8, padding: '10px 14px', marginBottom: 8 }}>
+                          <div key={qi} style={{ background: dark ? '#1a2a1a' : 'white', border: `1px solid ${dark ? '#2a3a2a' : '#d4edda'}`, borderRadius: 8, padding: '9px 13px', marginBottom: 7 }}>
                             <div style={{ fontSize: 12, color: c.text, lineHeight: 1.5 }}>"{q.text}"</div>
-                            <div style={{ fontSize: 10, color: c.muted, marginTop: 6 }}>
+                            <div style={{ fontSize: 10, color: c.muted, marginTop: 5 }}>
                               <span style={{ background: q.source === 'reddit' ? '#ff4500' : '#1da1f2', color: 'white', padding: '1px 6px', borderRadius: 4, marginRight: 6, fontSize: 9 }}>{q.source}</span>
                               {q.sentiment === 'bullish' ? '🟢' : q.sentiment === 'bearish' ? '🔴' : '⚪'} {q.sentiment}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* News headlines */}
+                    {buzz.news_headlines && buzz.news_headlines.length > 0 && (
+                      <div style={{ flex: 1, minWidth: 240 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>{lang === 'he' ? 'כותרות אחרונות' : 'Latest headlines'}</div>
+                        {buzz.news_headlines.map((h, hi) => (
+                          <div key={hi} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: hi < buzz.news_headlines.length - 1 ? `1px solid ${dark ? '#2a3a2a' : '#d4edda'}` : 'none' }}>
+                            <div style={{ fontSize: 12, color: c.text, lineHeight: 1.4 }}>{h.text}</div>
+                            <div style={{ fontSize: 10, color: c.muted, marginTop: 4 }}>
+                              {h.sentiment === 'bullish' ? '🟢' : h.sentiment === 'bearish' ? '🔴' : '⚪'} {h.publisher}
                             </div>
                           </div>
                         ))}
