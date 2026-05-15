@@ -11,6 +11,7 @@ import json
 import time
 import random
 import re
+import argparse
 import requests
 import yfinance as yf
 import pandas as pd
@@ -22,7 +23,7 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SECRET_KEY"]
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 BOSS_EMAIL = os.environ["BOSS_EMAIL"]
-MIN_MARKET_CAP = int(os.environ.get("MIN_MARKET_CAP", "500000000"))  # 500M default
+MIN_MARKET_CAP = int(os.environ.get("MIN_MARKET_CAP", "250000000"))  # 250M default
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "https://stock-scout-phi.vercel.app")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -62,21 +63,18 @@ def clean_text(text, max_len=140):
     return text
 
 
-def get_two_fridays():
-    """Return the two most recent Fridays as datetime objects.
-    - this_friday  = most recent Friday (could be today if today is Friday)
-    - prev_friday  = the Friday before that (7 days earlier)
-    
-    Example: run on Sunday 11.05 → this_friday=09.05, prev_friday=02.05
-    Example: run on Friday 09.05 → this_friday=09.05, prev_friday=02.05
-    Example: run on Friday 08.05 (today) → this_friday=08.05, prev_friday=01.05
+def get_two_fridays(reference_date=None):
+    """Return the two most recent Fridays relative to reference_date.
+    If reference_date is None, uses today.
+    - this_friday  = most recent Friday on or before reference_date
+    - prev_friday  = the Friday 7 days before that
     """
-    today = datetime.now()
+    today = reference_date or datetime.now()
     # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
     if today.weekday() == 4:  # Friday itself
         this_friday = today
-    elif today.weekday() < 4:  # Mon-Thu → previous Friday is last week's
-        days_back = today.weekday() + 3  # to last week's Friday
+    elif today.weekday() < 4:  # Mon-Thu → go back to last week's Friday
+        days_back = today.weekday() + 3
         this_friday = today - timedelta(days=days_back)
     else:  # Sat=5, Sun=6 → most recent Friday is this week's
         days_back = today.weekday() - 4
@@ -88,9 +86,9 @@ def get_two_fridays():
     return prev_friday, this_friday
 
 
-def get_week_label():
+def get_week_label(reference_date=None):
     """Week label = prev_friday to this_friday. e.g. '01.05-08.05.2025'"""
-    prev_friday, this_friday = get_two_fridays()
+    prev_friday, this_friday = get_two_fridays(reference_date)
     return f"{prev_friday.strftime('%d.%m')}-{this_friday.strftime('%d.%m.%Y')}"
 
 
@@ -172,11 +170,11 @@ def get_ticker_universe():
 
 
 # ============== PRICE DATA (BATCH) ==============
-def fetch_weekly_changes(tickers):
+def fetch_weekly_changes(tickers, reference_date=None):
     """For each ticker: get last 2 weeks of daily closes, compute % change
     from PREVIOUS Friday close to THIS Friday close.
     Uses exact Friday dates (not '5 days back')."""
-    prev_friday, this_friday = get_two_fridays()
+    prev_friday, this_friday = get_two_fridays(reference_date)
     print(f"Weekly window: {prev_friday.strftime('%d.%m.%Y')} (Fri close) → {this_friday.strftime('%d.%m.%Y')} (Fri close)")
     print(f"Fetching prices for {len(tickers)} tickers (batched)...")
 
@@ -956,6 +954,16 @@ def get_previous_week_data():
     return {}
 
 
+def week_exists_in_supabase(week_label):
+    """Returns True if a scan for this week_label already exists in Supabase."""
+    try:
+        r = supabase.table("weekly_scans").select("week_label").eq("week_label", week_label).execute()
+        return len(r.data) > 0
+    except Exception as e:
+        print(f"Duplicate check error: {e}")
+        return False
+
+
 def save_to_supabase(stocks, bonus, week_label):
     try:
         supabase.table("weekly_scans").insert(
@@ -1070,12 +1078,32 @@ def send_email(stocks, bonus, week_label):
 
 # ============== MAIN ==============
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--date", type=str, default=None,
+                        help="Reference date YYYY-MM-DD for historical mode (no buzz, no email)")
+    args = parser.parse_args()
+
+    reference_date = None
+    historical_mode = False
+    if args.date:
+        reference_date = datetime.strptime(args.date, "%Y-%m-%d")
+        historical_mode = True
+
     t_start = time.time()
     print("=" * 50)
-    print("STOCK SCOUT - Weekly Scan")
+    if historical_mode:
+        print(f"STOCK SCOUT - Historical Scan ({args.date})")
+    else:
+        print("STOCK SCOUT - Weekly Scan")
     print("=" * 50)
-    week_label = get_week_label()
+
+    week_label = get_week_label(reference_date)
     print(f"Week: {week_label}\n")
+
+    # Check for duplicates — don't overwrite existing scans
+    if week_exists_in_supabase(week_label):
+        print(f"SKIP: {week_label} already exists in Supabase. Exiting.")
+        return
 
     # 1. Universe (returns list + names dict)
     universe, names = get_ticker_universe()
@@ -1085,7 +1113,7 @@ def main():
     print(f"  [+{int(time.time()-t_start)}s]\n")
 
     # 2. Weekly price changes
-    price_data = fetch_weekly_changes(universe)
+    price_data = fetch_weekly_changes(universe, reference_date)
     if not price_data:
         print("FATAL: no price data")
         return
@@ -1103,15 +1131,33 @@ def main():
         return
     print(f"  [+{int(time.time()-t_start)}s]\n")
 
+    if historical_mode:
+        # Historical mode — no Apify, no email, just price data
+        print("--- Historical mode: skipping buzz (no Apify calls) ---")
+        empty_buzz = {
+            "reddit_count": 0, "stocktwits_count": 0, "total_count": 0,
+            "score": 0, "sentiment_pct": 50, "bullish": 0, "bearish": 0,
+            "reddit_bullish_pct": 50, "stocktwits_bullish_pct": 50,
+            "quotes": [], "topics": [],
+        }
+        for s in top20:
+            s["buzz"] = empty_buzz
+            s["streak"] = 1
+            s["buzz_alert"] = False
+
+        save_to_supabase(top20, [], week_label)
+        print(f"\n=== DONE (historical) in {int(time.time()-t_start)}s ===")
+        return
+
     # 4. ONE Apify batch call for the TOP 20 only (cheap and focused)
     print("--- Fetching buzz for TOP 20 via Apify ---")
     top20_tickers = [s["ticker"] for s in top20]
     top20_names = {s["ticker"]: s["name"] for s in top20}
-    
+
     # Reddit - one big batch call (search by ticker AND company name)
     reddit_data = fetch_reddit_buzz_apify_batch(top20_tickers, top20_names)
     print(f"  [+{int(time.time()-t_start)}s]\n")
-    
+
     # StockTwits - per ticker (smaller calls but still batched)
     stocktwits_data = fetch_stocktwits_apify_batch(top20_tickers)
     print(f"  [+{int(time.time()-t_start)}s]\n")
@@ -1136,20 +1182,16 @@ def main():
     print(f"\nStreak: {returning_count} stocks returning from last week")
 
     # 6. Bonus = top 2-3 stocks from TOP 20 with highest buzz score (>= 7)
-    # No extra API calls - we already have the data!
-    # The boss wanted: "2-5 stocks where I see something interesting" - this is exactly that.
     buzz_alerts = sorted(
         [s for s in top20 if s["buzz"]["score"] >= 7],
         key=lambda x: (x["buzz"]["score"], x["buzz"]["total_count"]),
         reverse=True,
-    )[:3]  # top 3 maximum
+    )[:3]
 
-    # Mark them in top20 with a flag (so dashboard/email can show 🔥)
     alert_tickers = {b["ticker"] for b in buzz_alerts}
     for s in top20:
         s["buzz_alert"] = s["ticker"] in alert_tickers
 
-    # The bonus list shown separately = same stocks but with their full buzz info
     bonus = buzz_alerts
     print(f"\n🔥 Buzz alerts: {len(bonus)} stocks with buzz score >= 7")
     for b in bonus:

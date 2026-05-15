@@ -1,0 +1,59 @@
+name: Stock Scout Backfill (Historical Scans)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests supabase yfinance pandas
+
+      - name: Run historical scans (March + April 2026)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+          MIN_MARKET_CAP: ${{ secrets.MIN_MARKET_CAP }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+        run: |
+          echo "=== Week 1/8: 28.02-07.03.2026 ==="
+          python scanner.py --date 2026-03-07
+
+          echo "=== Week 2/8: 07.03-14.03.2026 ==="
+          python scanner.py --date 2026-03-14
+
+          echo "=== Week 3/8: 14.03-21.03.2026 ==="
+          python scanner.py --date 2026-03-21
+
+          echo "=== Week 4/8: 21.03-28.03.2026 ==="
+          python scanner.py --date 2026-03-28
+
+          echo "=== Week 5/8: 28.03-04.04.2026 ==="
+          python scanner.py --date 2026-04-04
+
+          echo "=== Week 6/8: 04.04-11.04.2026 ==="
+          python scanner.py --date 2026-04-11
+
+          echo "=== Week 7/8: 11.04-18.04.2026 ==="
+          python scanner.py --date 2026-04-18
+
+          echo "=== Week 8/8: 18.04-25.04.2026 ==="
+          python scanner.py --date 2026-04-25
+
+          echo "=== Backfill complete ==="

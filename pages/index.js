@@ -45,6 +45,7 @@ const T = {
     streak: 'שבועות ברצף',
     new: 'חדשה',
     weeks: 'שבועות',
+    appearances: 'הופעות',
     rank: '#',
     stock: 'מנייה',
     gain: 'עלייה',
@@ -92,6 +93,7 @@ const T = {
     streak: 'weeks streak',
     new: 'New',
     weeks: 'weeks',
+    appearances: 'appearances',
     rank: '#',
     stock: 'Stock',
     gain: 'Gain',
@@ -127,7 +129,7 @@ export async function getServerSideProps() {
     .from('weekly_scans')
     .select('*')
     .order('created_at', { ascending: false })
-    .limit(10)
+    .limit(100)
 
   const processed = (scans || []).map(scan => {
     try {
@@ -145,10 +147,19 @@ export async function getServerSideProps() {
     }
   }
 
-  return { props: { scans: unique } }
+  // Count how many scans each ticker appeared in (across ALL scans)
+  const appearanceCounts = {}
+  for (const scan of unique) {
+    for (const stock of scan.stocks || []) {
+      appearanceCounts[stock.ticker] = (appearanceCounts[stock.ticker] || 0) + 1
+    }
+  }
+  const totalScans = unique.length
+
+  return { props: { scans: unique, appearanceCounts, totalScans } }
 }
 
-export default function Dashboard({ scans }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [selectedWeek, setSelectedWeek] = useState(0)
@@ -254,7 +265,8 @@ export default function Dashboard({ scans }) {
                 {stocks.map((stock, i) => (
                   <>
                     <StockRow key={stock.ticker} stock={stock} rank={i + 1} isOpen={openStock === stock.ticker}
-                      onClick={() => setOpenStock(openStock === stock.ticker ? null : stock.ticker)} c={c} t={t} dark={dark} />
+                      onClick={() => setOpenStock(openStock === stock.ticker ? null : stock.ticker)} c={c} t={t} dark={dark}
+                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} />
                     {openStock === stock.ticker && (
                       <tr key={`${stock.ticker}-panel`}>
                         <td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${c.border}` }}>
@@ -298,16 +310,16 @@ function Chip({ label, bg, color }) {
   return <span style={{ background: bg, color, padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{label}</span>
 }
 
-function StockRow({ stock, rank, isOpen, onClick, c, t, dark }) {
-  const streak = stock.streak || 1
+function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans }) {
   const buzz = stock.buzz || {}
   const mcapB = (stock.market_cap / 1_000_000_000).toFixed(1)
 
+  const count = appearanceCount || 1
+  const pct = totalScans > 0 ? (count / totalScans) * 100 : 0
   const streakBadge =
-    streak >= 4 ? { bg: dark ? '#3a0a0a' : '#FCEBEB', color: dark ? '#ff8888' : '#791F1F', text: `🔴 4+ ${t.weeks}` } :
-    streak >= 3 ? { bg: dark ? '#3a2a0a' : '#FAEEDA', color: dark ? '#ffcc66' : '#633806', text: `🟠 ${streak} ${t.weeks}` } :
-    streak >= 2 ? { bg: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', text: `🟡 ${streak} ${t.weeks}` } :
-    { bg: c.chipBg, color: c.muted, text: t.new }
+    pct > 70 ? { bg: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', text: `🟢 ${count}/${totalScans} ${t.appearances}` } :
+    pct > 30 ? { bg: dark ? '#3a2a0a' : '#FAEEDA', color: dark ? '#ffcc66' : '#633806', text: `🟡 ${count}/${totalScans} ${t.appearances}` } :
+    { bg: dark ? '#3a0a0a' : '#FCEBEB', color: dark ? '#ff8888' : '#791F1F', text: `🔴 ${count}/${totalScans} ${t.appearances}` }
 
   const buzzScore = buzz.score || 0
   const buzzColor = buzzScore >= 7 ? '#097c3e' : buzzScore >= 4 ? '#cc8800' : c.muted
@@ -388,10 +400,20 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
   const buzz = stock.buzz || {}
   const quotes = buzz.quotes || []
 
-  const timeline = scans.map(scan => {
-    const found = (scan.stocks || []).find(s => s.ticker === stock.ticker)
-    return { week: scan.week_label, stock: found }
-  }).slice(0, 8)
+  // Only the weeks where this stock actually appeared — sorted oldest first
+  const appearances = scans
+    .map((scan, scanIndex) => {
+      const found = (scan.stocks || []).find(s => s.ticker === stock.ticker)
+      if (!found) return null
+      const rank = (scan.stocks || []).findIndex(x => x.ticker === stock.ticker) + 1
+      const isCurrentWeek = scanIndex === 0
+      return { week: scan.week_label, stock: found, rank, isCurrentWeek }
+    })
+    .filter(Boolean)
+    .reverse() // oldest → newest
+
+  const totalScans = scans.length
+  const appearanceCount = appearances.length
 
   const buzzScore = buzz.score || 0
   const hasBuzz = (buzz.reddit_count || 0) + (buzz.stocktwits_count || 0) > 0
@@ -407,11 +429,11 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 22, fontWeight: 800, color: c.text }}>{stock.ticker}</span>
             <span style={{ background: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
-              {t.buzzTitle} {buzzScore}/10
+              {appearanceCount}/{totalScans} {t.appearances}
             </span>
-            {stock.streak >= 2 && (
+            {buzzScore > 0 && (
               <span style={{ background: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
-                {stock.streak} {t.streak}
+                {t.buzzTitle} {buzzScore}/10
               </span>
             )}
             {(stock.buzz_alert || buzzScore >= 7) && (
@@ -433,25 +455,32 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
 
-        {/* LEFT: Timeline */}
+        {/* LEFT: Appearance history — only weeks where stock appeared */}
         <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 14 }}>{t.appHistory}</div>
-          {timeline.map(({ week, stock: s }, i) => (
-            <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
-              <div style={{ width: 10, height: 10, borderRadius: '50%', background: s ? '#097c3e' : (dark ? '#333' : '#ddd'), marginTop: 4, flexShrink: 0 }} />
-              <div>
-                <div style={{ fontSize: 12, color: c.muted, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  {week}
-                  {i === 0 && s && <span style={{ background: dark ? '#3a2a0a' : '#FAEEDA', color: dark ? '#ffcc66' : '#633806', padding: '1px 7px', borderRadius: 8, fontSize: 10, fontWeight: 600 }}>{t.thisWeek}</span>}
+          <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 14 }}>
+            {t.appHistory} ({appearanceCount}/{totalScans})
+          </div>
+          {appearances.map(({ week, stock: s, rank, isCurrentWeek }, i) => (
+            <div key={i} style={{
+              display: 'flex', gap: 12, alignItems: 'center',
+              padding: '8px 12px', marginBottom: 6, borderRadius: 8,
+              background: isCurrentWeek ? (dark ? '#0d2a18' : '#e8f5ee') : c.card,
+              border: `1px solid ${isCurrentWeek ? '#097c3e' : c.border}`,
+            }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#097c3e', flexShrink: 0 }} />
+              <div style={{ flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 12, color: c.muted }}>{week}</span>
+                  {isCurrentWeek && (
+                    <span style={{ background: dark ? '#3a2a0a' : '#FAEEDA', color: dark ? '#ffcc66' : '#633806', padding: '1px 7px', borderRadius: 8, fontSize: 10, fontWeight: 600 }}>
+                      {t.thisWeek}
+                    </span>
+                  )}
                 </div>
-                {s ? (
-                  <div style={{ display: 'flex', gap: 8, marginTop: 3, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 15, fontWeight: 700, color: '#097c3e' }}>+{s.change_pct}%</span>
-                    <span style={{ fontSize: 11, color: c.muted }}>#{(scans[i]?.stocks || []).findIndex(x => x.ticker === stock.ticker) + 1}</span>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: dark ? '#444' : '#bbb', fontStyle: 'italic', marginTop: 3 }}>{t.notInList}</div>
-                )}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#097c3e' }}>+{s.change_pct}%</span>
+                  <span style={{ fontSize: 11, color: c.muted, background: c.chipBg, padding: '1px 6px', borderRadius: 6 }}>#{rank}</span>
+                </div>
               </div>
             </div>
           ))}
@@ -462,12 +491,12 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
           <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 14 }}>
             📊 {t.sentimentTitle}
           </div>
-          
+
           {hasBuzz ? (
             <>
               <SentimentBar label={t.redditSentiment} bullPct={redditBull} c={c} t={t} />
               <SentimentBar label={t.stocktwitsSentiment} bullPct={stBull} c={c} t={t} />
-              
+
               {/* Buzz Score Big */}
               <div style={{ marginTop: 16, padding: '14px 16px', background: c.card, border: `1px solid ${c.border}`, borderRadius: 10 }}>
                 <div style={{ fontSize: 11, color: c.muted, marginBottom: 4 }}>🔥 {t.buzzScore}</div>
@@ -517,7 +546,7 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
         <MetaCard label={t.mktCap} value={`$${(stock.market_cap / 1_000_000_000).toFixed(1)}B`} c={c} />
         <MetaCard label={t.price} value={`$${stock.price?.toFixed(2) || 'N/A'}`} c={c} />
         <MetaCard label={t.volume} value={stock.volume ? `${(stock.volume / 1_000_000).toFixed(0)}M` : 'N/A'} c={c} />
-        <MetaCard label={t.buzzScore} value={`${buzzScore}/10`} c={c} />
+        <MetaCard label={t.buzzScore} value={buzzScore > 0 ? `${buzzScore}/10` : '—'} c={c} />
       </div>
     </div>
   )
