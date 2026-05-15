@@ -22,7 +22,7 @@ from supabase import create_client
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SECRET_KEY"]
 RESEND_API_KEY = os.environ["RESEND_API_KEY"]
-BOSS_EMAIL = os.environ["BOSS_EMAIL"]
+BOSS_EMAIL = os.environ["BOSS_EMAIL"].split(",")[0].strip()  # first email only
 MIN_MARKET_CAP = int(os.environ.get("MIN_MARKET_CAP", "250000000"))  # 250M default
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "https://stock-scout-phi.vercel.app")
 
@@ -981,77 +981,218 @@ def save_to_supabase(stocks, bonus, week_label):
         print(f"Save error: {e}")
 
 
+# ============== BACKTEST ==============
+def compute_backtest():
+    """For each past week, simulate buying the top 5 picks and measure next-week performance.
+    Returns summary stats + week-by-week results."""
+    try:
+        r = supabase.table("weekly_scans").select("*").order("created_at", desc=True).limit(100).execute()
+        scans = r.data or []
+    except Exception as e:
+        print(f"Backtest: fetch error: {e}")
+        return None
+
+    processed = []
+    seen = set()
+    for scan in scans:
+        try:
+            label = scan["week_label"]
+            if label in seen:
+                continue
+            seen.add(label)
+            parsed = json.loads(scan["stocks_json"])
+            stocks = parsed.get("stocks", parsed) if isinstance(parsed, dict) else parsed
+            processed.append({"week_label": label, "stocks": stocks})
+        except Exception:
+            continue
+
+    def parse_week_end(label):
+        m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", label)
+        if not m:
+            return datetime(2000, 1, 1)
+        return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+
+    processed.sort(key=lambda s: parse_week_end(s["week_label"]), reverse=True)
+
+    if len(processed) < 2:
+        return None
+
+    weeks = []
+    total_wins = 0
+    total_picks = 0
+    compound = 1.0
+
+    # processed[0] = newest. For week i (i>=1), next week in time = processed[i-1]
+    for i in range(1, len(processed)):
+        this_week = processed[i]
+        next_week  = processed[i - 1]
+
+        top5 = sorted(this_week["stocks"], key=lambda s: s.get("change_pct", 0), reverse=True)[:5]
+        if not top5:
+            continue
+
+        next_lookup = {s["ticker"]: s.get("change_pct", 0) for s in next_week["stocks"]}
+
+        picks = []
+        for s in top5:
+            nxt = next_lookup.get(s["ticker"], 0)
+            picks.append({
+                "ticker": s["ticker"],
+                "this_week": s.get("change_pct", 0),
+                "next_week": nxt,
+            })
+            if nxt > 0:
+                total_wins += 1
+            total_picks += 1
+
+        gains = [p["next_week"] for p in picks]
+        avg = sum(gains) / len(gains)
+        compound *= (1 + avg / 100)
+        wins = sum(1 for g in gains if g > 0)
+
+        weeks.append({
+            "week": this_week["week_label"],
+            "picks": picks,
+            "avg_next": round(avg, 1),
+            "wins": wins,
+            "total": len(picks),
+        })
+
+    if not weeks:
+        return None
+
+    overall_wr   = round(total_wins / total_picks * 100) if total_picks > 0 else 0
+    compound_ret = round((compound - 1) * 100, 1)
+    avg_weekly   = round(sum(w["avg_next"] for w in weeks) / len(weeks), 1)
+
+    return {
+        "total_weeks":   len(weeks),
+        "win_rate":      overall_wr,
+        "compound_ret":  compound_ret,
+        "avg_weekly":    avg_weekly,
+        "weeks":         weeks,
+    }
+
+
 # ============== EMAIL ==============
-def send_email(stocks, bonus, week_label):
+def send_email(stocks, bonus, week_label, backtest=None):
     returning = sum(1 for s in stocks if s.get("streak", 1) >= 2)
     rows = ""
     for i, s in enumerate(stocks, 1):
         streak = s.get("streak", 1)
         if streak >= 4:
-            badge = '<span style="background:#FCEBEB;color:#791F1F;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600">4+ weeks</span>'
+            streak_badge = '<span style="background:#FCEBEB;color:#791F1F;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">4+ wks</span>'
         elif streak >= 3:
-            badge = f'<span style="background:#FAEEDA;color:#633806;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600">{streak} weeks</span>'
+            streak_badge = f'<span style="background:#FAEEDA;color:#633806;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">{streak} wks</span>'
         elif streak >= 2:
-            badge = f'<span style="background:#EAF3DE;color:#27500A;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600">{streak} weeks</span>'
+            streak_badge = f'<span style="background:#EAF3DE;color:#27500A;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">{streak} wks</span>'
         else:
-            badge = '<span style="background:#f0f0f0;color:#888;padding:3px 10px;border-radius:12px;font-size:11px">New</span>'
+            streak_badge = '<span style="background:#f0f0f0;color:#888;padding:2px 8px;border-radius:10px;font-size:10px">New</span>'
 
-        buzz = s.get("buzz", {})
-        mcap = round(s["market_cap"] / 1_000_000_000, 2)
-        bscore = buzz.get("score", 0)
-        buzz_color = "#097c3e" if bscore >= 7 else "#cc8800" if bscore >= 4 else "#888"
+        mcap = s["market_cap"]
+        mcap_str = f"${mcap/1e9:.1f}B" if mcap >= 1e9 else f"${mcap/1e6:.0f}M"
 
-        quotes = buzz.get("quotes", [])
-        quote_html = ""
-        if quotes:
-            q = quotes[0]
-            quote_html = f'<div style="font-size:11px;color:#555;font-style:italic;margin-top:4px;padding:4px 8px;background:#f5f5f5;border-radius:4px;border-left:2px solid #FF4500">"{q["text"]}"</div>'
+        sector = s.get("sector", "") or ""
+        sector_html = (
+            f'<span style="background:#e8f4ff;color:#1a6bb5;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:600;margin-left:6px">{sector}</span>'
+            if sector else ""
+        )
 
         rows += f"""<tr style="border-bottom:1px solid #f0f0f0">
-<td style="padding:10px 14px;color:#999;font-size:13px">{i}</td>
-<td style="padding:10px 14px"><div style="font-size:15px;font-weight:700;color:#1a1a2e">{s["ticker"]}</div><div style="font-size:11px;color:#999;margin-top:2px">{s["name"]}</div>{quote_html}</td>
-<td style="padding:10px 14px"><span style="font-size:18px;font-weight:800;color:#097c3e">+{s["change_pct"]}%</span></td>
-<td style="padding:10px 14px;color:#555;font-size:13px">${mcap}B</td>
-<td style="padding:10px 14px;text-align:center">
-<span style="font-size:14px;font-weight:700;color:{buzz_color}">{bscore}/10</span>
-<div style="font-size:10px;color:#aaa;margin-top:2px">{buzz.get("reddit_bullish_pct", 50)}% bull</div>
+<td style="padding:10px 14px;color:#999;font-size:13px;font-weight:700">{i}</td>
+<td style="padding:10px 14px">
+  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+    <span style="font-size:15px;font-weight:800;color:#1a1a2e">{s["ticker"]}</span>
+    {streak_badge}{sector_html}
+  </div>
+  <div style="font-size:11px;color:#999;margin-top:3px">{s["name"]}</div>
 </td>
-<td style="padding:10px 14px">{badge}</td>
+<td style="padding:10px 14px;white-space:nowrap">
+  <span style="font-size:18px;font-weight:800;color:#097c3e">+{s["change_pct"]}%</span>
+</td>
+<td style="padding:10px 14px;color:#666;font-size:13px">{mcap_str}</td>
 </tr>"""
 
-    bonus_html = ""
-    if bonus:
-        bonus_cards = "".join(
-            [
-                f'<div style="background:white;border:1px solid #e8e8e8;border-radius:10px;padding:14px 16px;flex:1;min-width:220px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:16px;font-weight:700;color:#1a1a2e">{b["ticker"]}</span><span style="background:#FAEEDA;color:#633806;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600">🔥 Buzz Alert</span></div><div style="font-size:12px;color:#666">{b["name"]}</div><div style="font-size:12px;color:#097c3e;font-weight:600;margin-top:6px">+{b["change_pct"]}% · Buzz {b.get("buzz",{}).get("score",0)}/10 · {b.get("buzz",{}).get("reddit_bullish_pct",50)}% bullish</div></div>'
-                for b in bonus[:3]
-            ]
-        )
-        bonus_html = f'<div style="padding:20px 24px;background:#f8f9fa;border-top:1px solid #eee"><div style="font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">🔥 Buzz Alerts — Top stocks with extraordinary buzz</div><div style="display:flex;gap:12px;flex-wrap:wrap">{bonus_cards}</div></div>'
+    # Backtest track-record section
+    backtest_html = ""
+    if backtest and backtest.get("total_weeks", 0) >= 2:
+        bt = backtest
+        wr_color = "#097c3e" if bt["win_rate"] >= 55 else "#cc8800" if bt["win_rate"] >= 40 else "#c0392b"
+        avg_color = "#097c3e" if bt["avg_weekly"] > 0 else "#c0392b"
+        cmp_color = "#097c3e" if bt["compound_ret"] > 0 else "#c0392b"
+
+        week_rows = ""
+        for w in bt["weeks"][:6]:  # last 6 evaluated weeks
+            bar_pct = min(100, max(0, w["wins"] / w["total"] * 100))
+            bar_color = "#097c3e" if w["wins"] >= 3 else "#cc8800" if w["wins"] >= 2 else "#c0392b"
+            avg_sign  = "+" if w["avg_next"] >= 0 else ""
+            week_rows += f"""<tr style="border-bottom:1px solid #f0f0f0">
+<td style="padding:7px 12px;font-size:11px;color:#555">{w["week"]}</td>
+<td style="padding:7px 12px;text-align:center">
+  <span style="font-size:12px;font-weight:700;color:{bar_color}">{w["wins"]}/{w["total"]}</span>
+</td>
+<td style="padding:7px 12px;text-align:right;font-size:12px;font-weight:700;color:{"#097c3e" if w["avg_next"]>=0 else "#c0392b"}">{avg_sign}{w["avg_next"]}%</td>
+</tr>"""
+
+        backtest_html = f"""
+<div style="padding:24px;background:#f8fbff;border-top:2px solid #1a1a2e">
+  <div style="font-size:11px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:1px;margin-bottom:16px">
+    📊 System Track Record — Top 5 picks performance the following week
+  </div>
+  <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px">
+    <div style="text-align:center;flex:1;min-width:100px;background:white;border:1px solid #e0e0e0;border-radius:10px;padding:14px 10px">
+      <div style="font-size:26px;font-weight:800;color:{wr_color}">{bt["win_rate"]}%</div>
+      <div style="font-size:11px;color:#999;margin-top:4px">Win Rate</div>
+      <div style="font-size:10px;color:#bbb;margin-top:2px">picks up next wk</div>
+    </div>
+    <div style="text-align:center;flex:1;min-width:100px;background:white;border:1px solid #e0e0e0;border-radius:10px;padding:14px 10px">
+      <div style="font-size:26px;font-weight:800;color:{avg_color}">{("+" if bt["avg_weekly"]>=0 else "")}{bt["avg_weekly"]}%</div>
+      <div style="font-size:11px;color:#999;margin-top:4px">Avg Weekly Gain</div>
+      <div style="font-size:10px;color:#bbb;margin-top:2px">top 5 next week avg</div>
+    </div>
+    <div style="text-align:center;flex:1;min-width:100px;background:white;border:1px solid #e0e0e0;border-radius:10px;padding:14px 10px">
+      <div style="font-size:26px;font-weight:800;color:{cmp_color}">{("+" if bt["compound_ret"]>=0 else "")}{bt["compound_ret"]}%</div>
+      <div style="font-size:11px;color:#999;margin-top:4px">Compound Return</div>
+      <div style="font-size:10px;color:#bbb;margin-top:2px">if held each week</div>
+    </div>
+    <div style="text-align:center;flex:1;min-width:100px;background:white;border:1px solid #e0e0e0;border-radius:10px;padding:14px 10px">
+      <div style="font-size:26px;font-weight:800;color:#1a1a2e">{bt["total_weeks"]}</div>
+      <div style="font-size:11px;color:#999;margin-top:4px">Weeks Tracked</div>
+      <div style="font-size:10px;color:#bbb;margin-top:2px">historical data</div>
+    </div>
+  </div>
+  <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0">
+    <thead><tr style="background:#f8f9fa">
+      <th style="padding:7px 12px;text-align:left;font-size:10px;color:#999;font-weight:700">WEEK</th>
+      <th style="padding:7px 12px;text-align:center;font-size:10px;color:#999;font-weight:700">PICKS ↑</th>
+      <th style="padding:7px 12px;text-align:right;font-size:10px;color:#999;font-weight:700">AVG GAIN</th>
+    </tr></thead>
+    <tbody>{week_rows}</tbody>
+  </table>
+  <div style="font-size:10px;color:#bbb;margin-top:10px">* Each week: top 5 gainers selected, performance measured the following week. Past performance does not guarantee future results.</div>
+</div>"""
 
     html = f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f0f2f5;font-family:Arial,sans-serif">
-<div style="max-width:720px;margin:0 auto">
+<div style="max-width:680px;margin:0 auto">
 <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:28px;border-radius:16px 16px 0 0">
 <h1 style="color:white;margin:0;font-size:22px;font-weight:800">📈 Stock Scout</h1>
 <p style="color:#aaa;margin:6px 0 0;font-size:13px">{week_label} · Weekly Top Gainers</p>
 </div>
 <div style="background:#097c3e;padding:12px 24px">
-<span style="color:white;font-size:13px;font-weight:600">{returning} stocks returning · Min cap: ${MIN_MARKET_CAP//1_000_000}M</span>
+<span style="color:white;font-size:13px;font-weight:600">{returning} stocks returning · Min cap: ${MIN_MARKET_CAP//1_000_000}M · {len(stocks)} total picks</span>
 </div>
 <div style="background:white">
 <table style="width:100%;border-collapse:collapse">
 <thead><tr style="background:#f8f9fa;border-bottom:2px solid #eee">
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">#</th>
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">STOCK</th>
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">GAIN</th>
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">MKT CAP</th>
-<th style="padding:10px 14px;text-align:center;font-size:11px;color:#999">BUZZ</th>
-<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999">TREND</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:700">#</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:700">STOCK</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:700">GAIN</th>
+<th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:700">MKT CAP</th>
 </tr></thead>
 <tbody>{rows}</tbody>
 </table>
 </div>
-{bonus_html}
+{backtest_html}
 <div style="background:#1a1a2e;padding:24px;border-radius:0 0 16px 16px;text-align:center">
 <a href="{DASHBOARD_URL}" style="background:#097c3e;color:white;padding:14px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block">Open Full Dashboard</a>
 </div>
@@ -1160,9 +1301,17 @@ def main():
     returning_count = sum(1 for s in top20 if s["streak"] >= 2)
     print(f"Streak: {returning_count} stocks returning from last week")
 
-    # 5. Save and send (no buzz section in email — boss fetches on demand from Hall of Fame)
+    # 5. Save first so compute_backtest can include this week's data
     save_to_supabase(top20, [], week_label)
-    send_email(top20, [], week_label)
+
+    # 6. Compute backtest from all historical scans (including the one just saved)
+    print("\nComputing backtest track record...")
+    backtest = compute_backtest()
+    if backtest:
+        print(f"  Backtest: {backtest['total_weeks']} weeks | {backtest['win_rate']}% win rate | {backtest['avg_weekly']}% avg weekly | {backtest['compound_ret']}% compound")
+
+    # 7. Send email with track record
+    send_email(top20, [], week_label, backtest=backtest)
     print(f"\n=== DONE in {int(time.time()-t_start)}s ===")
 
 
