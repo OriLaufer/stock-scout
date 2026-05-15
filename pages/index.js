@@ -214,6 +214,36 @@ export async function getServerSideProps() {
     })
     .sort((a, b) => b.appearances - a.appearances || b.avgGain - a.avgGain)
 
+  // Win Rate: for each ticker, % of weeks after appearing where it ALSO appeared next week with gain > 0
+  const winRateByTicker = {}
+  for (const ticker of Object.keys(tickerStats)) {
+    let wins = 0, opps = 0
+    // unique[0] = newest. unique[i] is older, unique[i-1] is the following (newer) week
+    for (let i = 1; i < unique.length; i++) {
+      if (!(unique[i].stocks || []).find(s => s.ticker === ticker)) continue
+      opps++
+      const nextWeek = (unique[i - 1].stocks || []).find(s => s.ticker === ticker)
+      if (nextWeek && nextWeek.change_pct > 0) wins++
+    }
+    if (opps > 0) winRateByTicker[ticker] = { wins, opps, pct: Math.round(wins / opps * 100) }
+  }
+
+  // Sector data for current week's stocks (one Yahoo Finance batch call, server-side)
+  const sectorByTicker = {}
+  try {
+    const syms = (unique[0]?.stocks || []).slice(0, 20).map(s => s.ticker).join(',')
+    if (syms) {
+      const yRes = await fetch(
+        `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms}&fields=sector,industry`,
+        { headers: { 'User-Agent': 'Mozilla/5.0' } }
+      )
+      const yData = await yRes.json()
+      for (const r of yData?.quoteResponse?.result || []) {
+        if (r.symbol && r.sector) sectorByTicker[r.symbol] = { sector: r.sector, industry: r.industry || '' }
+      }
+    }
+  } catch {}
+
   // Collect best buzz data per ticker from any scan that has it
   const buzzByTicker = {}
   for (const scan of unique) {
@@ -237,10 +267,10 @@ export async function getServerSideProps() {
     }
   } catch {}
 
-  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker } }
+  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, sectorByTicker } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, sectorByTicker }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -249,6 +279,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   const [marketCapInput, setMarketCapInput] = useState('250')
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
+  const [sectorFilter, setSectorFilter] = useState(null)
+  const [watchlist, setWatchlist] = useState([])
+  const [addingToWatchlist, setAddingToWatchlist] = useState(null)
+  const [entryPriceInput, setEntryPriceInput] = useState({})
 
   const t = T[lang]
   const c = COLORS[dark ? 'dark' : 'light']
@@ -256,7 +290,31 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   useEffect(() => {
     if (localStorage.getItem('dark') === 'true') setDark(true)
     if (localStorage.getItem('lang')) setLang(localStorage.getItem('lang'))
+    try {
+      const stored = localStorage.getItem('ss_watchlist')
+      if (stored) setWatchlist(JSON.parse(stored))
+    } catch {}
   }, [])
+
+  function saveWatchlist(list) {
+    setWatchlist(list)
+    localStorage.setItem('ss_watchlist', JSON.stringify(list))
+  }
+  function addToWatchlist(stock, price) {
+    const p = parseFloat(price)
+    if (!p || p <= 0) return
+    const next = [...watchlist.filter(w => w.ticker !== stock.ticker), {
+      ticker: stock.ticker, name: stock.name,
+      entryPrice: p, dateAdded: new Date().toISOString().split('T')[0],
+    }]
+    saveWatchlist(next)
+    setAddingToWatchlist(null)
+    setEntryPriceInput(prev => ({ ...prev, [stock.ticker]: '' }))
+  }
+  function removeFromWatchlist(ticker) { saveWatchlist(watchlist.filter(w => w.ticker !== ticker)) }
+  const isInWatchlist = ticker => watchlist.some(w => w.ticker === ticker)
+
+  const watchlistProps = { watchlist, addingToWatchlist, setAddingToWatchlist, entryPriceInput, setEntryPriceInput, addToWatchlist, isInWatchlist, lang }
 
   const toggleDark = () => setDark(d => { localStorage.setItem('dark', !d); return !d })
   const toggleLang = () => setLang(l => { const nl = l === 'he' ? 'en' : 'he'; localStorage.setItem('lang', nl); return nl })
@@ -290,7 +348,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <select
               value={selectedWeek}
-              onChange={e => { setSelectedWeek(Number(e.target.value)); setOpenStock(null) }}
+              onChange={e => { setSelectedWeek(Number(e.target.value)); setOpenStock(null); setSectorFilter(null) }}
               style={{ padding: '8px 14px', borderRadius: 8, border: `1px solid ${c.border}`, fontSize: 14, background: c.card, color: c.text, cursor: 'pointer' }}
             >
               {scans.map((scan, i) => (<option key={i} value={i}>{scan.week_label}</option>))}
@@ -322,7 +380,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
         {/* Tab switcher */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-          {[['weekly', `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`], ['hof', '🏆 Hall of Fame']].map(([key, label]) => (
+          {[['weekly', `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`], ['hof', '🏆 Hall of Fame'], ['watchlist', `📌 ${lang === 'he' ? 'מעקב' : 'Watchlist'}`]].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ padding: '9px 22px', borderRadius: 22, border: `1px solid ${tab === key ? '#097c3e' : c.border}`, background: tab === key ? '#097c3e' : c.card, color: tab === key ? 'white' : c.muted, fontWeight: 700, cursor: 'pointer', fontSize: 14, transition: 'all 0.15s' }}>
               {label}
             </button>
@@ -330,10 +388,19 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         </div>
 
         {tab === 'hof' && (
-          <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} />
+          <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} winRateByTicker={winRateByTicker} watchlistProps={watchlistProps} />
+        )}
+
+        {tab === 'watchlist' && (
+          <WatchlistTab watchlist={watchlist} removeFromWatchlist={removeFromWatchlist} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'weekly' && (<>
+
+        {/* Sector rotation heatmap */}
+        {sectorByTicker && Object.keys(sectorByTicker).length > 0 && (
+          <SectorHeatmap sectorByTicker={sectorByTicker} stocks={stocks} c={c} dark={dark} sectorFilter={sectorFilter} setSectorFilter={setSectorFilter} lang={lang} />
+        )}
 
         {/* Stats chips — colors match trend column (appearance %) */}
         {stocks.length > 0 && (() => {
@@ -365,11 +432,11 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
                 </tr>
               </thead>
               <tbody>
-                {stocks.map((stock, i) => {
+                {stocks.filter(s => !sectorFilter || sectorByTicker[s.ticker]?.sector === sectorFilter).map((stock, i) => {
                   return (<>
                     <StockRow key={stock.ticker} stock={stock} rank={i + 1} isOpen={openStock === stock.ticker}
                       onClick={() => setOpenStock(openStock === stock.ticker ? null : stock.ticker)} c={c} t={t} dark={dark}
-                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} />
+                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} watchlistProps={watchlistProps} />
                     {openStock === stock.ticker && (
                       <tr key={`${stock.ticker}-panel`}>
                         <td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${c.border}` }}>
@@ -412,7 +479,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   )
 }
 
-function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByTicker }) {
+function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByTicker, winRateByTicker, watchlistProps }) {
   const medals = ['🥇', '🥈', '🥉']
   const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
@@ -605,6 +672,21 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                     <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'שווי שוק' : 'Mkt Cap'}</div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: c.muted }}>{formatMcap(stock.marketCap)}</div>
                   </div>
+                  {/* Win Rate */}
+                  {(() => {
+                    const wr = winRateByTicker && winRateByTicker[stock.ticker]
+                    if (!wr || wr.opps === 0) return null
+                    const wrColor = wr.pct >= 60 ? '#097c3e' : wr.pct >= 40 ? '#cc8800' : c.muted
+                    const wrBg    = wr.pct >= 60 ? (dark ? '#1a3a1a' : '#EAF3DE') : wr.pct >= 40 ? (dark ? '#3a2a0a' : '#FAEEDA') : (dark ? '#2a2a3e' : '#f0f0f0')
+                    return (
+                      <div style={{ textAlign: 'center' }} title={lang === 'he' ? `ב-${wr.opps} שבועות שהופיעה, ${wr.wins} פעמים עלתה גם השבוע הבא` : `Appeared ${wr.opps} times; rose the following week ${wr.wins} times`}>
+                        <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'הצלחה' : 'Win Rate'}</div>
+                        <span style={{ background: wrBg, color: wrColor, padding: '3px 8px', borderRadius: 10, fontSize: 12, fontWeight: 700 }}>{wr.wins}/{wr.opps} ({wr.pct}%)</span>
+                      </div>
+                    )
+                  })()}
+                  {/* Star / watchlist button */}
+                  {watchlistProps && <StarButton stock={stock} {...watchlistProps} c={c} />}
                   {buzz
                     ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, background: isOpen ? '#097c3e' : (dark ? '#1a2a1a' : '#eaf3de'), border: `1px solid ${isOpen ? '#097c3e' : (dark ? '#2a4a2a' : '#c3e6cb')}` }}>
                         <span style={{ fontSize: 13 }}>🔥</span>
@@ -907,6 +989,181 @@ function VolSpike({ ticker, dark, c }) {
   )
 }
 
+// ── RSI ──────────────────────────────────────────────────────────
+function calculateRSI(closes) {
+  if (!closes || closes.length < 15) return null
+  const changes = closes.slice(1).map((v, i) => v - closes[i])
+  let avgGain = 0, avgLoss = 0
+  for (let i = 0; i < 14; i++) {
+    if (changes[i] > 0) avgGain += changes[i]; else avgLoss += Math.abs(changes[i])
+  }
+  avgGain /= 14; avgLoss /= 14
+  for (let i = 14; i < changes.length; i++) {
+    avgGain = (avgGain * 13 + Math.max(0, changes[i])) / 14
+    avgLoss = (avgLoss * 13 + Math.max(0, -changes[i])) / 14
+  }
+  if (avgLoss === 0) return 100
+  return Math.round(100 - 100 / (1 + avgGain / avgLoss))
+}
+
+function RSIBadge({ ticker, dark, c, size = 'small' }) {
+  const data = usePriceHistory(ticker)
+  const rsi = calculateRSI(data?.closes)
+  if (rsi === null) return null
+  const overbought = rsi >= 70, oversold = rsi <= 30
+  const color = overbought ? '#c0392b' : oversold ? '#097c3e' : c.muted
+  const bg    = overbought ? (dark ? '#3a1a1a' : '#FCEBEB') : oversold ? (dark ? '#1a3a1a' : '#EAF3DE') : (dark ? '#2a2a3e' : '#f0f0f0')
+  const icon  = overbought ? ' 🔴' : oversold ? ' 🟢' : ''
+  return (
+    <span title={overbought ? 'RSI ≥ 70 — possibly overbought' : oversold ? 'RSI ≤ 30 — possibly oversold' : 'RSI neutral'}
+      style={{ background: bg, color, padding: size === 'large' ? '4px 10px' : '2px 7px', borderRadius: 10, fontSize: size === 'large' ? 12 : 10, fontWeight: 700, whiteSpace: 'nowrap' }}>
+      RSI {rsi}{icon}
+    </span>
+  )
+}
+
+// ── SECTOR HEATMAP ────────────────────────────────────────────────
+const SECTOR_ICONS = {
+  'Technology': '💻', 'Healthcare': '🏥', 'Energy': '🔋', 'Financial Services': '🏦',
+  'Consumer Cyclical': '🛍️', 'Communication Services': '📡', 'Industrials': '🏭',
+  'Basic Materials': '⛏️', 'Real Estate': '🏢', 'Utilities': '⚡', 'Consumer Defensive': '🛒',
+  'Biotechnology': '🧬',
+}
+
+function SectorHeatmap({ sectorByTicker, stocks, c, dark, sectorFilter, setSectorFilter, lang }) {
+  const counts = {}
+  for (const s of stocks) {
+    const sec = sectorByTicker[s.ticker]?.sector
+    if (sec) counts[sec] = (counts[sec] || 0) + 1
+  }
+  const sectors = Object.entries(counts).sort((a, b) => b[1] - a[1])
+  if (!sectors.length) return null
+  return (
+    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: '14px 20px', marginBottom: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 10 }}>
+        🗺️ {lang === 'he' ? 'פיזור סקטורים — השבוע' : 'Sector Rotation — This Week'}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {sectorFilter && (
+          <button onClick={() => setSectorFilter(null)} style={{ padding: '5px 14px', borderRadius: 20, border: `1px solid ${c.border}`, background: c.chipBg, color: c.muted, fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+            ✕ {lang === 'he' ? 'נקה' : 'Clear'}
+          </button>
+        )}
+        {sectors.map(([sec, cnt]) => {
+          const icon = SECTOR_ICONS[sec] || '📦'
+          const active = sectorFilter === sec
+          return (
+            <button key={sec} onClick={() => setSectorFilter(active ? null : sec)} style={{
+              padding: '5px 14px', borderRadius: 20, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+              border: `1px solid ${active ? '#097c3e' : c.border}`,
+              background: active ? '#097c3e' : c.chipBg,
+              color: active ? 'white' : c.text,
+            }}>
+              {icon} {sec} ({cnt})
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── STAR / WATCHLIST BUTTON ───────────────────────────────────────
+function StarButton({ stock, watchlist, addingToWatchlist, setAddingToWatchlist, entryPriceInput, setEntryPriceInput, addToWatchlist, isInWatchlist, lang, c }) {
+  const inList = isInWatchlist(stock.ticker)
+  const isAdding = addingToWatchlist === stock.ticker && !inList
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <button
+        onClick={e => { e.stopPropagation(); setAddingToWatchlist(isAdding ? null : stock.ticker) }}
+        title={inList ? (lang === 'he' ? 'ברשימת מעקב' : 'In watchlist') : (lang === 'he' ? 'הוסף למעקב' : 'Watch')}
+        style={{ background: 'none', border: 'none', fontSize: 15, cursor: 'pointer', color: inList ? '#f4c430' : c.muted, padding: '0 2px', lineHeight: 1 }}
+      >{inList ? '⭐' : '☆'}</button>
+      {isAdding && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={e => e.stopPropagation()}>
+          <input autoFocus type="number" placeholder={lang === 'he' ? 'מחיר $' : 'Entry $'}
+            value={entryPriceInput[stock.ticker] || ''}
+            onChange={e => setEntryPriceInput(prev => ({ ...prev, [stock.ticker]: e.target.value }))}
+            onKeyDown={e => { if (e.key === 'Enter') addToWatchlist(stock, entryPriceInput[stock.ticker]) }}
+            style={{ width: 72, padding: '3px 7px', borderRadius: 6, border: `1px solid ${c.border}`, fontSize: 12, background: c.card, color: c.text }} />
+          <button onClick={() => addToWatchlist(stock, entryPriceInput[stock.ticker])}
+            style={{ padding: '3px 9px', borderRadius: 6, border: 'none', background: '#097c3e', color: 'white', fontSize: 12, cursor: 'pointer', fontWeight: 700 }}>
+            {lang === 'he' ? '✓' : '✓'}
+          </button>
+        </span>
+      )}
+    </span>
+  )
+}
+
+// ── WATCHLIST TAB ─────────────────────────────────────────────────
+function WatchlistRow({ item, removeFromWatchlist, c, dark, lang }) {
+  const data = usePriceHistory(item.ticker)
+  const closes = data?.closes || []
+  const current = closes.length ? closes[closes.length - 1] : null
+  const plPct = current != null ? (current - item.entryPrice) / item.entryPrice * 100 : null
+  const plColor = plPct == null ? c.muted : plPct >= 0 ? '#097c3e' : '#c0392b'
+  return (
+    <tr style={{ borderBottom: `1px solid ${c.border}`, background: c.card }}
+      onMouseEnter={e => e.currentTarget.style.background = c.rowHover}
+      onMouseLeave={e => e.currentTarget.style.background = c.card}>
+      <td style={{ padding: '11px 14px' }}>
+        <div style={{ fontWeight: 800, fontSize: 14, color: c.text }}>{item.ticker}</div>
+        <Sparkline ticker={item.ticker} width={70} height={20} />
+      </td>
+      <td style={{ padding: '11px 14px', fontSize: 12, color: c.muted, maxWidth: 180 }}>{item.name}</td>
+      <td style={{ padding: '11px 14px', fontSize: 13, color: c.text }}>${item.entryPrice.toFixed(2)}</td>
+      <td style={{ padding: '11px 14px', fontSize: 13, color: c.text }}>
+        {current != null ? `$${current.toFixed(2)}` : (data ? '—' : '⏳')}
+      </td>
+      <td style={{ padding: '11px 14px' }}>
+        {plPct != null
+          ? <span style={{ fontWeight: 800, fontSize: 15, color: plColor }}>{plPct >= 0 ? '+' : ''}{plPct.toFixed(2)}%</span>
+          : <span style={{ color: c.muted }}>—</span>}
+      </td>
+      <td style={{ padding: '11px 14px', fontSize: 11, color: c.muted }}>{item.dateAdded}</td>
+      <td style={{ padding: '11px 14px' }}>
+        <button onClick={() => removeFromWatchlist(item.ticker)}
+          style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #c0392b', background: 'none', color: '#c0392b', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>
+          {lang === 'he' ? 'הסר' : 'Remove'}
+        </button>
+      </td>
+    </tr>
+  )
+}
+
+function WatchlistTab({ watchlist, removeFromWatchlist, c, dark, lang }) {
+  const headers = lang === 'he'
+    ? ['מנייה', 'שם', 'מחיר כניסה', 'מחיר נוכחי', 'P&L %', 'תאריך', '']
+    : ['Ticker', 'Name', 'Entry $', 'Current $', 'P&L %', 'Added', '']
+  return (
+    <div style={{ background: c.card, borderRadius: 12, border: `1px solid ${c.border}`, overflow: 'hidden' }}>
+      <div style={{ padding: '16px 20px', borderBottom: `1px solid ${c.border}`, background: dark ? '#12122a' : '#1a1a2e' }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: 'white' }}>📌 {lang === 'he' ? 'רשימת מעקב' : 'Watchlist'}</div>
+        <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>{lang === 'he' ? `${watchlist.length} מניות במעקב` : `${watchlist.length} stocks tracked`}</div>
+      </div>
+      {watchlist.length === 0 ? (
+        <div style={{ padding: 48, textAlign: 'center', color: c.muted, fontSize: 14 }}>
+          {lang === 'he' ? 'הרשימה ריקה — לחץ ☆ על כל מנייה כדי להוסיף' : 'Empty — click ☆ on any stock to add it'}
+        </div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: c.thead }}>
+              {headers.map((h, i) => (
+                <th key={i} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: c.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', borderBottom: `1px solid ${c.border}` }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {watchlist.map(item => <WatchlistRow key={item.ticker} item={item} removeFromWatchlist={removeFromWatchlist} c={c} dark={dark} lang={lang} />)}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
 function Chip({ label, bg, color }) {
   return <span style={{ background: bg, color, padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{label}</span>
 }
@@ -917,7 +1174,7 @@ function formatMcap(market_cap) {
   return `$${Math.round(market_cap / 1_000_000)}M`
 }
 
-function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans }) {
+function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans, watchlistProps }) {
   const buzz = stock.buzz || {}
 
   const count = appearanceCount || 1
@@ -941,7 +1198,10 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
           {isBuzzAlert && <span title="High buzz" style={{ fontSize: 13 }}>🔥</span>}
         </div>
         <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{stock.name}</div>
-        <Sparkline ticker={stock.ticker} width={80} height={22} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+          <Sparkline ticker={stock.ticker} width={72} height={20} />
+          <RSIBadge ticker={stock.ticker} dark={dark} c={c} size="small" />
+        </div>
       </td>
       <td style={{ padding: '11px 14px' }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: '#097c3e' }}>+{stock.change_pct}%</span>
@@ -954,9 +1214,12 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
         <span style={{ background: trendBadge.bg, color: trendBadge.color, padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>{trendBadge.text}</span>
       </td>
       <td style={{ padding: '11px 14px' }}>
-        <button style={{ fontSize: 11, color: '#097c3e', background: 'none', border: '1px solid #097c3e', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
-          {isOpen ? t.close : t.details}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
+          {watchlistProps && <StarButton stock={stock} {...watchlistProps} c={c} />}
+          <button onClick={e => { e.stopPropagation(); onClick() }} style={{ fontSize: 11, color: '#097c3e', background: 'none', border: '1px solid #097c3e', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            {isOpen ? t.close : t.details}
+          </button>
+        </div>
       </td>
     </tr>
   )
@@ -1178,6 +1441,7 @@ function StockPanel({ stock, scans, c, t, dark, lang, onClose, buzzByTicker }) {
         <MetaCard label={t.buzzScore} value={buzzScore > 0 ? `${buzzScore}/10` : '—'} c={c} />
         {buzz.analyst_target && <MetaCard label={lang === 'he' ? 'יעד אנליסטים' : 'Analyst target'} value={`$${buzz.analyst_target}`} c={c} />}
         {buzz.analyst_upside_pct != null && <MetaCard label={lang === 'he' ? 'פוטנציאל עלייה' : 'Upside'} value={`${buzz.analyst_upside_pct >= 0 ? '+' : ''}${buzz.analyst_upside_pct}%`} c={c} />}
+        <MetaCard label="RSI (14)" value={<RSIBadge ticker={stock.ticker} dark={dark} c={c} size="large" />} c={c} />
       </div>
     </div>
   )
