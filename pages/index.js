@@ -417,6 +417,7 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
   const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
   const [openBuzz, setOpenBuzz] = useState(null)
+  const [openDates, setOpenDates] = useState(null)
   const [loadingBuzz, setLoadingBuzz] = useState({})
   const [liveBuzz, setLiveBuzz] = useState({})  // buzz fetched after clicking, auto-updates UI
   const pollTimers = useRef({})
@@ -560,9 +561,15 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                     : <span style={{ fontSize: 13, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
                 </div>
 
-                {/* Ticker + name */}
-                <div style={{ width: 150, flexShrink: 0 }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{stock.ticker}</div>
+                {/* Ticker + name — click to show/hide appearance dates */}
+                <div
+                  onClick={e => { e.stopPropagation(); setOpenDates(openDates === stock.ticker ? null : stock.ticker) }}
+                  style={{ width: 150, flexShrink: 0, cursor: 'pointer' }}
+                >
+                  <div style={{ fontSize: 15, fontWeight: 800, color: openDates === stock.ticker ? '#097c3e' : c.text, display: 'flex', alignItems: 'center', gap: 5 }}>
+                    {stock.ticker}
+                    <span style={{ fontSize: 10, color: openDates === stock.ticker ? '#097c3e' : c.muted }}>{openDates === stock.ticker ? '▲' : '▼'}</span>
+                  </div>
                   <div style={{ fontSize: 10, color: c.muted, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 145 }}>{stock.name}</div>
                 </div>
 
@@ -626,6 +633,29 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
               </div>
 
               {/* Buzz expansion panel — enhanced with price signals */}
+              {/* Dates panel — shown when clicking on ticker name */}
+              {openDates === stock.ticker && (() => {
+                const appearances = stock.weekPresence
+                  .map((gain, wi) => gain != null ? { label: weekLabels[wi], gain } : null)
+                  .filter(Boolean)
+                  .reverse() // newest first
+                return (
+                  <div style={{ background: dark ? '#0e1520' : '#f0f6ff', borderBottom: `1px solid ${c.border}`, borderLeft: `3px solid #1a6bb5`, padding: '14px 20px' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#1a6bb5', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>
+                      📅 {lang === 'he' ? `הופעות — ${appearances.length} מתוך ${totalScans} שבועות` : `Appearances — ${appearances.length} of ${totalScans} weeks`}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {appearances.map((a, ai) => (
+                        <div key={ai} style={{ background: dark ? '#1a2535' : 'white', border: `1px solid ${dark ? '#2a3a55' : '#c8daef'}`, borderRadius: 8, padding: '7px 12px', minWidth: 130 }}>
+                          <div style={{ fontSize: 11, color: c.muted, marginBottom: 3 }}>{a.label}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: '#097c3e' }}>+{a.gain.toFixed(1)}%</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+
               {isOpen && buzz && (
                 <div style={{ background: dark ? '#0e1a0e' : '#f0f8f0', borderBottom: `1px solid ${c.border}`, borderLeft: `3px solid #097c3e`, padding: '18px 24px' }}>
 
