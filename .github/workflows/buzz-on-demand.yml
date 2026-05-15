@@ -32,7 +32,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install requests supabase yfinance pandas
+          pip install requests supabase yfinance pandas pytrends
 
       - name: Fetch buzz for ${{ github.event.inputs.ticker }}
         env:

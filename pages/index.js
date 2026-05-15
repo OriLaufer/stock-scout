@@ -598,35 +598,77 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                 <div style={{ background: dark ? '#0e1a0e' : '#f0f8f0', borderBottom: `1px solid ${c.border}`, borderLeft: `3px solid #097c3e`, padding: '18px 24px' }}>
 
                   {/* Score header */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 18, flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                      <span style={{ fontSize: 32, fontWeight: 800, color: (buzz.enhanced_score || buzz.score) >= 7 ? '#097c3e' : (buzz.enhanced_score || buzz.score) >= 4 ? '#cc8800' : c.muted }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18, flexWrap: 'wrap' }}>
+                    {/* Big score */}
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginRight: 8 }}>
+                      <span style={{ fontSize: 34, fontWeight: 800, color: (buzz.enhanced_score || buzz.score) >= 7 ? '#097c3e' : (buzz.enhanced_score || buzz.score) >= 4 ? '#cc8800' : c.muted }}>
                         {buzz.enhanced_score || buzz.score}
                       </span>
                       <span style={{ fontSize: 14, color: c.muted }}>/10</span>
                       <span style={{ fontSize: 11, color: c.muted, marginLeft: 4 }}>{lang === 'he' ? 'ציון כולל' : 'total score'}</span>
                     </div>
-                    {/* Price signal chips */}
-                    {buzz.volume_spike_pct != null && (
-                      <span title={lang === 'he' ? 'נפח מסחר השבוע vs ממוצע 4 שבועות' : 'This week volume vs 4-week avg'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: buzz.volume_spike_pct >= 150 ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: buzz.volume_spike_pct >= 150 ? '#097c3e' : c.muted }}>
-                        📊 Vol {buzz.volume_spike_pct >= 0 ? '+' : ''}{buzz.volume_spike_pct}%
-                      </span>
-                    )}
-                    {buzz.week_high_pct != null && (
-                      <span title={lang === 'he' ? 'מחיר נוכחי כ% מהשיא השנתי' : 'Current price as % of 52-week high'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: buzz.week_high_pct >= 90 ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: buzz.week_high_pct >= 90 ? '#097c3e' : c.muted }}>
-                        📍 {buzz.week_high_pct}% of 52w high
-                      </span>
-                    )}
-                    {buzz.short_interest_pct != null && (
-                      <span title={lang === 'he' ? 'אחוז הפלואט ששורט — גבוה = פוטנציאל סקוויז' : 'Float short % — high = potential squeeze'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: buzz.short_interest_pct >= 15 ? (dark ? '#3a1a1a' : '#fff0f0') : (dark ? '#2a2a3e' : '#f0f0f0'), color: buzz.short_interest_pct >= 15 ? '#c0392b' : c.muted }}>
-                        🩳 Short {buzz.short_interest_pct}%{buzz.short_ratio ? ` · ${buzz.short_ratio}d` : ''}
-                      </span>
-                    )}
-                    {buzz.news_count > 0 && (
-                      <span title={lang === 'he' ? 'כתבות חדשותיות אחרונות' : 'Recent news articles'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: buzz.news_bullish_pct >= 65 ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: buzz.news_bullish_pct >= 65 ? '#097c3e' : c.muted }}>
-                        🗞️ {buzz.news_count} {lang === 'he' ? 'כתבות' : 'articles'} · {buzz.news_bullish_pct}% bull
-                      </span>
-                    )}
+
+                    {/* Volume spike */}
+                    {buzz.volume_spike_pct != null && (() => {
+                      const hot = buzz.volume_spike_pct >= 150
+                      return (
+                        <span title={lang === 'he' ? 'נפח מסחר השבוע vs ממוצע 4 שבועות — עלייה חריגה = משהו קורה' : 'This week avg volume vs 4-week avg — spike means unusual activity'} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: hot ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: hot ? '#097c3e' : c.muted }}>
+                          📊 Vol {buzz.volume_spike_pct >= 0 ? '+' : ''}{buzz.volume_spike_pct}%
+                        </span>
+                      )
+                    })()}
+
+                    {/* 52-week position */}
+                    {buzz.week_high_pct != null && (() => {
+                      const hot = buzz.week_high_pct >= 90
+                      return (
+                        <span title={lang === 'he' ? `מחיר נוכחי = ${buzz.week_high_pct}% מהשיא השנתי. מעל 90% = מומנטום חזק` : `Current price is ${buzz.week_high_pct}% of the 52-week high. Above 90% = strong momentum`} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: hot ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: hot ? '#097c3e' : c.muted }}>
+                          📍 {buzz.week_high_pct}% of 52w high
+                        </span>
+                      )
+                    })()}
+
+                    {/* Short interest */}
+                    {buzz.short_interest_pct != null && (() => {
+                      const danger = buzz.short_interest_pct >= 15
+                      return (
+                        <span title={lang === 'he' ? `${buzz.short_interest_pct}% מהפלואט ששורט. מעל 15% + עלייה = פוטנציאל שורט סקוויז` : `${buzz.short_interest_pct}% of float is shorted. Above 15% while rising = short squeeze potential`} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: danger ? (dark ? '#3a1a1a' : '#fff0f0') : (dark ? '#2a2a3e' : '#f0f0f0'), color: danger ? '#c0392b' : c.muted }}>
+                          🩳 Short {buzz.short_interest_pct}%{buzz.short_ratio ? ` · ${buzz.short_ratio}d` : ''}
+                        </span>
+                      )
+                    })()}
+
+                    {/* Google Trends */}
+                    {buzz.google_trend_score != null && (() => {
+                      const hot = buzz.google_trend_score >= 60
+                      const arrow = buzz.google_trend_direction === 'rising' ? ' ↗' : buzz.google_trend_direction === 'falling' ? ' ↘' : ''
+                      return (
+                        <span title={lang === 'he' ? `עניין בגוגל: ${buzz.google_trend_score}/100. מעל 60 = אנשים מתחילים לחפש — אות מוקדם לפני שהחדשות יוצאות` : `Google search interest: ${buzz.google_trend_score}/100. Above 60 = retail interest building — often an early signal`} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: hot ? (dark ? '#1a2a3a' : '#e8f4ff') : (dark ? '#2a2a3e' : '#f0f0f0'), color: hot ? '#1a6bb5' : c.muted }}>
+                          🔍 Trends {buzz.google_trend_score}/100{arrow}
+                        </span>
+                      )
+                    })()}
+
+                    {/* News */}
+                    {buzz.news_count > 0 && (() => {
+                      const hot = buzz.news_bullish_pct >= 65
+                      return (
+                        <span title={lang === 'he' ? `${buzz.news_count} כתבות חדשות, ${buzz.news_bullish_pct}% חיוביות לפי ניתוח כותרות` : `${buzz.news_count} recent news articles, ${buzz.news_bullish_pct}% bullish by headline sentiment`} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: hot ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#2a2a3e' : '#f0f0f0'), color: hot ? '#097c3e' : c.muted }}>
+                          🗞️ {buzz.news_count} {lang === 'he' ? 'כתבות' : 'news'} · {buzz.news_bullish_pct}% bull
+                        </span>
+                      )
+                    })()}
+
+                    {/* Insider purchases */}
+                    {buzz.insider_purchases > 0 && (() => {
+                      const val = buzz.insider_total_value || 0
+                      const valStr = val >= 1_000_000 ? `$${(val/1_000_000).toFixed(1)}M` : val >= 1_000 ? `$${Math.round(val/1_000)}K` : `$${val}`
+                      return (
+                        <span title={lang === 'he' ? `${buzz.insider_purchases} רכישות פנימיות ב-60 יום האחרונים. מנהלים קנו ${valStr} ממניות החברה שלהם — אחד האותות החזקים ביותר` : `${buzz.insider_purchases} insider purchases in last 60 days. Executives bought ${valStr} of their own stock — one of the strongest signals`} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: dark ? '#2a1a3a' : '#f5eeff', color: '#7c3aed' }}>
+                          🏦 {buzz.insider_purchases}x insider buy · {valStr}
+                        </span>
+                      )
+                    })()}
                   </div>
 
                   <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-start' }}>
@@ -681,6 +723,35 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                       </div>
                     )}
                   </div>
+
+                  {/* Insider purchases — full-width row, shown only when present */}
+                  {buzz.insider_recent && buzz.insider_recent.length > 0 && (
+                    <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${dark ? '#2a3a2a' : '#c8e6c9'}` }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>
+                        🏦 {lang === 'he' ? 'רכישות פנימיות (60 יום אחרונים) — נתוני SEC' : 'Insider purchases (last 60 days) — SEC Form 4'}
+                      </div>
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                        {buzz.insider_recent.map((p, pi) => {
+                          const val = p.value || 0
+                          const valStr = val >= 1_000_000 ? `$${(val/1_000_000).toFixed(1)}M` : val >= 1_000 ? `$${Math.round(val/1_000)}K` : val > 0 ? `$${val}` : '—'
+                          const isExec = ['CEO','CFO','PRESIDENT','COO','CHAIRMAN'].some(t => (p.title||'').toUpperCase().includes(t))
+                          return (
+                            <div key={pi} style={{ background: dark ? '#1e1230' : 'white', border: `1px solid ${isExec ? '#7c3aed' : (dark ? '#3a2a5a' : '#ddd6fe')}`, borderRadius: 8, padding: '9px 13px', minWidth: 180, flex: '1 1 180px' }}>
+                              <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>{p.name}</div>
+                              <div style={{ fontSize: 11, color: isExec ? '#7c3aed' : c.muted, marginTop: 2 }}>{p.title}</div>
+                              <div style={{ fontSize: 14, fontWeight: 800, color: '#7c3aed', marginTop: 6 }}>{valStr}</div>
+                              <div style={{ fontSize: 10, color: c.muted, marginTop: 2 }}>{p.date}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <div style={{ fontSize: 10, color: c.muted, marginTop: 8 }}>
+                        {lang === 'he'
+                          ? '* מנהל שקנה מניות של החברה שלו = אחד האותות החזקים ביותר בשוק. מידע מבוסס SEC.'
+                          : '* Executives buying their own stock = one of the strongest signals in investing. Source: SEC.'}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
