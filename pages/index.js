@@ -15,9 +15,9 @@ const T = {
     runScan: '▶ הפעל סריקה',
     running: 'סורק...',
     scanMsg: 'סריקה הופעלה! רענן בעוד 2 דקות.',
-    returning: 'חוזרות',
-    threeWeeks: 'שלושה שבועות',
-    fourPlus: 'ארבעה+',
+    returning: 'תכופות',
+    threeWeeks: 'מדי פעם',
+    fourPlus: 'חדשות',
     stocks: 'מניות',
     noData: 'אין נתונים. לחץ על "הפעל סריקה".',
     bonus: '🔥 התראות באז — מניות מהטופ עם באז יוצא דופן',
@@ -66,9 +66,9 @@ const T = {
     runScan: '▶ Run Scan',
     running: 'Running...',
     scanMsg: 'Scan triggered! Refresh in 2 minutes.',
-    returning: 'returning',
-    threeWeeks: 'three weeks',
-    fourPlus: 'four weeks+',
+    returning: 'frequent',
+    threeWeeks: 'occasional',
+    fourPlus: 'new',
     stocks: 'stocks',
     noData: 'No data yet. Click "Run Scan" to start.',
     bonus: '🔥 Buzz Alerts — Top stocks with extraordinary buzz',
@@ -179,7 +179,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans }) {
   const [lang, setLang] = useState('he')
   const [selectedWeek, setSelectedWeek] = useState(0)
   const [openStock, setOpenStock] = useState(null)
-  const [marketCapInput, setMarketCapInput] = useState('500')
+  const [marketCapInput, setMarketCapInput] = useState('250')
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
 
