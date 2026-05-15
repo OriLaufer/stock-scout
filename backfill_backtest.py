@@ -145,18 +145,16 @@ def main():
         }
         print(f"  ✓ {wins}/{len(valid)} wins  |  avg {avg:+.2f}%")
 
-        new_json = dict(this["parsed"])
-        new_json["backtest"] = bt_entry
         try:
-            resp = supabase.table("weekly_scans").update(
-                {"stocks_json": json.dumps(new_json)}
-            ).eq("week_label", this["week_label"]).execute()
-            rows_affected = len(resp.data) if resp.data else 0
-            print(f"  Supabase update: {rows_affected} row(s) affected")
-            if rows_affected == 0:
-                print(f"  WARNING: no rows updated — check RLS policies or week_label match")
-            else:
-                updated += 1
+            # Upsert into dedicated backtest_results table (avoids RLS on weekly_scans)
+            resp = supabase.table("backtest_results").upsert({
+                "week_label": this["week_label"],
+                "result_json": json.dumps(bt_entry),
+                "updated_at":  datetime.utcnow().isoformat(),
+            }).execute()
+            rows = len(resp.data) if resp.data else 0
+            print(f"  Supabase upsert backtest_results: {rows} row(s)")
+            updated += 1
         except Exception as e:
             print(f"  Supabase save error: {e}")
 

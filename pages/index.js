@@ -251,9 +251,34 @@ export async function getServerSideProps() {
     }
   } catch {}
 
-  // Backtest: read REAL data stored by scanner (actual next-week prices from price_data)
-  // Each scan stores how last week's top 5 picks actually performed this week
-  const realBacktestWeeks = unique.filter(s => s.backtest).map(s => s.backtest)
+  // Backtest: read from dedicated backtest_results table (written by backfill + weekly scanner)
+  // Merge with any backtest stored directly in scan JSON (future scans from scanner.py)
+  const backtestByWeek = {}
+
+  // 1. From scan JSON (new scans written by scanner.py going forward)
+  for (const scan of unique) {
+    if (scan.backtest) backtestByWeek[scan.week_label] = scan.backtest
+  }
+
+  // 2. From backtest_results table (written by backfill script)
+  try {
+    const { data: btRows } = await supabase.from('backtest_results').select('*')
+    for (const row of btRows || []) {
+      try {
+        const bt = typeof row.result_json === 'string' ? JSON.parse(row.result_json) : row.result_json
+        if (bt && !backtestByWeek[row.week_label]) backtestByWeek[row.week_label] = bt
+      } catch {}
+    }
+  } catch {}
+
+  // Sort by week date (oldest first) to compute compound return correctly
+  function parseWeekEndDate(label) {
+    const m = label.match(/(\d{2})\.(\d{2})\.(\d{4})$/)
+    if (!m) return new Date(0)
+    return new Date(`${m[3]}-${m[2]}-${m[1]}`)
+  }
+  const realBacktestWeeks = Object.values(backtestByWeek)
+    .sort((a, b) => parseWeekEndDate(a.week) - parseWeekEndDate(b.week))
 
   let backtest = null
   if (realBacktestWeeks.length >= 1) {
@@ -270,10 +295,8 @@ export async function getServerSideProps() {
       avgWeekly:   Math.round(realBacktestWeeks.reduce((a, w) => a + w.avg_gain, 0) / realBacktestWeeks.length * 10) / 10,
       weeks:       realBacktestWeeks,
       isReal:      true,
-      pendingWeeks: unique.length - realBacktestWeeks.length,
     }
   } else {
-    // No real data yet — show placeholder so user knows tracking has started
     backtest = { pending: true, totalScans: unique.length }
   }
 
