@@ -25,23 +25,32 @@ def parse_week_end(label):
 
 
 def fetch_week_change(ticker, start_friday, end_friday):
-    """Actual % change from start_friday close to end_friday close."""
+    """Actual % change from start_friday close to end_friday close.
+    Uses Ticker.history() — always returns clean single-level DataFrame."""
     try:
-        df = yf.download(
-            ticker,
+        hist = yf.Ticker(ticker).history(
             start=(start_friday - timedelta(days=4)).strftime("%Y-%m-%d"),
             end=(end_friday + timedelta(days=1)).strftime("%Y-%m-%d"),
-            progress=False,
-            auto_adjust=True,
         )
-        if df.empty or "Close" not in df.columns:
+        if hist.empty or "Close" not in hist.columns:
             return None
-        closes = df["Close"].dropna()
+
+        closes = hist["Close"].dropna()
+
+        # history() index is timezone-aware — strip tz for comparison
+        if closes.index.tz is not None:
+            idx_norm = closes.index.tz_localize(None).normalize()
+        else:
+            idx_norm = closes.index.normalize()
 
         def on_or_before(target):
             ts = pd.Timestamp(target.date())
-            valid = closes[closes.index.normalize() <= ts]
-            return float(valid.iloc[-1]) if len(valid) > 0 else None
+            valid = closes[idx_norm <= ts]
+            if len(valid) == 0:
+                return None
+            val = valid.iloc[-1]
+            # Guard against Series (shouldn't happen with history(), but be safe)
+            return float(val.iloc[0]) if hasattr(val, 'iloc') else float(val)
 
         start_close = on_or_before(start_friday)
         end_close   = on_or_before(end_friday)
