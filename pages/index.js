@@ -186,7 +186,7 @@ export async function getServerSideProps() {
           totalGain: 0,
           bestGain: 0,
           buzzScore: 0,
-          weekPresence: Array(totalScans).fill(false),
+          weekPresence: Array(totalScans).fill(null),
         }
       }
       const d = tickerStats[stock.ticker]
@@ -195,17 +195,41 @@ export async function getServerSideProps() {
       d.bestGain = Math.max(d.bestGain, stock.change_pct)
       d.marketCap = stock.market_cap
       if (stock.buzz && stock.buzz.score > 0) d.buzzScore = stock.buzz.score
-      if (weekIndex >= 0) d.weekPresence[weekIndex] = true
+      if (weekIndex >= 0) d.weekPresence[weekIndex] = stock.change_pct
     }
   }
   const hallOfFame = Object.values(tickerStats)
-    .map(d => ({ ...d, avgGain: Math.round(d.totalGain / d.appearances * 10) / 10 }))
+    .map(d => {
+      const avgGain = Math.round(d.totalGain / d.appearances * 10) / 10
+      const gains = d.weekPresence.filter(g => g !== null)
+      let trend = '→'
+      if (gains.length >= 3) {
+        const mid = Math.floor(gains.length / 2)
+        const firstAvg = gains.slice(0, mid).reduce((a, b) => a + b, 0) / mid
+        const secondAvg = gains.slice(mid).reduce((a, b) => a + b, 0) / (gains.length - mid)
+        if (secondAvg > firstAvg * 1.2) trend = '↗'
+        else if (secondAvg < firstAvg * 0.8) trend = '↘'
+      }
+      return { ...d, avgGain, trend }
+    })
     .sort((a, b) => b.appearances - a.appearances || b.avgGain - a.avgGain)
 
-  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst } }
+  // Collect best buzz data per ticker from any scan that has it
+  const buzzByTicker = {}
+  for (const scan of unique) {
+    for (const stock of scan.stocks || []) {
+      if (stock.buzz && stock.buzz.score > 0) {
+        if (!buzzByTicker[stock.ticker] || stock.buzz.score > (buzzByTicker[stock.ticker].score || 0)) {
+          buzzByTicker[stock.ticker] = stock.buzz
+        }
+      }
+    }
+  }
+
+  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -295,7 +319,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         </div>
 
         {tab === 'hof' && (
-          <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} />
+          <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} />
         )}
 
         {tab === 'weekly' && (<>
@@ -376,10 +400,39 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   )
 }
 
-function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang }) {
+function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByTicker }) {
   const medals = ['🥇', '🥈', '🥉']
   const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
+  const [openBuzz, setOpenBuzz] = React.useState(null)
+
+  function dotStyle(gain) {
+    if (gain === null) return {
+      background: dark ? '#2a2a3e' : '#e8e8e8',
+      border: `2px solid ${dark ? '#3a3a4e' : '#d0d0d0'}`,
+      boxShadow: 'none',
+    }
+    const intensity = Math.min(gain / 15, 1)
+    const alpha = 0.3 + intensity * 0.7
+    return {
+      background: `rgba(9,124,62,${alpha.toFixed(2)})`,
+      border: `2px solid rgba(9,124,62,${Math.min(alpha + 0.2, 1).toFixed(2)})`,
+      boxShadow: intensity > 0.5 ? '0 0 5px rgba(9,124,62,0.5)' : 'none',
+    }
+  }
+
+  function TrendBadge({ trend }) {
+    const cfg = trend === '↗'
+      ? { color: '#097c3e', bg: dark ? '#1a3a1a' : '#eaf3de', label: '↗ ' + (lang === 'he' ? 'עולה' : 'Rising') }
+      : trend === '↘'
+      ? { color: '#c0392b', bg: dark ? '#3a1a1a' : '#fdecea', label: '↘ ' + (lang === 'he' ? 'יורד' : 'Fading') }
+      : { color: c.muted, bg: dark ? '#2a2a3e' : '#f0f0f0', label: '→ ' + (lang === 'he' ? 'יציב' : 'Steady') }
+    return (
+      <span style={{ background: cfg.bg, color: cfg.color, padding: '3px 9px', borderRadius: 10, fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+        {cfg.label}
+      </span>
+    )
+  }
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -407,8 +460,12 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang }) {
       <div style={{ background: dark ? '#0f0f1a' : '#f5f5f5', padding: '8px 24px', display: 'flex', gap: 20, alignItems: 'center', borderLeft: `1px solid ${c.border}`, borderRight: `1px solid ${c.border}` }}>
         <span style={{ fontSize: 11, color: c.muted }}>{lang === 'he' ? 'ציר שבועות:' : 'Week timeline:'}</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'rgba(9,124,62,0.35)' }} />
+          <span style={{ fontSize: 11, color: c.muted }}>{lang === 'he' ? 'עלייה קטנה' : 'small gain'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#097c3e' }} />
-          <span style={{ fontSize: 11, color: c.muted }}>{lang === 'he' ? 'הופיעה' : 'appeared'}</span>
+          <span style={{ fontSize: 11, color: c.muted }}>{lang === 'he' ? 'עלייה גדולה' : 'big gain'}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ width: 10, height: 10, borderRadius: '50%', background: dark ? '#2a2a3e' : '#e0e0e0', border: `1px solid ${dark ? '#3a3a4e' : '#ccc'}` }} />
@@ -423,65 +480,120 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang }) {
           const isTop3 = i < 3
           const badgeColor = pct > 70 ? '#097c3e' : pct > 30 ? '#cc8800' : c.muted
           const badgeBg = pct > 70 ? (dark ? '#1a3a1a' : '#EAF3DE') : pct > 30 ? (dark ? '#3a2a0a' : '#FAEEDA') : (dark ? '#2a2a3e' : '#f0f0f0')
+          const buzz = buzzByTicker && buzzByTicker[stock.ticker]
+          const isOpen = openBuzz === stock.ticker
 
           return (
-            <div key={stock.ticker} style={{
-              display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px',
-              borderBottom: `1px solid ${c.border}`,
-              background: isTop3 ? (dark ? medalBg[i].replace('#', '#') : medalBg[i]) : (i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa')),
-              borderLeft: isTop3 ? `3px solid ${medalBorder[i]}` : '3px solid transparent',
-            }}>
-              {/* Rank */}
-              <div style={{ width: 32, textAlign: 'center', flexShrink: 0 }}>
-                {isTop3
-                  ? <span style={{ fontSize: 20 }}>{medals[i]}</span>
-                  : <span style={{ fontSize: 13, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
-              </div>
-
-              {/* Ticker + name */}
-              <div style={{ width: 150, flexShrink: 0 }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{stock.ticker}</div>
-                <div style={{ fontSize: 10, color: c.muted, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 145 }}>{stock.name}</div>
-              </div>
-
-              {/* Dot timeline */}
-              <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexShrink: 0 }}>
-                {stock.weekPresence.map((appeared, wi) => (
-                  <div key={wi} title={weekLabels[wi]} style={{
-                    width: 13, height: 13, borderRadius: '50%',
-                    background: appeared ? '#097c3e' : (dark ? '#2a2a3e' : '#e8e8e8'),
-                    border: `2px solid ${appeared ? '#097c3e' : (dark ? '#3a3a4e' : '#d0d0d0')}`,
-                    boxShadow: appeared ? '0 0 4px rgba(9,124,62,0.4)' : 'none',
-                  }} />
-                ))}
-              </div>
-
-              {/* Appearance badge */}
-              <span style={{ background: badgeBg, color: badgeColor, padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
-                {stock.appearances}/{totalScans}
-              </span>
-
-              {/* Stats */}
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: 24, alignItems: 'center' }}>
-                <div style={{ textAlign: 'center', minWidth: 60 }}>
-                  <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'ממוצע' : 'Avg'}</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: '#097c3e' }}>+{stock.avgGain}%</div>
+            <div key={stock.ticker}>
+              <div
+                onClick={() => buzz && setOpenBuzz(isOpen ? null : stock.ticker)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px',
+                  borderBottom: isOpen ? 'none' : `1px solid ${c.border}`,
+                  background: isTop3 ? medalBg[i] : (i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa')),
+                  borderLeft: isTop3 ? `3px solid ${medalBorder[i]}` : '3px solid transparent',
+                  cursor: buzz ? 'pointer' : 'default',
+                }}
+              >
+                {/* Rank */}
+                <div style={{ width: 32, textAlign: 'center', flexShrink: 0 }}>
+                  {isTop3
+                    ? <span style={{ fontSize: 20 }}>{medals[i]}</span>
+                    : <span style={{ fontSize: 13, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
                 </div>
-                <div style={{ textAlign: 'center', minWidth: 60 }}>
-                  <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'שיא' : 'Best'}</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: '#097c3e' }}>+{stock.bestGain}%</div>
+
+                {/* Ticker + name */}
+                <div style={{ width: 150, flexShrink: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{stock.ticker}</div>
+                  <div style={{ fontSize: 10, color: c.muted, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 145 }}>{stock.name}</div>
                 </div>
-                {stock.buzzScore > 0
-                  ? <div style={{ textAlign: 'center', minWidth: 50 }}>
-                      <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'באז' : 'Buzz'}</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: stock.buzzScore >= 7 ? '#097c3e' : stock.buzzScore >= 4 ? '#cc8800' : c.muted }}>{stock.buzzScore}/10</div>
+
+                {/* Dot timeline — intensity reflects gain magnitude */}
+                <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexShrink: 0 }}>
+                  {stock.weekPresence.map((gain, wi) => (
+                    <div key={wi} title={gain !== null ? `${weekLabels[wi]}: +${gain.toFixed(1)}%` : weekLabels[wi]} style={{
+                      width: 13, height: 13, borderRadius: '50%',
+                      ...dotStyle(gain),
+                    }} />
+                  ))}
+                </div>
+
+                {/* Appearance badge */}
+                <span style={{ background: badgeBg, color: badgeColor, padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+                  {stock.appearances}/{totalScans}
+                </span>
+
+                {/* Trend arrow */}
+                <TrendBadge trend={stock.trend} />
+
+                {/* Stats */}
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center' }}>
+                  <div style={{ textAlign: 'center', minWidth: 55 }}>
+                    <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'ממוצע' : 'Avg'}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#097c3e' }}>+{stock.avgGain}%</div>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: 55 }}>
+                    <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'שיא' : 'Best'}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#097c3e' }}>+{Math.round(stock.bestGain * 10) / 10}%</div>
+                  </div>
+                  <div style={{ textAlign: 'center', minWidth: 55 }}>
+                    <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'שווי שוק' : 'Mkt Cap'}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: c.muted }}>{formatMcap(stock.marketCap)}</div>
+                  </div>
+                  {buzz
+                    ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, background: isOpen ? '#097c3e' : (dark ? '#1a2a1a' : '#eaf3de'), border: `1px solid ${isOpen ? '#097c3e' : (dark ? '#2a4a2a' : '#c3e6cb')}` }}>
+                        <span style={{ fontSize: 13 }}>🔥</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: isOpen ? 'white' : '#097c3e' }}>{buzz.score}/10</span>
+                        <span style={{ fontSize: 10, color: isOpen ? 'rgba(255,255,255,0.8)' : c.muted }}>{isOpen ? '▲' : '▼'}</span>
+                      </div>
+                    : <div style={{ width: 80 }} />}
+                </div>
+              </div>
+
+              {/* Buzz expansion panel */}
+              {isOpen && buzz && (
+                <div style={{ background: dark ? '#0e1a0e' : '#f0f8f0', borderBottom: `1px solid ${c.border}`, borderLeft: `3px solid #097c3e`, padding: '16px 24px' }}>
+                  <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    {/* Sentiment bars */}
+                    <div style={{ minWidth: 200 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10 }}>{lang === 'he' ? 'סנטימנט' : 'Sentiment'}</div>
+                      {[
+                        { label: lang === 'he' ? 'רדיט' : 'Reddit', pct: buzz.reddit_bullish_pct, count: buzz.reddit_count },
+                        { label: 'StockTwits', pct: buzz.stocktwits_bullish_pct, count: buzz.stocktwits_count },
+                      ].map(row => (
+                        <div key={row.label} style={{ marginBottom: 10 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: c.muted, marginBottom: 4 }}>
+                            <span>{row.label} ({row.count})</span>
+                            <span style={{ color: row.pct >= 50 ? '#097c3e' : '#c0392b', fontWeight: 700 }}>{row.pct}% bullish</span>
+                          </div>
+                          <div style={{ height: 6, borderRadius: 3, background: dark ? '#2a2a3e' : '#e0e0e0', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${row.pct}%`, background: row.pct >= 50 ? '#097c3e' : '#c0392b', borderRadius: 3 }} />
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ fontSize: 11, color: c.muted, marginTop: 8 }}>
+                        {lang === 'he' ? 'סה"כ אזכורים:' : 'Total mentions:'} <strong style={{ color: c.text }}>{buzz.total_count}</strong>
+                      </div>
                     </div>
-                  : <div style={{ minWidth: 50 }} />}
-                <div style={{ textAlign: 'center', minWidth: 65 }}>
-                  <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'שווי שוק' : 'Mkt Cap'}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: c.muted }}>{formatMcap(stock.marketCap)}</div>
+
+                    {/* Quotes */}
+                    {buzz.quotes && buzz.quotes.length > 0 && (
+                      <div style={{ flex: 1, minWidth: 280 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, marginBottom: 10 }}>{lang === 'he' ? 'ציטוטים' : 'Top mentions'}</div>
+                        {buzz.quotes.slice(0, 3).map((q, qi) => (
+                          <div key={qi} style={{ background: dark ? '#1a2a1a' : 'white', border: `1px solid ${dark ? '#2a3a2a' : '#d4edda'}`, borderRadius: 8, padding: '10px 14px', marginBottom: 8 }}>
+                            <div style={{ fontSize: 12, color: c.text, lineHeight: 1.5 }}>"{q.text}"</div>
+                            <div style={{ fontSize: 10, color: c.muted, marginTop: 6 }}>
+                              <span style={{ background: q.source === 'reddit' ? '#ff4500' : '#1da1f2', color: 'white', padding: '1px 6px', borderRadius: 4, marginRight: 6, fontSize: 9 }}>{q.source}</span>
+                              {q.sentiment === 'bullish' ? '🟢' : q.sentiment === 'bearish' ? '🔴' : '⚪'} {q.sentiment}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )
         })}
