@@ -171,12 +171,44 @@ export async function getServerSideProps() {
   }
   const totalScans = unique.length
 
-  return { props: { scans: unique, appearanceCounts, totalScans } }
+  // Build Hall of Fame — oldest week first for the dot timeline
+  const weekLabelsOldestFirst = [...unique].reverse().map(s => s.week_label)
+  const tickerStats = {}
+  for (const scan of unique) {
+    const weekIndex = weekLabelsOldestFirst.indexOf(scan.week_label)
+    for (const stock of scan.stocks || []) {
+      if (!tickerStats[stock.ticker]) {
+        tickerStats[stock.ticker] = {
+          ticker: stock.ticker,
+          name: stock.name,
+          marketCap: stock.market_cap,
+          appearances: 0,
+          totalGain: 0,
+          bestGain: 0,
+          buzzScore: 0,
+          weekPresence: Array(totalScans).fill(false),
+        }
+      }
+      const d = tickerStats[stock.ticker]
+      d.appearances++
+      d.totalGain += stock.change_pct
+      d.bestGain = Math.max(d.bestGain, stock.change_pct)
+      d.marketCap = stock.market_cap
+      if (stock.buzz && stock.buzz.score > 0) d.buzzScore = stock.buzz.score
+      if (weekIndex >= 0) d.weekPresence[weekIndex] = true
+    }
+  }
+  const hallOfFame = Object.values(tickerStats)
+    .map(d => ({ ...d, avgGain: Math.round(d.totalGain / d.appearances * 10) / 10 }))
+    .sort((a, b) => b.appearances - a.appearances || b.avgGain - a.avgGain)
+
+  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
+  const [tab, setTab] = useState('weekly')
   const [selectedWeek, setSelectedWeek] = useState(0)
   const [openStock, setOpenStock] = useState(null)
   const [marketCapInput, setMarketCapInput] = useState('250')
@@ -253,6 +285,21 @@ export default function Dashboard({ scans, appearanceCounts, totalScans }) {
           {saveMsg && <span style={{ fontSize: 13, color: '#097c3e' }}>{saveMsg}</span>}
         </div>
 
+        {/* Tab switcher */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+          {[['weekly', `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`], ['hof', '🏆 Hall of Fame']].map(([key, label]) => (
+            <button key={key} onClick={() => setTab(key)} style={{ padding: '9px 22px', borderRadius: 22, border: `1px solid ${tab === key ? '#097c3e' : c.border}`, background: tab === key ? '#097c3e' : c.card, color: tab === key ? 'white' : c.muted, fontWeight: 700, cursor: 'pointer', fontSize: 14, transition: 'all 0.15s' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'hof' && (
+          <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} />
+        )}
+
+        {tab === 'weekly' && (<>
+
         {/* Stats chips — colors match trend column (appearance %) */}
         {stocks.length > 0 && (() => {
           const pct = s => totalScans > 0 ? (appearanceCounts[s.ticker] || 0) / totalScans * 100 : 0
@@ -322,6 +369,122 @@ export default function Dashboard({ scans, appearanceCounts, totalScans }) {
             </div>
           </div>
         )}
+
+        </>)}
+      </div>
+    </div>
+  )
+}
+
+function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang }) {
+  const medals = ['🥇', '🥈', '🥉']
+  const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
+  const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{ background: dark ? '#12122a' : '#1a1a2e', borderRadius: '12px 12px 0 0', padding: '20px 24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 28 }}>🏆</span>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: 'white' }}>Hall of Fame</div>
+            <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>
+              {lang === 'he'
+                ? `כל המניות שהופיעו ב-${totalScans} הסריקות — מדורגות לפי עקביות`
+                : `All stocks across ${totalScans} scans — ranked by consistency`}
+            </div>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 16 }}>
+            {weekLabels.map((w, i) => (
+              <div key={i} style={{ fontSize: 10, color: '#666', textAlign: 'center', writingMode: 'vertical-rl', transform: 'rotate(180deg)', lineHeight: 1.2 }}>{w.split('-')[1] || w}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div style={{ background: dark ? '#0f0f1a' : '#f5f5f5', padding: '8px 24px', display: 'flex', gap: 20, alignItems: 'center', borderLeft: `1px solid ${c.border}`, borderRight: `1px solid ${c.border}` }}>
+        <span style={{ fontSize: 11, color: c.muted }}>{lang === 'he' ? 'ציר שבועות:' : 'Week timeline:'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#097c3e' }} />
+          <span style={{ fontSize: 11, color: c.muted }}>{lang === 'he' ? 'הופיעה' : 'appeared'}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: dark ? '#2a2a3e' : '#e0e0e0', border: `1px solid ${dark ? '#3a3a4e' : '#ccc'}` }} />
+          <span style={{ fontSize: 11, color: c.muted }}>{lang === 'he' ? 'לא הופיעה' : 'absent'}</span>
+        </div>
+      </div>
+
+      {/* Rows */}
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 12px 12px', overflow: 'hidden' }}>
+        {hallOfFame.map((stock, i) => {
+          const pct = Math.round(stock.appearances / totalScans * 100)
+          const isTop3 = i < 3
+          const badgeColor = pct > 70 ? '#097c3e' : pct > 30 ? '#cc8800' : c.muted
+          const badgeBg = pct > 70 ? (dark ? '#1a3a1a' : '#EAF3DE') : pct > 30 ? (dark ? '#3a2a0a' : '#FAEEDA') : (dark ? '#2a2a3e' : '#f0f0f0')
+
+          return (
+            <div key={stock.ticker} style={{
+              display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px',
+              borderBottom: `1px solid ${c.border}`,
+              background: isTop3 ? (dark ? medalBg[i].replace('#', '#') : medalBg[i]) : (i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa')),
+              borderLeft: isTop3 ? `3px solid ${medalBorder[i]}` : '3px solid transparent',
+            }}>
+              {/* Rank */}
+              <div style={{ width: 32, textAlign: 'center', flexShrink: 0 }}>
+                {isTop3
+                  ? <span style={{ fontSize: 20 }}>{medals[i]}</span>
+                  : <span style={{ fontSize: 13, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
+              </div>
+
+              {/* Ticker + name */}
+              <div style={{ width: 150, flexShrink: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{stock.ticker}</div>
+                <div style={{ fontSize: 10, color: c.muted, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 145 }}>{stock.name}</div>
+              </div>
+
+              {/* Dot timeline */}
+              <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexShrink: 0 }}>
+                {stock.weekPresence.map((appeared, wi) => (
+                  <div key={wi} title={weekLabels[wi]} style={{
+                    width: 13, height: 13, borderRadius: '50%',
+                    background: appeared ? '#097c3e' : (dark ? '#2a2a3e' : '#e8e8e8'),
+                    border: `2px solid ${appeared ? '#097c3e' : (dark ? '#3a3a4e' : '#d0d0d0')}`,
+                    boxShadow: appeared ? '0 0 4px rgba(9,124,62,0.4)' : 'none',
+                  }} />
+                ))}
+              </div>
+
+              {/* Appearance badge */}
+              <span style={{ background: badgeBg, color: badgeColor, padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+                {stock.appearances}/{totalScans}
+              </span>
+
+              {/* Stats */}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 24, alignItems: 'center' }}>
+                <div style={{ textAlign: 'center', minWidth: 60 }}>
+                  <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'ממוצע' : 'Avg'}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#097c3e' }}>+{stock.avgGain}%</div>
+                </div>
+                <div style={{ textAlign: 'center', minWidth: 60 }}>
+                  <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'שיא' : 'Best'}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#097c3e' }}>+{stock.bestGain}%</div>
+                </div>
+                {stock.buzzScore > 0
+                  ? <div style={{ textAlign: 'center', minWidth: 50 }}>
+                      <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'באז' : 'Buzz'}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: stock.buzzScore >= 7 ? '#097c3e' : stock.buzzScore >= 4 ? '#cc8800' : c.muted }}>{stock.buzzScore}/10</div>
+                    </div>
+                  : <div style={{ minWidth: 50 }} />}
+                <div style={{ textAlign: 'center', minWidth: 65 }}>
+                  <div style={{ fontSize: 10, color: c.muted, marginBottom: 2 }}>{lang === 'he' ? 'שווי שוק' : 'Mkt Cap'}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: c.muted }}>{formatMcap(stock.marketCap)}</div>
+                </div>
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
