@@ -244,15 +244,21 @@ export default function Dashboard({ scans, appearanceCounts, totalScans }) {
           {saveMsg && <span style={{ fontSize: 13, color: '#097c3e' }}>{saveMsg}</span>}
         </div>
 
-        {/* Stats chips */}
-        {stocks.length > 0 && (
-          <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
-            <Chip label={`${stocks.filter(s => s.streak >= 2).length} ${t.returning}`} bg={dark ? '#1a3a1a' : '#EAF3DE'} color={dark ? '#7dcc7d' : '#27500A'} />
-            <Chip label={`${stocks.filter(s => s.streak >= 3).length} ${t.threeWeeks}`} bg={dark ? '#3a2a0a' : '#FAEEDA'} color={dark ? '#ffcc66' : '#633806'} />
-            <Chip label={`${stocks.filter(s => s.streak >= 4).length} ${t.fourPlus}`} bg={dark ? '#3a0a0a' : '#FCEBEB'} color={dark ? '#ff8888' : '#791F1F'} />
-            <Chip label={`${stocks.length} ${t.stocks}`} bg={c.chipBg} color={c.muted} />
-          </div>
-        )}
+        {/* Stats chips — colors match trend column (appearance %) */}
+        {stocks.length > 0 && (() => {
+          const pct = s => totalScans > 0 ? (appearanceCounts[s.ticker] || 0) / totalScans * 100 : 0
+          const greenCount  = stocks.filter(s => pct(s) > 70).length
+          const yellowCount = stocks.filter(s => pct(s) > 30 && pct(s) <= 70).length
+          const redCount    = stocks.filter(s => pct(s) <= 30).length
+          return (
+            <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+              <Chip label={`${greenCount} ${t.returning}`}  bg={dark ? '#1a3a1a' : '#EAF3DE'} color={dark ? '#7dcc7d' : '#27500A'} />
+              <Chip label={`${yellowCount} ${t.threeWeeks}`} bg={dark ? '#3a2a0a' : '#FAEEDA'} color={dark ? '#ffcc66' : '#633806'} />
+              <Chip label={`${redCount} ${t.fourPlus}`}     bg={dark ? '#3a0a0a' : '#FCEBEB'} color={dark ? '#ff8888' : '#791F1F'} />
+              <Chip label={`${stocks.length} ${t.stocks}`}  bg={c.chipBg} color={c.muted} />
+            </div>
+          )
+        })()}
 
         {/* Main table */}
         <div style={{ background: c.card, borderRadius: 12, border: `1px solid ${c.border}`, overflow: 'hidden', marginBottom: 20 }}>
