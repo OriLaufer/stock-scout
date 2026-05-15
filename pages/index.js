@@ -46,6 +46,9 @@ const T = {
     new: 'חדשה',
     weeks: 'שבועות',
     appearances: 'הופעות',
+    frequent: 'תכופות',
+    occasional: 'מדי פעם',
+    rare: 'נדירות',
     rank: '#',
     stock: 'מנייה',
     gain: 'עלייה',
@@ -94,6 +97,9 @@ const T = {
     new: 'New',
     weeks: 'weeks',
     appearances: 'appearances',
+    frequent: 'frequent',
+    occasional: 'occasional',
+    rare: 'rare',
     rank: '#',
     stock: 'Stock',
     gain: 'Gain',
@@ -239,14 +245,19 @@ export default function Dashboard({ scans, appearanceCounts, totalScans }) {
         </div>
 
         {/* Stats chips */}
-        {stocks.length > 0 && (
-          <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
-            <Chip label={`${stocks.filter(s => s.streak >= 2).length} ${t.returning}`} bg={dark ? '#1a3a1a' : '#EAF3DE'} color={dark ? '#7dcc7d' : '#27500A'} />
-            <Chip label={`${stocks.filter(s => s.streak >= 3).length} ${t.threeWeeks}`} bg={dark ? '#3a2a0a' : '#FAEEDA'} color={dark ? '#ffcc66' : '#633806'} />
-            <Chip label={`${stocks.filter(s => s.streak >= 4).length} ${t.fourPlus}`} bg={dark ? '#3a0a0a' : '#FCEBEB'} color={dark ? '#ff8888' : '#791F1F'} />
-            <Chip label={`${stocks.length} ${t.stocks}`} bg={c.chipBg} color={c.muted} />
-          </div>
-        )}
+        {stocks.length > 0 && (() => {
+          const greenCount = stocks.filter(s => (appearanceCounts[s.ticker] || 0) / totalScans > 0.7).length
+          const yellowCount = stocks.filter(s => { const p = (appearanceCounts[s.ticker] || 0) / totalScans; return p >= 0.3 && p <= 0.7 }).length
+          const redCount = stocks.filter(s => (appearanceCounts[s.ticker] || 0) / totalScans < 0.3).length
+          return (
+            <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+              <Chip label={`🟢 ${greenCount} ${t.frequent}`} bg={dark ? '#1a3a1a' : '#EAF3DE'} color={dark ? '#7dcc7d' : '#27500A'} />
+              <Chip label={`🟡 ${yellowCount} ${t.occasional}`} bg={dark ? '#3a2a0a' : '#FAEEDA'} color={dark ? '#ffcc66' : '#633806'} />
+              <Chip label={`🔴 ${redCount} ${t.rare}`} bg={dark ? '#3a0a0a' : '#FCEBEB'} color={dark ? '#ff8888' : '#791F1F'} />
+              <Chip label={`${stocks.length} ${t.stocks}`} bg={c.chipBg} color={c.muted} />
+            </div>
+          )
+        })()}
 
         {/* Main table */}
         <div style={{ background: c.card, borderRadius: 12, border: `1px solid ${c.border}`, overflow: 'hidden', marginBottom: 20 }}>
