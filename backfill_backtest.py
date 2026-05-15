@@ -102,6 +102,7 @@ def main():
 
     updated = 0
     skipped = 0
+    all_entries = []
 
     for i in range(len(processed) - 1):
         this = processed[i]
@@ -154,21 +155,27 @@ def main():
         }
         print(f"  ✓ {wins}/{len(valid)} wins  |  avg {avg:+.2f}%")
 
+        all_entries.append(bt_entry)
+        updated += 1
+
+    # Save ALL backtest weeks as a single record in ticker_buzz table
+    # Uses existing table — no new schema needed
+    if all_entries:
         try:
-            # Upsert into dedicated backtest_results table (avoids RLS on weekly_scans)
-            resp = supabase.table("backtest_results").upsert({
-                "week_label": this["week_label"],
-                "result_json": json.dumps(bt_entry),
-                "updated_at":  datetime.utcnow().isoformat(),
+            resp = supabase.table("ticker_buzz").upsert({
+                "ticker":     "__BACKTEST__",
+                "buzz_json":  json.dumps(all_entries),
+                "updated_at": datetime.utcnow().isoformat(),
             }).execute()
             rows = len(resp.data) if resp.data else 0
-            print(f"  Supabase upsert backtest_results: {rows} row(s)")
-            updated += 1
+            print(f"\nSaved {len(all_entries)} weeks to ticker_buzz.__BACKTEST__ ({rows} row affected)")
         except Exception as e:
-            print(f"  Supabase save error: {e}")
+            print(f"\nSupabase save error: {e}")
+    else:
+        print("\nNo entries to save.")
 
     print(f"\n{'='*55}")
-    print(f"Done — {updated} scans updated, {skipped} skipped")
+    print(f"Done — {updated} weeks computed, {skipped} skipped")
     print(f"{'='*55}")
 
 

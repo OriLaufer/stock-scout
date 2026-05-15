@@ -251,32 +251,36 @@ export async function getServerSideProps() {
     }
   } catch {}
 
-  // Backtest: read from dedicated backtest_results table (written by backfill + weekly scanner)
-  // Merge with any backtest stored directly in scan JSON (future scans from scanner.py)
-  const backtestByWeek = {}
-
-  // 1. From scan JSON (new scans written by scanner.py going forward)
-  for (const scan of unique) {
-    if (scan.backtest) backtestByWeek[scan.week_label] = scan.backtest
-  }
-
-  // 2. From backtest_results table (written by backfill script)
-  try {
-    const { data: btRows } = await supabase.from('backtest_results').select('*')
-    for (const row of btRows || []) {
-      try {
-        const bt = typeof row.result_json === 'string' ? JSON.parse(row.result_json) : row.result_json
-        if (bt && !backtestByWeek[row.week_label]) backtestByWeek[row.week_label] = bt
-      } catch {}
-    }
-  } catch {}
-
-  // Sort by week date (oldest first) to compute compound return correctly
+  // Backtest: stored in ticker_buzz table under special key "__BACKTEST__"
+  // Written by backfill_backtest.py and weekly scanner.py
   function parseWeekEndDate(label) {
-    const m = label.match(/(\d{2})\.(\d{2})\.(\d{4})$/)
+    const m = (label || '').match(/(\d{2})\.(\d{2})\.(\d{4})$/)
     if (!m) return new Date(0)
     return new Date(`${m[3]}-${m[2]}-${m[1]}`)
   }
+
+  const backtestByWeek = {}
+
+  // From scan JSON (scanner.py stores per-scan backtest going forward)
+  for (const scan of unique) {
+    if (scan.backtest) backtestByWeek[scan.backtest.week] = scan.backtest
+  }
+
+  // From ticker_buzz.__BACKTEST__ (written by backfill script)
+  try {
+    const { data: btRow } = await supabase
+      .from('ticker_buzz')
+      .select('buzz_json')
+      .eq('ticker', '__BACKTEST__')
+      .single()
+    if (btRow?.buzz_json) {
+      const entries = typeof btRow.buzz_json === 'string' ? JSON.parse(btRow.buzz_json) : btRow.buzz_json
+      for (const bt of (entries || [])) {
+        if (bt?.week && !backtestByWeek[bt.week]) backtestByWeek[bt.week] = bt
+      }
+    }
+  } catch {}
+
   const realBacktestWeeks = Object.values(backtestByWeek)
     .sort((a, b) => parseWeekEndDate(a.week) - parseWeekEndDate(b.week))
 
