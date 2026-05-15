@@ -228,22 +228,6 @@ export async function getServerSideProps() {
     if (opps > 0) winRateByTicker[ticker] = { wins, opps, pct: Math.round(wins / opps * 100) }
   }
 
-  // Sector data for current week's stocks (one Yahoo Finance batch call, server-side)
-  const sectorByTicker = {}
-  try {
-    const syms = (unique[0]?.stocks || []).slice(0, 20).map(s => s.ticker).join(',')
-    if (syms) {
-      const yRes = await fetch(
-        `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${syms}&fields=sector,industry`,
-        { headers: { 'User-Agent': 'Mozilla/5.0' } }
-      )
-      const yData = await yRes.json()
-      for (const r of yData?.quoteResponse?.result || []) {
-        if (r.symbol && r.sector) sectorByTicker[r.symbol] = { sector: r.sector, industry: r.industry || '' }
-      }
-    }
-  } catch {}
-
   // Collect best buzz data per ticker from any scan that has it
   const buzzByTicker = {}
   for (const scan of unique) {
@@ -267,10 +251,10 @@ export async function getServerSideProps() {
     }
   } catch {}
 
-  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, sectorByTicker } }
+  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, sectorByTicker }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -280,6 +264,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [sectorFilter, setSectorFilter] = useState(null)
+  const [sectorData, setSectorData] = useState({})
   const [watchlist, setWatchlist] = useState([])
   const [addingToWatchlist, setAddingToWatchlist] = useState(null)
   const [entryPriceInput, setEntryPriceInput] = useState({})
@@ -295,6 +280,16 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
       if (stored) setWatchlist(JSON.parse(stored))
     } catch {}
   }, [])
+
+  // Fetch sector data client-side for current week's stocks
+  useEffect(() => {
+    const tickers = (scans[0]?.stocks || []).map(s => s.ticker).join(',')
+    if (!tickers) return
+    fetch(`/api/sectors?tickers=${tickers}`)
+      .then(r => r.json())
+      .then(d => setSectorData(d.sectors || {}))
+      .catch(() => {})
+  }, [scans])
 
   function saveWatchlist(list) {
     setWatchlist(list)
@@ -398,8 +393,8 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         {tab === 'weekly' && (<>
 
         {/* Sector rotation heatmap */}
-        {sectorByTicker && Object.keys(sectorByTicker).length > 0 && (
-          <SectorHeatmap sectorByTicker={sectorByTicker} stocks={stocks} c={c} dark={dark} sectorFilter={sectorFilter} setSectorFilter={setSectorFilter} lang={lang} />
+        {sectorData && Object.keys(sectorData).length > 0 && (
+          <SectorHeatmap sectorData={sectorData} stocks={stocks} c={c} dark={dark} sectorFilter={sectorFilter} setSectorFilter={setSectorFilter} lang={lang} />
         )}
 
         {/* Stats chips — colors match trend column (appearance %) */}
@@ -432,7 +427,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
                 </tr>
               </thead>
               <tbody>
-                {stocks.filter(s => !sectorFilter || sectorByTicker[s.ticker]?.sector === sectorFilter).map((stock, i) => {
+                {stocks.filter(s => !sectorFilter || sectorData[s.ticker]?.sector === sectorFilter).map((stock, i) => {
                   return (<>
                     <StockRow key={stock.ticker} stock={stock} rank={i + 1} isOpen={openStock === stock.ticker}
                       onClick={() => setOpenStock(openStock === stock.ticker ? null : stock.ticker)} c={c} t={t} dark={dark}
@@ -1030,10 +1025,10 @@ const SECTOR_ICONS = {
   'Biotechnology': '🧬',
 }
 
-function SectorHeatmap({ sectorByTicker, stocks, c, dark, sectorFilter, setSectorFilter, lang }) {
+function SectorHeatmap({ sectorData, stocks, c, dark, sectorFilter, setSectorFilter, lang }) {
   const counts = {}
   for (const s of stocks) {
-    const sec = sectorByTicker[s.ticker]?.sector
+    const sec = sectorData[s.ticker]?.sector
     if (sec) counts[sec] = (counts[sec] || 0) + 1
   }
   const sectors = Object.entries(counts).sort((a, b) => b[1] - a[1])
