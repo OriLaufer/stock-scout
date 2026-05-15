@@ -404,7 +404,7 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
   const medals = ['🥇', '🥈', '🥉']
   const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
-  const [openBuzz, setOpenBuzz] = React.useState(null)
+  const [openBuzz, setOpenBuzz] = useState(null)
 
   function dotStyle(gain) {
     if (gain === null) return {
