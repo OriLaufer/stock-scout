@@ -586,64 +586,107 @@ function BacktestCard({ backtest, c, dark, lang }) {
         ))}
       </div>
 
-      {/* Week-by-week breakdown */}
-      {expanded && (
-        <div style={{ padding: '16px 22px' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 12 }}>
-            {he ? 'שבוע-אחר-שבוע — ביצועי מחיר אמיתיים' : 'Week-by-week — actual price performance'}
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: c.thead }}>
-                  <th style={{ padding: '8px 12px', textAlign: 'left', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'שבוע' : 'Week'}</th>
-                  <th style={{ padding: '8px 12px', textAlign: 'left', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'הטופ 5 שנבחרו → ביצוע שבוע הבא' : 'Top 5 Picked → Next Week Performance'}</th>
-                  <th style={{ padding: '8px 12px', textAlign: 'center', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'עלו' : 'Wins'}</th>
-                  <th style={{ padding: '8px 12px', textAlign: 'right', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'ממוצע' : 'Avg'}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bt.weeks.map((w, wi) => {
-                  const rowColor = w.wins >= 4 ? '#097c3e' : w.wins >= 3 ? '#cc8800' : '#c0392b'
-                  const avgSign = w.avg_gain >= 0 ? '+' : ''
+      {/* Expanded details */}
+      {expanded && (() => {
+        // Flatten all individual picks for analysis
+        const allPicks = bt.weeks.flatMap(w => w.picks.filter(p => p.actual_gain != null))
+        const bigWins  = [...allPicks].filter(p => p.actual_gain >= 30).sort((a, b) => b.actual_gain - a.actual_gain)
+        const dist = [
+          { label: he ? '50%+ 🚀' : '50%+ 🚀', min: 50,  picks: allPicks.filter(p => p.actual_gain >= 50) },
+          { label: he ? '20-50% 🟢' : '20–50% 🟢', min: 20,  picks: allPicks.filter(p => p.actual_gain >= 20 && p.actual_gain < 50) },
+          { label: he ? '0-20% 📈' : '0–20% 📈', min: 0,   picks: allPicks.filter(p => p.actual_gain >= 0  && p.actual_gain < 20) },
+          { label: he ? 'ירידה 🔴' : 'Loss 🔴',   min: null, picks: allPicks.filter(p => p.actual_gain < 0) },
+        ]
+        return (
+          <div style={{ borderTop: `1px solid ${c.border}` }}>
+
+            {/* Big wins spotlight */}
+            {bigWins.length > 0 && (
+              <div style={{ padding: '20px 22px', borderBottom: `1px solid ${c.border}`, background: dark ? '#0a1f0a' : '#f0faf4' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#097c3e', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 14 }}>
+                  🚀 {he ? `${bigWins.length} מניות שעשו 30%+ בשבוע אחרי שנבחרו` : `${bigWins.length} picks that surged 30%+ the following week`}
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {bigWins.slice(0, 8).map((p, i) => (
+                    <div key={i} style={{ background: dark ? '#0f2e18' : 'white', border: `2px solid #097c3e`, borderRadius: 10, padding: '12px 16px', minWidth: 120, textAlign: 'center' }}>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{p.ticker}</div>
+                      <div style={{ fontSize: 22, fontWeight: 900, color: '#097c3e', marginTop: 4 }}>+{p.actual_gain}%</div>
+                      <div style={{ fontSize: 10, color: c.muted, marginTop: 3 }}>{he ? 'שבוע לאחר בחירה' : 'week after pick'}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Distribution bar */}
+            <div style={{ padding: '18px 22px', borderBottom: `1px solid ${c.border}` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 14 }}>
+                {he ? 'פיזור ביצועים — כל הבחירות' : 'Performance distribution — all picks'}
+              </div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {dist.map((d, i) => {
+                  const pct = allPicks.length > 0 ? Math.round(d.picks.length / allPicks.length * 100) : 0
+                  const colors = ['#097c3e', '#27ae60', '#cc8800', '#c0392b']
+                  const bgs    = [dark ? '#0f2e18' : '#eafaf1', dark ? '#1a3a1a' : '#d5f5e3', dark ? '#3a2a0a' : '#fef9e7', dark ? '#3a1a1a' : '#fdedec']
                   return (
-                    <tr key={wi} style={{ borderBottom: `1px solid ${c.border}`, background: wi % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa') }}>
-                      <td style={{ padding: '9px 12px', color: c.muted, fontSize: 11, whiteSpace: 'nowrap' }}>{w.week}</td>
-                      <td style={{ padding: '9px 12px' }}>
-                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                          {w.picks.map((p, pi) => {
-                            const actual = p.actual_gain
-                            const pColor = actual == null ? c.muted : actual > 0 ? '#097c3e' : actual < 0 ? '#c0392b' : c.muted
-                            const pBg    = actual == null ? c.chipBg : actual > 0 ? (dark ? '#1a3a1a' : '#EAF3DE') : actual < 0 ? (dark ? '#3a1a1a' : '#FCEBEB') : c.chipBg
-                            const label  = actual == null ? '—' : `${actual >= 0 ? '+' : ''}${actual}%`
-                            return (
-                              <span key={pi} title={`${p.ticker}: selected at +${p.prev_gain}% → actual next week: ${label}`}
-                                style={{ background: pBg, color: pColor, padding: '2px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
-                                {p.ticker} <span style={{ fontWeight: 400, fontSize: 10 }}>{label}</span>
-                              </span>
-                            )
-                          })}
-                        </div>
-                      </td>
-                      <td style={{ padding: '9px 12px', textAlign: 'center' }}>
-                        <span style={{ fontWeight: 800, fontSize: 13, color: rowColor }}>{w.wins}/{w.total}</span>
-                      </td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, fontSize: 13, color: w.avg_gain >= 0 ? '#097c3e' : '#c0392b' }}>
-                        {avgSign}{w.avg_gain}%
-                      </td>
-                    </tr>
+                    <div key={i} style={{ flex: 1, minWidth: 110, background: bgs[i], border: `1px solid ${colors[i]}33`, borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: colors[i], marginBottom: 6 }}>{d.label}</div>
+                      <div style={{ fontSize: 26, fontWeight: 900, color: colors[i] }}>{d.picks.length}</div>
+                      <div style={{ fontSize: 11, color: c.muted, marginTop: 4 }}>{pct}% {he ? 'מהבחירות' : 'of picks'}</div>
+                    </div>
                   )
                 })}
-              </tbody>
-            </table>
+              </div>
+            </div>
+
+            {/* Week-by-week table */}
+            <div style={{ padding: '18px 22px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 12 }}>
+                {he ? 'שבוע-אחר-שבוע' : 'Week-by-week'}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {bt.weeks.map((w, wi) => {
+                  const avgSign = w.avg_gain >= 0 ? '+' : ''
+                  const avgColor2 = w.avg_gain >= 20 ? '#097c3e' : w.avg_gain >= 0 ? '#27ae60' : '#c0392b'
+                  return (
+                    <div key={wi} style={{ background: dark ? '#141428' : '#fafafa', border: `1px solid ${c.border}`, borderRadius: 10, padding: '12px 16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                        <span style={{ fontSize: 11, color: c.muted, fontWeight: 600 }}>{w.week}</span>
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                          <span style={{ fontSize: 11, color: c.muted }}>{w.wins}/{w.total} {he ? 'עלו' : 'wins'}</span>
+                          <span style={{ fontSize: 16, fontWeight: 800, color: avgColor2 }}>{avgSign}{w.avg_gain}%</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {w.picks.map((p, pi) => {
+                          const g = p.actual_gain
+                          const huge = g != null && g >= 50
+                          const good = g != null && g >= 20
+                          const pos  = g != null && g > 0
+                          const pColor = g == null ? c.muted : huge ? '#097c3e' : good ? '#27ae60' : pos ? '#7dcc7d' : '#c0392b'
+                          const pBg   = g == null ? c.chipBg : huge ? (dark ? '#0f2e18' : '#d5f5e3') : good ? (dark ? '#1a3a1a' : '#eafaf1') : pos ? (dark ? '#1a2a1a' : '#f0faf4') : (dark ? '#3a1a1a' : '#fdedec')
+                          const pBorder = huge ? '2px solid #097c3e' : `1px solid ${c.border}`
+                          const label = g == null ? '—' : `${g >= 0 ? '+' : ''}${g}%`
+                          return (
+                            <div key={pi} style={{ background: pBg, border: pBorder, borderRadius: 8, padding: '6px 11px', textAlign: 'center' }}>
+                              <div style={{ fontSize: 12, fontWeight: 800, color: c.text }}>{p.ticker}</div>
+                              <div style={{ fontSize: 13, fontWeight: 900, color: pColor, marginTop: 2 }}>{label}</div>
+                              {huge && <div style={{ fontSize: 9, color: '#097c3e', marginTop: 1 }}>🚀</div>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+              <div style={{ fontSize: 10, color: c.muted, marginTop: 14 }}>
+                * {he ? 'ביצועי עבר אינם מבטיחים ביצועי עתיד.' : 'Past performance does not guarantee future results.'}
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize: 10, color: c.muted, marginTop: 10 }}>
-            * {he
-              ? 'נתונים אמיתיים — המחיר בסגירת יום שישי הבא מחושב מ-yfinance בזמן הסריקה. ביצועי עבר אינם מבטיחים ביצועי עתיד.'
-              : 'Real data — next Friday close fetched from yfinance during the weekly scan. Past performance ≠ future results.'}
-          </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
