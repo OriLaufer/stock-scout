@@ -310,9 +310,14 @@ function Chip({ label, bg, color }) {
   return <span style={{ background: bg, color, padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{label}</span>
 }
 
+function formatMcap(market_cap) {
+  if (!market_cap) return 'N/A'
+  if (market_cap >= 1_000_000_000) return `$${(market_cap / 1_000_000_000).toFixed(1)}B`
+  return `$${Math.round(market_cap / 1_000_000)}M`
+}
+
 function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans }) {
   const buzz = stock.buzz || {}
-  const mcapB = (stock.market_cap / 1_000_000_000).toFixed(1)
 
   const count = appearanceCount || 1
   const pct = totalScans > 0 ? (count / totalScans) * 100 : 0
@@ -340,7 +345,7 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
       <td style={{ padding: '11px 14px' }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: '#097c3e' }}>+{stock.change_pct}%</span>
       </td>
-      <td style={{ padding: '11px 14px', color: c.muted, fontSize: 13 }}>${mcapB}B</td>
+      <td style={{ padding: '11px 14px', color: c.muted, fontSize: 13 }}>{formatMcap(stock.market_cap)}</td>
       <td style={{ padding: '11px 14px', textAlign: 'center' }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: buzzColor }}>{buzzScore}/10</div>
       </td>
@@ -543,7 +548,7 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
 
       {/* Market data */}
       <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-        <MetaCard label={t.mktCap} value={`$${(stock.market_cap / 1_000_000_000).toFixed(1)}B`} c={c} />
+        <MetaCard label={t.mktCap} value={formatMcap(stock.market_cap)} c={c} />
         <MetaCard label={t.price} value={`$${stock.price?.toFixed(2) || 'N/A'}`} c={c} />
         <MetaCard label={t.volume} value={stock.volume ? `${(stock.volume / 1_000_000).toFixed(0)}M` : 'N/A'} c={c} />
         <MetaCard label={t.buzzScore} value={buzzScore > 0 ? `${buzzScore}/10` : '—'} c={c} />
