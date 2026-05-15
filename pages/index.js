@@ -226,6 +226,17 @@ export async function getServerSideProps() {
     }
   }
 
+  // Overlay on-demand buzz fetched via the buzz-on-demand workflow (ticker_buzz table)
+  try {
+    const { data: tickerBuzzRows } = await supabase.from('ticker_buzz').select('*')
+    for (const row of tickerBuzzRows || []) {
+      try {
+        const buzz = typeof row.buzz_json === 'string' ? JSON.parse(row.buzz_json) : row.buzz_json
+        if (buzz && buzz.score > 0) buzzByTicker[row.ticker] = buzz
+      } catch {}
+    }
+  } catch {}
+
   return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker } }
 }
 
@@ -405,6 +416,21 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
   const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
   const [openBuzz, setOpenBuzz] = useState(null)
+  const [loadingBuzz, setLoadingBuzz] = useState({})
+
+  async function handleGetBuzz(stock) {
+    setLoadingBuzz(prev => ({ ...prev, [stock.ticker]: 'loading' }))
+    try {
+      await fetch('/api/trigger-buzz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker: stock.ticker, name: stock.name, market_cap: stock.marketCap }),
+      })
+      setLoadingBuzz(prev => ({ ...prev, [stock.ticker]: 'done' }))
+    } catch {
+      setLoadingBuzz(prev => ({ ...prev, [stock.ticker]: 'error' }))
+    }
+  }
 
   function dotStyle(gain) {
     if (gain === null) return {
@@ -546,7 +572,24 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                         <span style={{ fontSize: 13, fontWeight: 700, color: isOpen ? 'white' : '#097c3e' }}>{buzz.score}/10</span>
                         <span style={{ fontSize: 10, color: isOpen ? 'rgba(255,255,255,0.8)' : c.muted }}>{isOpen ? '▲' : '▼'}</span>
                       </div>
-                    : <div style={{ width: 80 }} />}
+                    : (() => {
+                        const bState = loadingBuzz[stock.ticker]
+                        return (
+                          <button
+                            onClick={e => { e.stopPropagation(); if (!bState) handleGetBuzz(stock) }}
+                            disabled={!!bState}
+                            style={{
+                              padding: '5px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: bState ? 'default' : 'pointer',
+                              border: `1px solid ${bState === 'done' ? '#097c3e' : bState === 'error' ? '#c0392b' : (dark ? '#3a3a5e' : '#ccc')}`,
+                              background: bState === 'done' ? (dark ? '#1a3a1a' : '#eaf3de') : (dark ? '#1e1e2e' : '#f8f8f8'),
+                              color: bState === 'done' ? '#097c3e' : bState === 'error' ? '#c0392b' : c.muted,
+                            }}
+                          >
+                            {bState === 'done' ? '✓ ~3 min' : bState === 'loading' ? '⏳ Running...' : bState === 'error' ? '✗ Retry' : '🔥 Get Buzz'}
+                          </button>
+                        )
+                      })()
+                  }
                 </div>
               </div>
 

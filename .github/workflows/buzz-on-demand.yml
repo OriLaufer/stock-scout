@@ -1,0 +1,50 @@
+name: Stock Scout - Buzz On Demand
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: 'Stock ticker symbol (e.g. AAPL)'
+        required: true
+      name:
+        description: 'Company name (improves Reddit search)'
+        required: false
+        default: ''
+      market_cap:
+        description: 'Market cap in dollars (e.g. 500000000 = $500M)'
+        required: false
+        default: '500000000'
+
+jobs:
+  fetch-buzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests supabase yfinance pandas
+
+      - name: Fetch buzz for ${{ github.event.inputs.ticker }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+          MIN_MARKET_CAP: ${{ secrets.MIN_MARKET_CAP }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+        run: |
+          python fetch_buzz_single.py \
+            --ticker "${{ github.event.inputs.ticker }}" \
+            --name "${{ github.event.inputs.name }}" \
+            --market_cap ${{ github.event.inputs.market_cap }}
