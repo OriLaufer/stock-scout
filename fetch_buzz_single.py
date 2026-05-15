@@ -203,21 +203,48 @@ def fetch_insider_activity(ticker):
     return signals
 
 
+# ============== ANALYST CONSENSUS (yfinance — free) ==============
+
+def fetch_analyst_data(ticker):
+    """Wall Street analyst consensus — price target, upside, and recommendation."""
+    signals = {}
+    try:
+        info    = yf.Ticker(ticker).info
+        target  = info.get("targetMeanPrice")
+        current = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+        rec     = info.get("recommendationKey", "")   # strong_buy | buy | hold | sell | strong_sell
+        n       = info.get("numberOfAnalystOpinions") or 0
+
+        if target and current > 0:
+            upside = round((target / current - 1) * 100)
+            signals["analyst_target"]     = round(float(target), 2)
+            signals["analyst_upside_pct"] = upside
+        if rec:
+            signals["analyst_recommendation"] = rec
+        if n:
+            signals["analyst_count"] = int(n)
+
+        print(f"  Analyst: {rec or '?'} | Target: ${target} | Upside: {signals.get('analyst_upside_pct','?')}% | N={n}")
+    except Exception as e:
+        print(f"  Analyst data error: {e}")
+    return signals
+
+
 # ============== ENHANCED SCORE ==============
 
-def calculate_enhanced_score(buzz, price, news, trends, insider):
+def calculate_enhanced_score(buzz, price, news, trends, insider, analyst):
     """
     Score 1–10 combining all signals.
     Base = social buzz score (Reddit + StockTwits vs market cap).
-    Bonuses (max +4, capped at 10):
+    Bonuses (capped at 10):
       +2 if volume spike > 300%
-      +1 if volume spike > 150% (instead of +2)
-      +1 if price near 52-week high (> 90%) — momentum
+      +1 if volume spike > 150%
+      +1 if price near 52-week high (> 90%)
       +1 if short interest > 15% — squeeze potential
       +1 if news strong (>=5 articles, >65% bullish)
-      +1 if Google Trends score > 60 — retail interest building
-      +1 if insider purchases in last 60 days — insiders believe in it
-      +2 if insider purchase > $500k by CEO/CFO/President — very strong signal
+      +1 if Google Trends score > 60
+      +1/+2 for insider purchases (exec >$500K = +2)
+      +1 if analyst consensus is buy/strong_buy AND upside > 15%
     """
     base  = buzz.get("score", 1)
     bonus = 0
@@ -245,9 +272,15 @@ def calculate_enhanced_score(buzz, price, news, trends, insider):
         top_title = next((p["title"] for p in insider_recent if p["value"] == top_value), "")
         is_exec   = any(t in top_title.upper() for t in ["CEO", "CFO", "PRESIDENT", "COO", "CHAIRMAN"])
         if top_value >= 500_000 and is_exec:
-            bonus += 2  # executive bought big — very bullish
+            bonus += 2
         elif insider_recent:
-            bonus += 1  # any purchase is a positive signal
+            bonus += 1
+
+    # Analyst consensus — Wall Street backs it up with meaningful upside
+    rec    = analyst.get("analyst_recommendation", "")
+    upside = analyst.get("analyst_upside_pct", 0) or 0
+    if rec in ("strong_buy", "buy") and upside >= 15:
+        bonus += 1
 
     return min(10, base + bonus)
 
@@ -271,7 +304,7 @@ def main():
         return
 
     # 1. Social (Reddit + StockTwits via Apify)
-    print("\n[1/5] Social signals (Apify)...")
+    print("\n[1/6] Social signals (Apify)...")
     names = {ticker: args.name} if args.name else {}
     reddit_data     = scanner.fetch_reddit_buzz_apify_batch([ticker], names)
     stocktwits_data = scanner.fetch_stocktwits_apify_batch([ticker])
@@ -284,23 +317,27 @@ def main():
     print(f"  Social score: {buzz['score']}/10  Reddit: {buzz['reddit_count']}  ST: {buzz['stocktwits_count']}")
 
     # 2. Price signals (yfinance — free)
-    print("\n[2/5] Price signals (yfinance)...")
+    print("\n[2/6] Price signals (yfinance)...")
     price = fetch_price_signals(ticker, args.market_cap)
 
     # 3. News (yfinance — free)
-    print("\n[3/5] News signals (yfinance)...")
+    print("\n[3/6] News signals (yfinance)...")
     news = fetch_news_signals(ticker)
 
     # 4. Google Trends (pytrends — free)
-    print("\n[4/5] Google Trends (pytrends)...")
+    print("\n[4/6] Google Trends (pytrends)...")
     trends = fetch_google_trends(ticker)
 
     # 5. Insider purchases (OpenInsider — free, SEC data)
-    print("\n[5/5] Insider activity (OpenInsider)...")
+    print("\n[5/6] Insider activity (OpenInsider)...")
     insider = fetch_insider_activity(ticker)
 
+    # 6. Analyst consensus (yfinance — free)
+    print("\n[6/6] Analyst consensus (yfinance)...")
+    analyst = fetch_analyst_data(ticker)
+
     # Calculate enhanced score
-    enhanced = calculate_enhanced_score(buzz, price, news, trends, insider)
+    enhanced = calculate_enhanced_score(buzz, price, news, trends, insider, analyst)
     print(f"\n  Enhanced score: {enhanced}/10  (social base: {buzz['score']}/10)")
 
     # Merge everything
@@ -308,6 +345,7 @@ def main():
     buzz.update(news)
     buzz.update(trends)
     buzz.update(insider)
+    buzz.update(analyst)
     buzz["enhanced_score"] = enhanced
 
     # Save to Supabase

@@ -380,7 +380,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
                     {openStock === stock.ticker && (
                       <tr key={`${stock.ticker}-panel`}>
                         <td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${c.border}` }}>
-                          <StockPanel stock={stock} scans={scans} c={c} t={t} dark={dark} onClose={() => setOpenStock(null)} />
+                          <StockPanel stock={stock} scans={scans} c={c} t={t} dark={dark} lang={lang} onClose={() => setOpenStock(null)} buzzByTicker={buzzByTicker} />
                         </td>
                       </tr>
                     )}
@@ -708,6 +708,25 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                         </span>
                       )
                     })()}
+
+                    {/* Analyst consensus */}
+                    {buzz.analyst_target && (() => {
+                      const upside = buzz.analyst_upside_pct || 0
+                      const rec = buzz.analyst_recommendation || ''
+                      const isBull = rec === 'strong_buy' || rec === 'buy'
+                      const recLabel = rec === 'strong_buy' ? 'Strong Buy' : rec === 'buy' ? 'Buy' : rec === 'hold' ? 'Hold' : rec === 'sell' ? 'Sell' : rec
+                      const upsideColor = upside >= 15 ? '#097c3e' : upside >= 0 ? '#cc8800' : '#c0392b'
+                      return (
+                        <span title={lang === 'he' ? `קונצנזוס אנליסטים: ${recLabel} | יעד: $${buzz.analyst_target} | ${buzz.analyst_count || '?'} אנליסטים` : `Analyst consensus: ${recLabel} | Target: $${buzz.analyst_target} | ${buzz.analyst_count || '?'} analysts`} style={{ padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: isBull ? (dark ? '#1a2a3a' : '#e8f4ff') : (dark ? '#2a2a3e' : '#f0f0f0'), color: isBull ? '#1a6bb5' : c.muted }}>
+                          🎯 ${buzz.analyst_target} <span style={{ color: upsideColor }}>({upside >= 0 ? '+' : ''}{upside}%)</span>{recLabel ? ` · ${recLabel}` : ''}
+                        </span>
+                      )
+                    })()}
+
+                    {/* Sparkline in buzz panel header */}
+                    <div style={{ marginLeft: 'auto' }}>
+                      <Sparkline ticker={openBuzz} width={120} height={36} />
+                    </div>
                   </div>
 
                   <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-start' }}>
@@ -801,6 +820,37 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
   )
 }
 
+function Sparkline({ ticker, width = 80, height = 26 }) {
+  const [closes, setCloses] = useState(null)
+  useEffect(() => {
+    fetch(`/api/price-history?ticker=${encodeURIComponent(ticker)}`)
+      .then(r => r.json())
+      .then(d => setCloses(d.closes || []))
+      .catch(() => setCloses([]))
+  }, [ticker])
+
+  if (closes === null) return <div style={{ width, height: 8, borderRadius: 3, background: '#e0e0e0', opacity: 0.35, marginTop: 5 }} />
+  if (closes.length < 2) return null
+
+  const min = Math.min(...closes)
+  const max = Math.max(...closes)
+  const range = max - min || 1
+  const pad = 2
+  const pts = closes.map((v, i) => {
+    const x = (i / (closes.length - 1)) * width
+    const y = (height - pad) - ((v - min) / range) * (height - pad * 2)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+
+  const isUp = closes[closes.length - 1] >= closes[0]
+  const color = isUp ? '#097c3e' : '#e03131'
+  return (
+    <svg width={width} height={height} style={{ display: 'block', marginTop: 4 }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 function Chip({ label, bg, color }) {
   return <span style={{ background: bg, color, padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{label}</span>
 }
@@ -840,6 +890,7 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
           {isBuzzAlert && <span title="High buzz" style={{ fontSize: 13 }}>🔥</span>}
         </div>
         <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{stock.name}</div>
+        <Sparkline ticker={stock.ticker} width={80} height={22} />
       </td>
       <td style={{ padding: '11px 14px' }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: '#097c3e' }}>+{stock.change_pct}%</span>
@@ -900,8 +951,8 @@ function QuoteCard({ quote, c, dark }) {
   )
 }
 
-function StockPanel({ stock, scans, c, t, dark, onClose }) {
-  const buzz = stock.buzz || {}
+function StockPanel({ stock, scans, c, t, dark, lang, onClose, buzzByTicker }) {
+  const buzz = (buzzByTicker && buzzByTicker[stock.ticker]) || stock.buzz || {}
   const quotes = buzz.quotes || []
 
   // Only the weeks where this stock actually appeared — sorted oldest first
@@ -948,14 +999,37 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
           </div>
           <div style={{ fontSize: 13, color: c.muted }}>{stock.name}</div>
         </div>
-        <div style={{ textAlign: 'right' }}>
+        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
           <div style={{ fontSize: 22, fontWeight: 800, color: '#097c3e' }}>+{stock.change_pct}%</div>
           <div style={{ fontSize: 12, color: c.muted }}>{t.thisWeek}</div>
-          <button onClick={onClose} style={{ marginTop: 6, fontSize: 12, background: 'none', border: `1px solid ${c.border}`, borderRadius: 6, padding: '4px 10px', color: c.muted, cursor: 'pointer' }}>
+          <Sparkline ticker={stock.ticker} width={110} height={32} />
+          <button onClick={onClose} style={{ marginTop: 2, fontSize: 12, background: 'none', border: `1px solid ${c.border}`, borderRadius: 6, padding: '4px 10px', color: c.muted, cursor: 'pointer' }}>
             ✕ {t.close}
           </button>
         </div>
       </div>
+
+      {/* Analyst consensus banner — show when available */}
+      {buzz.analyst_target && (() => {
+        const upside  = buzz.analyst_upside_pct || 0
+        const rec     = buzz.analyst_recommendation || ''
+        const isBull  = rec === 'strong_buy' || rec === 'buy'
+        const recLabel = rec === 'strong_buy' ? 'Strong Buy' : rec === 'buy' ? 'Buy' : rec === 'hold' ? 'Hold' : rec === 'sell' ? 'Sell' : rec
+        const upsideColor = upside >= 15 ? '#097c3e' : upside >= 0 ? '#cc8800' : '#c0392b'
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: '10px 14px', borderRadius: 8, background: isBull ? (dark ? '#0e1e2e' : '#e8f4ff') : (dark ? '#2a2a3e' : '#f5f5f5'), border: `1px solid ${isBull ? (dark ? '#2a4a6a' : '#b8d4ef') : c.border}` }}>
+            <span style={{ fontSize: 16 }}>🎯</span>
+            <div>
+              <span style={{ fontSize: 13, fontWeight: 700, color: c.text }}>
+                {lang === 'he' ? 'יעד אנליסטים' : 'Analyst target'}: <span style={{ color: upsideColor }}>${buzz.analyst_target} ({upside >= 0 ? '+' : ''}{upside}% upside)</span>
+              </span>
+              <span style={{ fontSize: 11, color: c.muted, marginLeft: 8 }}>
+                {recLabel}{buzz.analyst_count ? ` · ${buzz.analyst_count} analysts` : ''}
+              </span>
+            </div>
+          </div>
+        )
+      })()}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
 
@@ -1046,11 +1120,13 @@ function StockPanel({ stock, scans, c, t, dark, onClose }) {
       )}
 
       {/* Market data */}
-      <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+      <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 10 }}>
         <MetaCard label={t.mktCap} value={formatMcap(stock.market_cap)} c={c} />
         <MetaCard label={t.price} value={`$${stock.price?.toFixed(2) || 'N/A'}`} c={c} />
         <MetaCard label={t.volume} value={stock.volume ? `${(stock.volume / 1_000_000).toFixed(0)}M` : 'N/A'} c={c} />
         <MetaCard label={t.buzzScore} value={buzzScore > 0 ? `${buzzScore}/10` : '—'} c={c} />
+        {buzz.analyst_target && <MetaCard label={lang === 'he' ? 'יעד אנליסטים' : 'Analyst target'} value={`$${buzz.analyst_target}`} c={c} />}
+        {buzz.analyst_upside_pct != null && <MetaCard label={lang === 'he' ? 'פוטנציאל עלייה' : 'Upside'} value={`${buzz.analyst_upside_pct >= 0 ? '+' : ''}${buzz.analyst_upside_pct}%`} c={c} />}
       </div>
     </div>
   )
