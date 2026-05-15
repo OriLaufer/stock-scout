@@ -140,8 +140,8 @@ export async function getServerSideProps() {
   const processed = (scans || []).map(scan => {
     try {
       const parsed = JSON.parse(scan.stocks_json)
-      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [] }
-    } catch { return { ...scan, stocks: [], bonus: [] } }
+      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null }
+    } catch { return { ...scan, stocks: [], bonus: [], backtest: null } }
   })
 
   const unique = []
@@ -251,35 +251,31 @@ export async function getServerSideProps() {
     }
   } catch {}
 
-  // Backtest: for each week (except newest), pick top 5 by change_pct, measure next-week perf
-  // unique[0] = newest; unique[i]'s "next week" = unique[i-1]
-  const backtestWeeks = []
-  let btTotalWins = 0, btTotalPicks = 0, btCompound = 1.0
+  // Backtest: read REAL data stored by scanner (actual next-week prices from price_data)
+  // Each scan stores how last week's top 5 picks actually performed this week
+  const realBacktestWeeks = unique.filter(s => s.backtest).map(s => s.backtest)
 
-  for (let i = 1; i < unique.length; i++) {
-    const thisWeek = unique[i]
-    const nextWeek = unique[i - 1]
-    const top5 = [...(thisWeek.stocks || [])].sort((a, b) => b.change_pct - a.change_pct).slice(0, 5)
-    if (!top5.length) continue
-    const nextLookup = {}
-    for (const s of nextWeek.stocks || []) nextLookup[s.ticker] = s.change_pct
-    const picks = top5.map(s => ({ ticker: s.ticker, thisWeek: s.change_pct, nextWeek: nextLookup[s.ticker] ?? 0 }))
-    const gains = picks.map(p => p.nextWeek)
-    const avg = gains.reduce((a, b) => a + b, 0) / gains.length
-    const wins = gains.filter(g => g > 0).length
-    btTotalWins += wins
-    btTotalPicks += picks.length
-    btCompound *= (1 + avg / 100)
-    backtestWeeks.push({ week: thisWeek.week_label, picks, avgNext: Math.round(avg * 10) / 10, wins, total: picks.length })
+  let backtest = null
+  if (realBacktestWeeks.length >= 1) {
+    let btWins = 0, btPicks = 0, btCompound = 1.0
+    for (const bt of realBacktestWeeks) {
+      btWins    += bt.wins
+      btPicks   += bt.total
+      btCompound *= (1 + bt.avg_gain / 100)
+    }
+    backtest = {
+      totalWeeks:  realBacktestWeeks.length,
+      winRate:     btPicks > 0 ? Math.round(btWins / btPicks * 100) : 0,
+      compoundRet: Math.round((btCompound - 1) * 100 * 10) / 10,
+      avgWeekly:   Math.round(realBacktestWeeks.reduce((a, w) => a + w.avg_gain, 0) / realBacktestWeeks.length * 10) / 10,
+      weeks:       realBacktestWeeks,
+      isReal:      true,
+      pendingWeeks: unique.length - realBacktestWeeks.length,
+    }
+  } else {
+    // No real data yet — show placeholder so user knows tracking has started
+    backtest = { pending: true, totalScans: unique.length }
   }
-
-  const backtest = backtestWeeks.length >= 2 ? {
-    totalWeeks:  backtestWeeks.length,
-    winRate:     btTotalPicks > 0 ? Math.round(btTotalWins / btTotalPicks * 100) : 0,
-    compoundRet: Math.round((btCompound - 1) * 100 * 10) / 10,
-    avgWeekly:   Math.round(backtestWeeks.reduce((a, w) => a + w.avgNext, 0) / backtestWeeks.length * 10) / 10,
-    weeks:       backtestWeeks,
-  } : null
 
   return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest } }
 }
@@ -499,81 +495,109 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
 function BacktestCard({ backtest, c, dark, lang }) {
   const [expanded, setExpanded] = useState(false)
+  const he = lang === 'he'
+
+  // Pending state — tracking started but no real data yet
+  if (backtest.pending) {
+    return (
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, marginBottom: 20, overflow: 'hidden' }}>
+        <div style={{ background: dark ? '#12122a' : '#1a1a2e', padding: '16px 22px' }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: 'white' }}>📊 {he ? 'ביצועי המערכת' : 'System Track Record'}</div>
+        </div>
+        <div style={{ padding: '28px 24px', textAlign: 'center', color: c.muted }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>⏳</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
+            {he ? 'מתחילים לעקוב' : 'Tracking started'}
+          </div>
+          <div style={{ fontSize: 13 }}>
+            {he
+              ? `מהסריקה הבאה ואילך, הנתונים יהיו אמיתיים — כמה % עשו הטופ 5 בשבוע שאחרי.`
+              : `From the next scan onwards, we'll track real next-week performance of the top 5 picks.`}
+          </div>
+          <div style={{ marginTop: 10, fontSize: 12, color: c.muted }}>
+            {he ? `${backtest.totalScans} סריקות קיימות — ממתינים לסריקה הבאה` : `${backtest.totalScans} scans stored — waiting for next scan`}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const bt = backtest
-  const wrColor  = bt.winRate >= 55 ? '#097c3e' : bt.winRate >= 40 ? '#cc8800' : '#c0392b'
-  const wrBg     = bt.winRate >= 55 ? (dark ? '#1a3a1a' : '#EAF3DE') : bt.winRate >= 40 ? (dark ? '#3a2a0a' : '#FAEEDA') : (dark ? '#3a1a1a' : '#FCEBEB')
+  const wrColor  = bt.winRate >= 60 ? '#097c3e' : bt.winRate >= 40 ? '#cc8800' : '#c0392b'
+  const wrBg     = bt.winRate >= 60 ? (dark ? '#1a3a1a' : '#EAF3DE') : bt.winRate >= 40 ? (dark ? '#3a2a0a' : '#FAEEDA') : (dark ? '#3a1a1a' : '#FCEBEB')
   const avgColor = bt.avgWeekly > 0 ? '#097c3e' : '#c0392b'
   const cmpColor = bt.compoundRet > 0 ? '#097c3e' : '#c0392b'
-
-  const he = lang === 'he'
 
   return (
     <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, marginBottom: 20, overflow: 'hidden' }}>
       {/* Header */}
       <div style={{ background: dark ? '#12122a' : '#1a1a2e', padding: '16px 22px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: 'white' }}>
-            📊 {he ? 'ביצועי המערכת — רקורד היסטורי' : 'System Track Record'}
+          <div style={{ fontSize: 16, fontWeight: 800, color: 'white', display: 'flex', alignItems: 'center', gap: 10 }}>
+            📊 {he ? 'ביצועי המערכת — נתונים אמיתיים' : 'System Track Record — Real Data'}
+            <span style={{ background: '#097c3e', color: 'white', fontSize: 10, padding: '2px 8px', borderRadius: 10, fontWeight: 600 }}>✓ REAL</span>
           </div>
           <div style={{ fontSize: 11, color: '#aaa', marginTop: 3 }}>
             {he
-              ? `שיטה: מדי שבוע מוצאים 5 המניות עם העלייה הגדולה ביותר — כמה מהן עלו גם בשבוע שאחרי?`
-              : `Method: each week's top 5 gainers — how many rose again the following week?`}
+              ? 'כל שבוע: קונים את הטופ 5 בסגירת יום שישי — כמה % עשו עד יום שישי הבא?'
+              : "Each week: buy top 5 at Friday close — what's their actual gain by next Friday?"}
           </div>
         </div>
-        <button onClick={() => setExpanded(e => !e)} style={{ background: 'none', border: '1px solid #555', color: '#aaa', borderRadius: 8, padding: '6px 14px', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+        <button onClick={() => setExpanded(e => !e)} style={{ background: 'none', border: '1px solid #555', color: '#aaa', borderRadius: 8, padding: '6px 14px', fontSize: 12, cursor: 'pointer', fontWeight: 600, flexShrink: 0 }}>
           {expanded ? (he ? '▲ סגור' : '▲ Hide') : (he ? '▼ פרטים' : '▼ Details')}
         </button>
       </div>
 
       {/* Summary stats */}
-      <div style={{ display: 'flex', gap: 0, borderBottom: expanded ? `1px solid ${c.border}` : 'none' }}>
+      <div style={{ display: 'flex', borderBottom: expanded ? `1px solid ${c.border}` : 'none' }}>
         {[
-          { value: `${bt.winRate}%`, label: he ? 'אחוז הצלחה' : 'Win Rate', sub: he ? 'בחרו ועלו' : 'picks that rose', color: wrColor, bg: wrBg },
-          { value: `${bt.avgWeekly >= 0 ? '+' : ''}${bt.avgWeekly}%`, label: he ? 'ממוצע שבועי' : 'Avg Weekly Gain', sub: he ? 'ממוצע ה-5 בשבוע הבא' : 'top 5 avg next week', color: avgColor, bg: 'transparent' },
-          { value: `${bt.compoundRet >= 0 ? '+' : ''}${bt.compoundRet}%`, label: he ? 'תשואה מצטברת' : 'Compound Return', sub: he ? 'אם מחזיקים כל שבוע' : 'if held each week', color: cmpColor, bg: 'transparent' },
-          { value: bt.totalWeeks, label: he ? 'שבועות מדגם' : 'Weeks Tracked', sub: he ? 'נתונים היסטוריים' : 'historical data', color: c.text, bg: 'transparent' },
+          { value: `${bt.winRate}%`, label: he ? 'אחוז הצלחה' : 'Win Rate', sub: he ? 'מניות שעלו בשבוע הבא' : 'picks that rose next week', color: wrColor, bg: wrBg },
+          { value: `${bt.avgWeekly >= 0 ? '+' : ''}${bt.avgWeekly}%`, label: he ? 'ממוצע שבועי' : 'Avg Weekly Gain', sub: he ? 'ממוצע ה-5 בשבוע הבא' : 'top 5 avg gain next week', color: avgColor, bg: 'transparent' },
+          { value: `${bt.compoundRet >= 0 ? '+' : ''}${bt.compoundRet}%`, label: he ? 'תשואה מצטברת' : 'Compound Return', sub: he ? 'אם מחזיקים כל שבוע' : 'if reinvested each week', color: cmpColor, bg: 'transparent' },
+          { value: bt.totalWeeks, label: he ? 'שבועות מדגם' : 'Weeks Tracked', sub: he ? 'נתונים מחירים אמיתיים' : 'real price data', color: c.text, bg: 'transparent' },
         ].map((stat, i) => (
-          <div key={i} style={{ flex: 1, padding: '16px 20px', borderRight: i < 3 ? `1px solid ${c.border}` : 'none', background: stat.bg, textAlign: 'center' }}>
-            <div style={{ fontSize: 28, fontWeight: 800, color: stat.color, lineHeight: 1.1 }}>{stat.value}</div>
+          <div key={i} style={{ flex: 1, padding: '18px 16px', borderRight: i < 3 ? `1px solid ${c.border}` : 'none', background: stat.bg, textAlign: 'center' }}>
+            <div style={{ fontSize: 30, fontWeight: 800, color: stat.color, lineHeight: 1.1 }}>{stat.value}</div>
             <div style={{ fontSize: 11, fontWeight: 700, color: c.text, marginTop: 6 }}>{stat.label}</div>
             <div style={{ fontSize: 10, color: c.muted, marginTop: 2 }}>{stat.sub}</div>
           </div>
         ))}
       </div>
 
-      {/* Week-by-week breakdown (collapsible) */}
+      {/* Week-by-week breakdown */}
       {expanded && (
         <div style={{ padding: '16px 22px' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 12 }}>
-            {he ? 'שבוע-אחר-שבוע' : 'Week-by-week breakdown'}
+            {he ? 'שבוע-אחר-שבוע — ביצועי מחיר אמיתיים' : 'Week-by-week — actual price performance'}
           </div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: c.thead }}>
                   <th style={{ padding: '8px 12px', textAlign: 'left', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'שבוע' : 'Week'}</th>
-                  <th style={{ padding: '8px 12px', textAlign: 'left', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? '5 הטובות' : 'Top 5 Picks'}</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'left', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'הטופ 5 שנבחרו → ביצוע שבוע הבא' : 'Top 5 Picked → Next Week Performance'}</th>
                   <th style={{ padding: '8px 12px', textAlign: 'center', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'עלו' : 'Wins'}</th>
-                  <th style={{ padding: '8px 12px', textAlign: 'right', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'ממוצע' : 'Avg Gain'}</th>
+                  <th style={{ padding: '8px 12px', textAlign: 'right', color: c.muted, fontWeight: 700, fontSize: 10, textTransform: 'uppercase' }}>{he ? 'ממוצע' : 'Avg'}</th>
                 </tr>
               </thead>
               <tbody>
                 {bt.weeks.map((w, wi) => {
                   const rowColor = w.wins >= 4 ? '#097c3e' : w.wins >= 3 ? '#cc8800' : '#c0392b'
-                  const avgSign = w.avgNext >= 0 ? '+' : ''
+                  const avgSign = w.avg_gain >= 0 ? '+' : ''
                   return (
                     <tr key={wi} style={{ borderBottom: `1px solid ${c.border}`, background: wi % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa') }}>
                       <td style={{ padding: '9px 12px', color: c.muted, fontSize: 11, whiteSpace: 'nowrap' }}>{w.week}</td>
                       <td style={{ padding: '9px 12px' }}>
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                           {w.picks.map((p, pi) => {
-                            const nextSign = p.nextWeek >= 0 ? '+' : ''
-                            const pColor = p.nextWeek > 0 ? '#097c3e' : p.nextWeek < 0 ? '#c0392b' : c.muted
+                            const actual = p.actual_gain
+                            const pColor = actual == null ? c.muted : actual > 0 ? '#097c3e' : actual < 0 ? '#c0392b' : c.muted
+                            const pBg    = actual == null ? c.chipBg : actual > 0 ? (dark ? '#1a3a1a' : '#EAF3DE') : actual < 0 ? (dark ? '#3a1a1a' : '#FCEBEB') : c.chipBg
+                            const label  = actual == null ? '—' : `${actual >= 0 ? '+' : ''}${actual}%`
                             return (
-                              <span key={pi} title={`${p.ticker}: picked +${p.thisWeek}% → next week ${nextSign}${p.nextWeek}%`}
-                                style={{ background: p.nextWeek > 0 ? (dark ? '#1a3a1a' : '#EAF3DE') : p.nextWeek < 0 ? (dark ? '#3a1a1a' : '#FCEBEB') : c.chipBg, color: pColor, padding: '2px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
-                                {p.ticker} <span style={{ fontWeight: 400, fontSize: 10 }}>{nextSign}{p.nextWeek}%</span>
+                              <span key={pi} title={`${p.ticker}: selected at +${p.prev_gain}% → actual next week: ${label}`}
+                                style={{ background: pBg, color: pColor, padding: '2px 8px', borderRadius: 8, fontSize: 11, fontWeight: 700 }}>
+                                {p.ticker} <span style={{ fontWeight: 400, fontSize: 10 }}>{label}</span>
                               </span>
                             )
                           })}
@@ -582,8 +606,8 @@ function BacktestCard({ backtest, c, dark, lang }) {
                       <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                         <span style={{ fontWeight: 800, fontSize: 13, color: rowColor }}>{w.wins}/{w.total}</span>
                       </td>
-                      <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, fontSize: 13, color: w.avgNext >= 0 ? '#097c3e' : '#c0392b' }}>
-                        {avgSign}{w.avgNext}%
+                      <td style={{ padding: '9px 12px', textAlign: 'right', fontWeight: 700, fontSize: 13, color: w.avg_gain >= 0 ? '#097c3e' : '#c0392b' }}>
+                        {avgSign}{w.avg_gain}%
                       </td>
                     </tr>
                   )
@@ -593,8 +617,8 @@ function BacktestCard({ backtest, c, dark, lang }) {
           </div>
           <div style={{ fontSize: 10, color: c.muted, marginTop: 10 }}>
             * {he
-              ? 'כל שבוע: מוצאים 5 מניות עם עלייה הכי גדולה, ובודקים מה עשו בשבוע הבא. ביצועי עבר אינם מבטיחים ביצועי עתיד.'
-              : 'Each week: top 5 gainers selected, next-week performance measured. Past performance does not guarantee future results.'}
+              ? 'נתונים אמיתיים — המחיר בסגירת יום שישי הבא מחושב מ-yfinance בזמן הסריקה. ביצועי עבר אינם מבטיחים ביצועי עתיד.'
+              : 'Real data — next Friday close fetched from yfinance during the weekly scan. Past performance ≠ future results.'}
           </div>
         </div>
       )}

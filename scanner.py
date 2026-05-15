@@ -967,12 +967,15 @@ def week_exists_in_supabase(week_label):
         return False
 
 
-def save_to_supabase(stocks, bonus, week_label):
+def save_to_supabase(stocks, bonus, week_label, backtest_entry=None):
     try:
+        payload = {"stocks": stocks, "bonus": bonus}
+        if backtest_entry:
+            payload["backtest"] = backtest_entry
         supabase.table("weekly_scans").insert(
             {
                 "week_label": week_label,
-                "stocks_json": json.dumps({"stocks": stocks, "bonus": bonus}),
+                "stocks_json": json.dumps(payload),
                 "created_at": datetime.now().isoformat(),
             }
         ).execute()
@@ -982,6 +985,45 @@ def save_to_supabase(stocks, bonus, week_label):
 
 
 # ============== BACKTEST ==============
+def compute_weekly_backtest(prev_week_data, price_data, week_label):
+    """Compute REAL performance of last week's top 5 picks using this week's price data.
+    price_data contains actual change_pct for ALL tradeable stocks — no estimation."""
+    if not prev_week_data:
+        return None
+
+    prev_stocks = list(prev_week_data.values())
+    prev_top5 = sorted(prev_stocks, key=lambda s: s.get("change_pct", 0), reverse=True)[:5]
+    if not prev_top5:
+        return None
+
+    picks = []
+    for s in prev_top5:
+        ticker = s["ticker"]
+        this_week = price_data.get(ticker)
+        actual_gain = round(this_week["change_pct"], 2) if this_week else None
+        picks.append({
+            "ticker": ticker,
+            "prev_gain": round(s.get("change_pct", 0), 2),
+            "actual_gain": actual_gain,  # None = stock didn't trade this week
+        })
+
+    valid = [p for p in picks if p["actual_gain"] is not None]
+    if not valid:
+        return None
+
+    wins = sum(1 for p in valid if p["actual_gain"] > 0)
+    avg  = round(sum(p["actual_gain"] for p in valid) / len(valid), 2)
+
+    print(f"  Backtest: {wins}/{len(valid)} picks rose | avg: {avg:+.2f}%")
+    return {
+        "week":  week_label,
+        "picks": picks,
+        "wins":  wins,
+        "total": len(valid),
+        "avg_gain": avg,
+    }
+
+
 def compute_backtest():
     """For each past week, simulate buying the top 5 picks and measure next-week performance.
     Returns summary stats + week-by-week results."""
@@ -1294,15 +1336,19 @@ def main():
         print(f"\n=== DONE (historical) in {int(time.time()-t_start)}s ===")
         return
 
-    # 4. Streak from previous week
+    # 4. Streak + real backtest from previous week
     prev = get_previous_week_data()
     for s in top20:
         s["streak"] = prev.get(s["ticker"], {}).get("streak", 0) + 1 if s["ticker"] in prev else 1
     returning_count = sum(1 for s in top20 if s["streak"] >= 2)
     print(f"Streak: {returning_count} stocks returning from last week")
 
+    # Real backtest: how did last week's top 5 actually perform THIS week?
+    print("\nComputing real backtest (last week's picks vs this week's prices)...")
+    weekly_backtest = compute_weekly_backtest(prev, price_data, week_label)
+
     # 5. Save first so compute_backtest can include this week's data
-    save_to_supabase(top20, [], week_label)
+    save_to_supabase(top20, [], week_label, backtest_entry=weekly_backtest)
 
     # 6. Compute backtest from all historical scans (including the one just saved)
     print("\nComputing backtest track record...")
