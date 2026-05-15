@@ -1,0 +1,158 @@
+"""
+Backfill real backtest data for all existing scans.
+For each scan, fetches actual next-week price performance of the top 5 picks using yfinance.
+Run once; scanner.py handles new scans going forward automatically.
+"""
+import os
+import json
+import re
+import time
+import pandas as pd
+import yfinance as yf
+from datetime import datetime, timedelta
+from supabase import create_client
+
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_SECRET_KEY"]
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def parse_week_end(label):
+    m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", label)
+    if not m:
+        return None
+    return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+
+
+def fetch_week_change(ticker, start_friday, end_friday):
+    """Actual % change from start_friday close to end_friday close."""
+    try:
+        df = yf.download(
+            ticker,
+            start=(start_friday - timedelta(days=4)).strftime("%Y-%m-%d"),
+            end=(end_friday + timedelta(days=1)).strftime("%Y-%m-%d"),
+            progress=False,
+            auto_adjust=True,
+        )
+        if df.empty or "Close" not in df.columns:
+            return None
+        closes = df["Close"].dropna()
+
+        def on_or_before(target):
+            ts = pd.Timestamp(target.date())
+            valid = closes[closes.index.normalize() <= ts]
+            return float(valid.iloc[-1]) if len(valid) > 0 else None
+
+        start_close = on_or_before(start_friday)
+        end_close   = on_or_before(end_friday)
+        if not start_close or not end_close or start_close <= 0:
+            return None
+        return round((end_close - start_close) / start_close * 100, 2)
+    except Exception as e:
+        print(f"    yfinance error {ticker}: {e}")
+        return None
+
+
+def main():
+    print("=" * 55)
+    print("BACKFILL BACKTEST — fetching real next-week prices")
+    print("=" * 55)
+
+    r = supabase.table("weekly_scans").select("*").order("created_at", desc=False).execute()
+    all_rows = r.data or []
+
+    # Parse + deduplicate (keep earliest row per week_label)
+    processed = []
+    seen = set()
+    for row in all_rows:
+        label = row["week_label"]
+        if label in seen:
+            continue
+        seen.add(label)
+        try:
+            parsed = json.loads(row["stocks_json"])
+            stocks = parsed.get("stocks", parsed) if isinstance(parsed, dict) else parsed
+            processed.append({
+                "id":         row["id"],
+                "week_label": label,
+                "week_end":   parse_week_end(label),
+                "stocks":     stocks,
+                "parsed":     parsed if isinstance(parsed, dict) else {"stocks": stocks},
+            })
+        except Exception as e:
+            print(f"  Parse error {label}: {e}")
+
+    processed.sort(key=lambda s: s["week_end"] or datetime(2000, 1, 1))
+    print(f"Found {len(processed)} unique scans\n")
+
+    updated = 0
+    skipped = 0
+
+    for i in range(len(processed) - 1):
+        this = processed[i]
+        nxt  = processed[i + 1]
+
+        # Skip if already backfilled
+        if this["parsed"].get("backtest"):
+            print(f"SKIP {this['week_label']} — backtest already present")
+            skipped += 1
+            continue
+
+        this_end = this["week_end"]
+        next_end = nxt["week_end"]
+        if not this_end or not next_end:
+            print(f"SKIP {this['week_label']} — could not parse dates")
+            skipped += 1
+            continue
+
+        print(f"\n[{i+1}/{len(processed)-1}] {this['week_label']}  →  {nxt['week_label']}")
+
+        top5 = sorted(this["stocks"], key=lambda s: s.get("change_pct", 0), reverse=True)[:5]
+        picks = []
+
+        for s in top5:
+            ticker = s["ticker"]
+            actual = fetch_week_change(ticker, this_end, next_end)
+            sign   = f"{actual:+.2f}%" if actual is not None else "N/A"
+            print(f"  {ticker:8s}  selected +{s.get('change_pct',0):.2f}%  →  next week: {sign}")
+            picks.append({
+                "ticker":      ticker,
+                "prev_gain":   round(s.get("change_pct", 0), 2),
+                "actual_gain": actual,
+            })
+            time.sleep(0.3)  # gentle rate limit
+
+        valid = [p for p in picks if p["actual_gain"] is not None]
+        if not valid:
+            print("  No valid price data — skipping")
+            skipped += 1
+            continue
+
+        wins    = sum(1 for p in valid if p["actual_gain"] > 0)
+        avg     = round(sum(p["actual_gain"] for p in valid) / len(valid), 2)
+        bt_entry = {
+            "week":      this["week_label"],
+            "picks":     picks,
+            "wins":      wins,
+            "total":     len(valid),
+            "avg_gain":  avg,
+        }
+        print(f"  ✓ {wins}/{len(valid)} wins  |  avg {avg:+.2f}%")
+
+        new_json = dict(this["parsed"])
+        new_json["backtest"] = bt_entry
+        try:
+            supabase.table("weekly_scans").update(
+                {"stocks_json": json.dumps(new_json)}
+            ).eq("id", this["id"]).execute()
+            updated += 1
+        except Exception as e:
+            print(f"  Supabase save error: {e}")
+
+    print(f"\n{'='*55}")
+    print(f"Done — {updated} scans updated, {skipped} skipped")
+    print(f"{'='*55}")
+
+
+if __name__ == "__main__":
+    main()
