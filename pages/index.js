@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -359,17 +359,24 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: c.thead }}>
-                  {[t.rank, t.stock, t.gain, t.mktCap, t.buzz, t.trend, ''].map((h, i) => (
+                  {[t.rank, t.stock, t.gain, t.mktCap, lang === 'he' ? 'רצף' : 'Streak', t.trend, ''].map((h, i) => (
                     <th key={i} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: c.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', borderBottom: `1px solid ${c.border}` }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {stocks.map((stock, i) => (
-                  <>
+                {stocks.map((stock, i) => {
+                  const hof = hallOfFame[stock.ticker]
+                  const wp = hof?.weekPresence || []
+                  let streak = 0
+                  for (let j = wp.length - 1; j >= 0; j--) {
+                    if (wp[j] != null) streak++
+                    else break
+                  }
+                  return (<>
                     <StockRow key={stock.ticker} stock={stock} rank={i + 1} isOpen={openStock === stock.ticker}
                       onClick={() => setOpenStock(openStock === stock.ticker ? null : stock.ticker)} c={c} t={t} dark={dark}
-                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} />
+                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} streak={streak} />
                     {openStock === stock.ticker && (
                       <tr key={`${stock.ticker}-panel`}>
                         <td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${c.border}` }}>
@@ -378,7 +385,8 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
                       </tr>
                     )}
                   </>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           )}
@@ -417,6 +425,13 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
   const [openBuzz, setOpenBuzz] = useState(null)
   const [loadingBuzz, setLoadingBuzz] = useState({})
+  const [liveBuzz, setLiveBuzz] = useState({})  // buzz fetched after clicking, auto-updates UI
+  const pollTimers = useRef({})
+
+  // Clean up all polling intervals when component unmounts
+  useEffect(() => {
+    return () => { Object.values(pollTimers.current).forEach(clearInterval) }
+  }, [])
 
   async function handleGetBuzz(stock) {
     setLoadingBuzz(prev => ({ ...prev, [stock.ticker]: 'loading' }))
@@ -426,7 +441,31 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticker: stock.ticker, name: stock.name, market_cap: stock.marketCap }),
       })
-      setLoadingBuzz(prev => ({ ...prev, [stock.ticker]: 'done' }))
+
+      // Poll every 20s — when the workflow finishes and saves to Supabase, update UI automatically
+      const id = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/check-buzz?ticker=${stock.ticker}`)
+          const data = await res.json()
+          if (data.found) {
+            clearInterval(pollTimers.current[stock.ticker])
+            delete pollTimers.current[stock.ticker]
+            setLiveBuzz(prev => ({ ...prev, [stock.ticker]: data.buzz }))
+            setLoadingBuzz(prev => ({ ...prev, [stock.ticker]: 'done' }))
+          }
+        } catch {}
+      }, 20000)
+
+      pollTimers.current[stock.ticker] = id
+      // Stop polling after 10 minutes regardless
+      setTimeout(() => {
+        if (pollTimers.current[stock.ticker]) {
+          clearInterval(pollTimers.current[stock.ticker])
+          delete pollTimers.current[stock.ticker]
+          setLoadingBuzz(prev => ({ ...prev, [stock.ticker]: 'timeout' }))
+        }
+      }, 600000)
+
     } catch {
       setLoadingBuzz(prev => ({ ...prev, [stock.ticker]: 'error' }))
     }
@@ -506,7 +545,7 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
           const isTop3 = i < 3
           const badgeColor = pct > 70 ? '#097c3e' : pct > 30 ? '#cc8800' : c.muted
           const badgeBg = pct > 70 ? (dark ? '#1a3a1a' : '#EAF3DE') : pct > 30 ? (dark ? '#3a2a0a' : '#FAEEDA') : (dark ? '#2a2a3e' : '#f0f0f0')
-          const buzz = buzzByTicker && buzzByTicker[stock.ticker]
+          const buzz = liveBuzz[stock.ticker] || (buzzByTicker && buzzByTicker[stock.ticker])
           const isOpen = openBuzz === stock.ticker
 
           return (
@@ -585,7 +624,7 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                               color: bState === 'done' ? '#097c3e' : bState === 'error' ? '#c0392b' : c.muted,
                             }}
                           >
-                            {bState === 'done' ? '✓ ~3 min' : bState === 'loading' ? '⏳ Running...' : bState === 'error' ? '✗ Retry' : '🔥 Get Buzz'}
+                            {bState === 'done' ? '✓ Done' : bState === 'loading' ? '⏳ ~3 min...' : bState === 'error' || bState === 'timeout' ? '✗ Retry' : '🔥 Get Buzz'}
                           </button>
                         )
                       })()
@@ -772,18 +811,22 @@ function formatMcap(market_cap) {
   return `$${Math.round(market_cap / 1_000_000)}M`
 }
 
-function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans }) {
+function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans, streak }) {
   const buzz = stock.buzz || {}
 
   const count = appearanceCount || 1
   const pct = totalScans > 0 ? (count / totalScans) * 100 : 0
-  const streakBadge =
+  const trendBadge =
     pct > 70 ? { bg: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', text: `🟢 ${count}/${totalScans} ${t.appearances}` } :
     pct > 30 ? { bg: dark ? '#3a2a0a' : '#FAEEDA', color: dark ? '#ffcc66' : '#633806', text: `🟡 ${count}/${totalScans} ${t.appearances}` } :
     { bg: dark ? '#3a0a0a' : '#FCEBEB', color: dark ? '#ff8888' : '#791F1F', text: `🔴 ${count}/${totalScans} ${t.appearances}` }
 
+  const s = streak || 1
+  const streakBg   = s >= 4 ? (dark ? '#2a1a00' : '#FFF3CD') : s >= 2 ? (dark ? '#1a2a3a' : '#E8F4FD') : (dark ? '#2a2a2a' : '#F5F5F5')
+  const streakColor = s >= 4 ? (dark ? '#ffcc44' : '#7a4f00') : s >= 2 ? (dark ? '#66aaff' : '#1a5a9a') : c.muted
+  const streakLabel = s >= 4 ? `🔥 ${s} ${t.weeks}` : s >= 2 ? `⚡ ${s} ${t.weeks}` : t.new
+
   const buzzScore = buzz.score || 0
-  const buzzColor = buzzScore >= 7 ? '#097c3e' : buzzScore >= 4 ? '#cc8800' : c.muted
   const isBuzzAlert = stock.buzz_alert || buzzScore >= 7
 
   return (
@@ -803,10 +846,10 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
       </td>
       <td style={{ padding: '11px 14px', color: c.muted, fontSize: 13 }}>{formatMcap(stock.market_cap)}</td>
       <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: buzzColor }}>{buzzScore}/10</div>
+        <span style={{ background: streakBg, color: streakColor, padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 700 }}>{streakLabel}</span>
       </td>
       <td style={{ padding: '11px 14px' }}>
-        <span style={{ background: streakBadge.bg, color: streakBadge.color, padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>{streakBadge.text}</span>
+        <span style={{ background: trendBadge.bg, color: trendBadge.color, padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>{trendBadge.text}</span>
       </td>
       <td style={{ padding: '11px 14px' }}>
         <button style={{ fontSize: 11, color: '#097c3e', background: 'none', border: '1px solid #097c3e', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontWeight: 600 }}>
