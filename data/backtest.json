@@ -1,1 +1,294 @@
-﻿[]
+[
+  {
+    "week": "27.02-06.03.2026",
+    "picks": [
+      {
+        "ticker": "BRAI",
+        "prev_gain": 93.29,
+        "actual_gain": -28.68
+      },
+      {
+        "ticker": "ALTO",
+        "prev_gain": 92.54,
+        "actual_gain": 6.15
+      },
+      {
+        "ticker": "SOC",
+        "prev_gain": 74.18,
+        "actual_gain": 17.12
+      },
+      {
+        "ticker": "TECX",
+        "prev_gain": 52.96,
+        "actual_gain": -7.14
+      },
+      {
+        "ticker": "AMPX",
+        "prev_gain": 52.19,
+        "actual_gain": 9.92
+      }
+    ],
+    "wins": 3,
+    "total": 5,
+    "avg_gain": -0.53
+  },
+  {
+    "week": "06.03-13.03.2026",
+    "picks": [
+      {
+        "ticker": "LWLG",
+        "prev_gain": 81.19,
+        "actual_gain": -11.04
+      },
+      {
+        "ticker": "AXTI",
+        "prev_gain": 50.94,
+        "actual_gain": 11.01
+      },
+      {
+        "ticker": "MGNX",
+        "prev_gain": 34.53,
+        "actual_gain": -4.67
+      },
+      {
+        "ticker": "TSSI",
+        "prev_gain": 31.9,
+        "actual_gain": -8.37
+      },
+      {
+        "ticker": "SSL",
+        "prev_gain": 26.23,
+        "actual_gain": 8.31
+      }
+    ],
+    "wins": 2,
+    "total": 5,
+    "avg_gain": -0.95
+  },
+  {
+    "week": "13.03-20.03.2026",
+    "picks": [
+      {
+        "ticker": "BW",
+        "prev_gain": 44.43,
+        "actual_gain": -2.11
+      },
+      {
+        "ticker": "AIRS",
+        "prev_gain": 43.24,
+        "actual_gain": 8.3
+      },
+      {
+        "ticker": "ELA",
+        "prev_gain": 38.24,
+        "actual_gain": 2.66
+      },
+      {
+        "ticker": "SEDG",
+        "prev_gain": 38.17,
+        "actual_gain": 0.06
+      },
+      {
+        "ticker": "DSGR",
+        "prev_gain": 34.96,
+        "actual_gain": -0.15
+      }
+    ],
+    "wins": 3,
+    "total": 5,
+    "avg_gain": 1.75
+  },
+  {
+    "week": "20.03-27.03.2026",
+    "picks": [
+      {
+        "ticker": "BZAI",
+        "prev_gain": 66.35,
+        "actual_gain": 3.47
+      },
+      {
+        "ticker": "SATL",
+        "prev_gain": 65.18,
+        "actual_gain": 14.17
+      },
+      {
+        "ticker": "OLPX",
+        "prev_gain": 51.88,
+        "actual_gain": 0.5
+      },
+      {
+        "ticker": "CAR",
+        "prev_gain": 48.6,
+        "actual_gain": 28.27
+      }
+    ],
+    "wins": 4,
+    "total": 4,
+    "avg_gain": 11.6
+  },
+  {
+    "week": "27.03-03.04.2026",
+    "picks": [
+      {
+        "ticker": "APLS",
+        "prev_gain": 138.13,
+        "actual_gain": 0.94
+      },
+      {
+        "ticker": "MGRT",
+        "prev_gain": 85.06,
+        "actual_gain": 228.89
+      },
+      {
+        "ticker": "DEFT",
+        "prev_gain": 48.02,
+        "actual_gain": 4.21
+      },
+      {
+        "ticker": "BGIN",
+        "prev_gain": 42.79,
+        "actual_gain": 0.95
+      },
+      {
+        "ticker": "FLY",
+        "prev_gain": 38.92,
+        "actual_gain": 14.0
+      }
+    ],
+    "wins": 5,
+    "total": 5,
+    "avg_gain": 49.8
+  },
+  {
+    "week": "03.04-10.04.2026",
+    "picks": [
+      {
+        "ticker": "ZNTL",
+        "prev_gain": 151.33,
+        "actual_gain": -29.8
+      },
+      {
+        "ticker": "CAR",
+        "prev_gain": 57.51,
+        "actual_gain": 64.65
+      },
+      {
+        "ticker": "LWLG",
+        "prev_gain": 38.38,
+        "actual_gain": 18.3
+      },
+      {
+        "ticker": "RXT",
+        "prev_gain": 37.79,
+        "actual_gain": 11.36
+      },
+      {
+        "ticker": "SIDU",
+        "prev_gain": 37.54,
+        "actual_gain": 25.88
+      }
+    ],
+    "wins": 4,
+    "total": 5,
+    "avg_gain": 18.08
+  },
+  {
+    "week": "10.04-17.04.2026",
+    "picks": [
+      {
+        "ticker": "MGRT",
+        "prev_gain": 135.62,
+        "actual_gain": 17.94
+      },
+      {
+        "ticker": "ARTV",
+        "prev_gain": 84.29,
+        "actual_gain": -17.77
+      },
+      {
+        "ticker": "MAAS",
+        "prev_gain": 83.93,
+        "actual_gain": -6.5
+      },
+      {
+        "ticker": "IONQ",
+        "prev_gain": 60.09,
+        "actual_gain": -7.38
+      },
+      {
+        "ticker": "SLNH",
+        "prev_gain": 59.15,
+        "actual_gain": 6.19
+      }
+    ],
+    "wins": 2,
+    "total": 5,
+    "avg_gain": -1.5
+  },
+  {
+    "week": "17.04-24.04.2026",
+    "picks": [
+      {
+        "ticker": "POET",
+        "prev_gain": 107.99,
+        "actual_gain": -51.59
+      },
+      {
+        "ticker": "ATOM",
+        "prev_gain": 60.75,
+        "actual_gain": 28.95
+      },
+      {
+        "ticker": "FCEL",
+        "prev_gain": 54.21,
+        "actual_gain": 19.05
+      },
+      {
+        "ticker": "VELO",
+        "prev_gain": 54.17,
+        "actual_gain": -22.18
+      },
+      {
+        "ticker": "JLHL",
+        "prev_gain": 53.23,
+        "actual_gain": 17.68
+      }
+    ],
+    "wins": 3,
+    "total": 5,
+    "avg_gain": -1.62
+  },
+  {
+    "week": "24.04-01.05.2026",
+    "picks": [
+      {
+        "ticker": "BAND",
+        "prev_gain": 85.99,
+        "actual_gain": 11.21
+      },
+      {
+        "ticker": "XRX",
+        "prev_gain": 73.08,
+        "actual_gain": 2.96
+      },
+      {
+        "ticker": "ESPR",
+        "prev_gain": 62.83,
+        "actual_gain": 0.96
+      },
+      {
+        "ticker": "SIMO",
+        "prev_gain": 52.82,
+        "actual_gain": 8.35
+      },
+      {
+        "ticker": "MRAM",
+        "prev_gain": 52.74,
+        "actual_gain": 25.59
+      }
+    ],
+    "wins": 5,
+    "total": 5,
+    "avg_gain": 9.81
+  }
+]
