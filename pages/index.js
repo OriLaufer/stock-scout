@@ -359,24 +359,17 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: c.thead }}>
-                  {[t.rank, t.stock, t.gain, t.mktCap, lang === 'he' ? 'רצף' : 'Streak', t.trend, ''].map((h, i) => (
+                  {[t.rank, t.stock, t.gain, t.mktCap, lang === 'he' ? 'נפח' : 'Volume', t.trend, ''].map((h, i) => (
                     <th key={i} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: c.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', borderBottom: `1px solid ${c.border}` }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {stocks.map((stock, i) => {
-                  const hof = hallOfFame[stock.ticker]
-                  const wp = hof?.weekPresence || []
-                  let streak = 0
-                  for (let j = wp.length - 1; j >= 0; j--) {
-                    if (wp[j] != null) streak++
-                    else break
-                  }
                   return (<>
                     <StockRow key={stock.ticker} stock={stock} rank={i + 1} isOpen={openStock === stock.ticker}
                       onClick={() => setOpenStock(openStock === stock.ticker ? null : stock.ticker)} c={c} t={t} dark={dark}
-                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} streak={streak} />
+                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} />
                     {openStock === stock.ticker && (
                       <tr key={`${stock.ticker}-panel`}>
                         <td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${c.border}` }}>
@@ -820,16 +813,25 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
   )
 }
 
-function Sparkline({ ticker, width = 80, height = 26 }) {
-  const [closes, setCloses] = useState(null)
+const priceCache = {}
+
+function usePriceHistory(ticker) {
+  const [data, setData] = useState(priceCache[ticker] || null)
   useEffect(() => {
+    if (priceCache[ticker]) { setData(priceCache[ticker]); return }
     fetch(`/api/price-history?ticker=${encodeURIComponent(ticker)}`)
       .then(r => r.json())
-      .then(d => setCloses(d.closes || []))
-      .catch(() => setCloses([]))
+      .then(d => { priceCache[ticker] = d; setData(d) })
+      .catch(() => setData({ closes: [], volumes: [] }))
   }, [ticker])
+  return data
+}
 
-  if (closes === null) return <div style={{ width, height: 8, borderRadius: 3, background: '#e0e0e0', opacity: 0.35, marginTop: 5 }} />
+function Sparkline({ ticker, width = 80, height = 26 }) {
+  const data = usePriceHistory(ticker)
+  const closes = data?.closes || []
+
+  if (!data) return <div style={{ width, height: 8, borderRadius: 3, background: '#e0e0e0', opacity: 0.35, marginTop: 5 }} />
   if (closes.length < 2) return null
 
   const min = Math.min(...closes)
@@ -851,6 +853,30 @@ function Sparkline({ ticker, width = 80, height = 26 }) {
   )
 }
 
+function VolSpike({ ticker, dark, c }) {
+  const data = usePriceHistory(ticker)
+  const volumes = data?.volumes || []
+
+  if (!data) return <span style={{ fontSize: 11, color: c.muted }}>—</span>
+  if (volumes.length < 10) return <span style={{ fontSize: 11, color: c.muted }}>—</span>
+
+  const recent  = volumes.slice(-5).reduce((a, b) => a + b, 0) / 5
+  const baseline = volumes.slice(0, -5).reduce((a, b) => a + b, 0) / (volumes.length - 5)
+  const spike = baseline > 0 ? Math.round((recent / baseline - 1) * 100) : 0
+
+  const hot  = spike >= 150
+  const warm = spike >= 50
+  const bg    = hot ? (dark ? '#1a3a1a' : '#EAF3DE') : warm ? (dark ? '#3a2a0a' : '#FAEEDA') : (dark ? '#2a2a3e' : '#f0f0f0')
+  const color = hot ? '#097c3e' : warm ? '#cc8800' : c.muted
+  const icon  = hot ? '🔥' : warm ? '📊' : '📉'
+
+  return (
+    <span style={{ background: bg, color, padding: '3px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
+      {icon} {spike >= 0 ? '+' : ''}{spike}% vol
+    </span>
+  )
+}
+
 function Chip({ label, bg, color }) {
   return <span style={{ background: bg, color, padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{label}</span>
 }
@@ -861,7 +887,7 @@ function formatMcap(market_cap) {
   return `$${Math.round(market_cap / 1_000_000)}M`
 }
 
-function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans, streak }) {
+function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans }) {
   const buzz = stock.buzz || {}
 
   const count = appearanceCount || 1
@@ -870,11 +896,6 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
     pct > 70 ? { bg: dark ? '#1a3a1a' : '#EAF3DE', color: dark ? '#7dcc7d' : '#27500A', text: `🟢 ${count}/${totalScans} ${t.appearances}` } :
     pct > 30 ? { bg: dark ? '#3a2a0a' : '#FAEEDA', color: dark ? '#ffcc66' : '#633806', text: `🟡 ${count}/${totalScans} ${t.appearances}` } :
     { bg: dark ? '#3a0a0a' : '#FCEBEB', color: dark ? '#ff8888' : '#791F1F', text: `🔴 ${count}/${totalScans} ${t.appearances}` }
-
-  const s = streak || 1
-  const streakBg   = s >= 4 ? (dark ? '#2a1a00' : '#FFF3CD') : s >= 2 ? (dark ? '#1a2a3a' : '#E8F4FD') : (dark ? '#2a2a2a' : '#F5F5F5')
-  const streakColor = s >= 4 ? (dark ? '#ffcc44' : '#7a4f00') : s >= 2 ? (dark ? '#66aaff' : '#1a5a9a') : c.muted
-  const streakLabel = s >= 4 ? `🔥 ${s} ${t.weeks}` : s >= 2 ? `⚡ ${s} ${t.weeks}` : t.new
 
   const buzzScore = buzz.score || 0
   const isBuzzAlert = stock.buzz_alert || buzzScore >= 7
@@ -896,8 +917,8 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
         <span style={{ fontSize: 18, fontWeight: 800, color: '#097c3e' }}>+{stock.change_pct}%</span>
       </td>
       <td style={{ padding: '11px 14px', color: c.muted, fontSize: 13 }}>{formatMcap(stock.market_cap)}</td>
-      <td style={{ padding: '11px 14px', textAlign: 'center' }}>
-        <span style={{ background: streakBg, color: streakColor, padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 700 }}>{streakLabel}</span>
+      <td style={{ padding: '11px 14px' }}>
+        <VolSpike ticker={stock.ticker} dark={dark} c={c} />
       </td>
       <td style={{ padding: '11px 14px' }}>
         <span style={{ background: trendBadge.bg, color: trendBadge.color, padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>{trendBadge.text}</span>

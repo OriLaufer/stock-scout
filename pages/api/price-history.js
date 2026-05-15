@@ -5,9 +5,11 @@ export default async function handler(req, res) {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker.toUpperCase())}?range=1mo&interval=1d`
     const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
     const d = await r.json()
-    const closes = (d.chart?.result?.[0]?.indicators?.quote?.[0]?.close || []).filter(v => v != null)
+    const quote   = d.chart?.result?.[0]?.indicators?.quote?.[0] || {}
+    const closes  = (quote.close  || []).filter(v => v != null)
+    const volumes = (quote.volume || []).filter(v => v != null)
     res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate')
-    res.json({ closes })
+    res.json({ closes, volumes })
   } catch {
     res.json({ closes: [] })
   }
