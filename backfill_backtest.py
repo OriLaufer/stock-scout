@@ -60,6 +60,9 @@ def main():
 
     r = supabase.table("weekly_scans").select("*").order("created_at", desc=False).execute()
     all_rows = r.data or []
+    print(f"Raw rows from Supabase: {len(all_rows)}")
+    if all_rows:
+        print(f"Row keys: {list(all_rows[0].keys())}")
 
     # Parse + deduplicate (keep earliest row per week_label)
     processed = []
@@ -72,13 +75,16 @@ def main():
         try:
             parsed = json.loads(row["stocks_json"])
             stocks = parsed.get("stocks", parsed) if isinstance(parsed, dict) else parsed
+            already_has = bool(parsed.get("backtest")) if isinstance(parsed, dict) else False
             processed.append({
-                "id":         row["id"],
-                "week_label": label,
-                "week_end":   parse_week_end(label),
-                "stocks":     stocks,
-                "parsed":     parsed if isinstance(parsed, dict) else {"stocks": stocks},
+                "week_label":   label,
+                "week_end":     parse_week_end(label),
+                "stocks":       stocks,
+                "parsed":       parsed if isinstance(parsed, dict) else {"stocks": stocks},
+                "already_done": already_has,
             })
+            status = "✓ has backtest" if already_has else "  needs backtest"
+            print(f"  {label}  {status}")
         except Exception as e:
             print(f"  Parse error {label}: {e}")
 
@@ -93,7 +99,7 @@ def main():
         nxt  = processed[i + 1]
 
         # Skip if already backfilled
-        if this["parsed"].get("backtest"):
+        if this["already_done"]:
             print(f"SKIP {this['week_label']} — backtest already present")
             skipped += 1
             continue
@@ -142,10 +148,15 @@ def main():
         new_json = dict(this["parsed"])
         new_json["backtest"] = bt_entry
         try:
-            supabase.table("weekly_scans").update(
+            resp = supabase.table("weekly_scans").update(
                 {"stocks_json": json.dumps(new_json)}
-            ).eq("id", this["id"]).execute()
-            updated += 1
+            ).eq("week_label", this["week_label"]).execute()
+            rows_affected = len(resp.data) if resp.data else 0
+            print(f"  Supabase update: {rows_affected} row(s) affected")
+            if rows_affected == 0:
+                print(f"  WARNING: no rows updated — check RLS policies or week_label match")
+            else:
+                updated += 1
         except Exception as e:
             print(f"  Supabase save error: {e}")
 
