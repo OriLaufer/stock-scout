@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { useState, useEffect, useRef } from 'react'
+import fs from 'fs'
+import path from 'path'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -251,8 +253,6 @@ export async function getServerSideProps() {
     }
   } catch {}
 
-  // Backtest: stored in ticker_buzz table under special key "__BACKTEST__"
-  // Written by backfill_backtest.py and weekly scanner.py
   function parseWeekEndDate(label) {
     const m = (label || '').match(/(\d{2})\.(\d{2})\.(\d{4})$/)
     if (!m) return new Date(0)
@@ -266,18 +266,13 @@ export async function getServerSideProps() {
     if (scan.backtest) backtestByWeek[scan.backtest.week] = scan.backtest
   }
 
-  // From ticker_buzz.__BACKTEST__ (written by backfill script)
+  // From data/backtest.json (written by backfill_backtest.py via GitHub Actions)
   try {
-    const { data: btRow } = await supabase
-      .from('ticker_buzz')
-      .select('buzz_json')
-      .eq('ticker', '__BACKTEST__')
-      .single()
-    if (btRow?.buzz_json) {
-      const entries = typeof btRow.buzz_json === 'string' ? JSON.parse(btRow.buzz_json) : btRow.buzz_json
-      for (const bt of (entries || [])) {
-        if (bt?.week && !backtestByWeek[bt.week]) backtestByWeek[bt.week] = bt
-      }
+    const btPath = path.join(process.cwd(), 'data', 'backtest.json')
+    const btRaw = fs.readFileSync(btPath, 'utf-8')
+    const btEntries = JSON.parse(btRaw)
+    for (const bt of (btEntries || [])) {
+      if (bt?.week && !backtestByWeek[bt.week]) backtestByWeek[bt.week] = bt
     }
   } catch {}
 

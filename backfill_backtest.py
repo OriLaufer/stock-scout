@@ -158,21 +158,12 @@ def main():
         all_entries.append(bt_entry)
         updated += 1
 
-    # Save ALL backtest weeks as a single record in ticker_buzz table
-    # Uses existing table — no new schema needed
-    if all_entries:
-        try:
-            resp = supabase.table("ticker_buzz").upsert({
-                "ticker":     "__BACKTEST__",
-                "buzz_json":  json.dumps(all_entries),
-                "updated_at": datetime.utcnow().isoformat(),
-            }).execute()
-            rows = len(resp.data) if resp.data else 0
-            print(f"\nSaved {len(all_entries)} weeks to ticker_buzz.__BACKTEST__ ({rows} row affected)")
-        except Exception as e:
-            print(f"\nSupabase save error: {e}")
-    else:
-        print("\nNo entries to save.")
+    # Write results to data/backtest.json — workflow will commit + push
+    out_path = os.path.join(os.path.dirname(__file__), "data", "backtest.json")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(all_entries, f, indent=2)
+    print(f"\nWrote {len(all_entries)} weeks to {out_path}")
 
     print(f"\n{'='*55}")
     print(f"Done — {updated} weeks computed, {skipped} skipped")
