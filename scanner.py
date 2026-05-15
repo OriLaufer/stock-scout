@@ -288,16 +288,17 @@ def find_top20_by_marketcap(price_data, names_dict):
         checked += 1
         try:
             t = c["ticker"]
-            info = yf.Ticker(t).fast_info
-            mcap = info.get("market_cap") or info.get("marketCap") or 0
-            
+            ticker_obj = yf.Ticker(t)
+            info = ticker_obj.info
+            mcap = info.get("marketCap") or info.get("market_cap") or 0
+
             if not mcap or mcap < MIN_MARKET_CAP:
                 continue  # too small, skip
-            
-            name = names_dict.get(t, t)
+
+            name = info.get("longName") or info.get("shortName") or names_dict.get(t, t)
             if len(name) > 60:
                 name = name[:57] + "..."
-            
+
             top20.append({
                 "ticker": t,
                 "name": name,
@@ -305,6 +306,8 @@ def find_top20_by_marketcap(price_data, names_dict):
                 "price": c["price"],
                 "volume": c["volume"],
                 "market_cap": int(mcap),
+                "sector": info.get("sector") or "",
+                "industry": info.get("industry") or "",
             })
             print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | {name[:40]}")
         except Exception as e:

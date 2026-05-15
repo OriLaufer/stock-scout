@@ -264,7 +264,6 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [sectorFilter, setSectorFilter] = useState(null)
-  const [sectorData, setSectorData] = useState({})
   const [watchlist, setWatchlist] = useState([])
   const [addingToWatchlist, setAddingToWatchlist] = useState(null)
   const [entryPriceInput, setEntryPriceInput] = useState({})
@@ -281,15 +280,6 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
     } catch {}
   }, [])
 
-  // Fetch sector data client-side for current week's stocks
-  useEffect(() => {
-    const tickers = (scans[0]?.stocks || []).map(s => s.ticker).join(',')
-    if (!tickers) return
-    fetch(`/api/sectors?tickers=${tickers}`)
-      .then(r => r.json())
-      .then(d => setSectorData(d.sectors || {}))
-      .catch(() => {})
-  }, [scans])
 
   function saveWatchlist(list) {
     setWatchlist(list)
@@ -393,8 +383,8 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         {tab === 'weekly' && (<>
 
         {/* Sector rotation heatmap */}
-        {sectorData && Object.keys(sectorData).length > 0 && (
-          <SectorHeatmap sectorData={sectorData} stocks={stocks} c={c} dark={dark} sectorFilter={sectorFilter} setSectorFilter={setSectorFilter} lang={lang} />
+        {stocks.some(s => s.sector) && (
+          <SectorHeatmap stocks={stocks} c={c} dark={dark} sectorFilter={sectorFilter} setSectorFilter={setSectorFilter} lang={lang} />
         )}
 
         {/* Stats chips — colors match trend column (appearance %) */}
@@ -427,7 +417,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
                 </tr>
               </thead>
               <tbody>
-                {stocks.filter(s => !sectorFilter || sectorData[s.ticker]?.sector === sectorFilter).map((stock, i) => {
+                {stocks.filter(s => !sectorFilter || s.sector === sectorFilter).map((stock, i) => {
                   return (<>
                     <StockRow key={stock.ticker} stock={stock} rank={i + 1} isOpen={openStock === stock.ticker}
                       onClick={() => setOpenStock(openStock === stock.ticker ? null : stock.ticker)} c={c} t={t} dark={dark}
@@ -1025,11 +1015,10 @@ const SECTOR_ICONS = {
   'Biotechnology': '🧬',
 }
 
-function SectorHeatmap({ sectorData, stocks, c, dark, sectorFilter, setSectorFilter, lang }) {
+function SectorHeatmap({ stocks, c, dark, sectorFilter, setSectorFilter, lang }) {
   const counts = {}
   for (const s of stocks) {
-    const sec = sectorData[s.ticker]?.sector
-    if (sec) counts[sec] = (counts[sec] || 0) + 1
+    if (s.sector) counts[s.sector] = (counts[s.sector] || 0) + 1
   }
   const sectors = Object.entries(counts).sort((a, b) => b[1] - a[1])
   if (!sectors.length) return null
