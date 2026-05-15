@@ -153,6 +153,15 @@ export async function getServerSideProps() {
     }
   }
 
+  // Sort by actual week-end date (newest first), not by Supabase created_at
+  function parseWeekEnd(label) {
+    // "24.04-01.05.2026" → end part is after the last dash before the year
+    const match = label.match(/(\d{2})\.(\d{2})\.(\d{4})$/)
+    if (!match) return new Date(0)
+    return new Date(`${match[3]}-${match[2]}-${match[1]}`)
+  }
+  unique.sort((a, b) => parseWeekEnd(b.week_label) - parseWeekEnd(a.week_label))
+
   // Count how many scans each ticker appeared in (across ALL scans)
   const appearanceCounts = {}
   for (const scan of unique) {

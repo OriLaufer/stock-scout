@@ -1,0 +1,39 @@
+name: Stock Scout - Single Historical Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Reference date YYYY-MM-DD (the Friday of the week you want)'
+        required: true
+        default: '2026-05-01'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests supabase yfinance pandas
+
+      - name: Run historical scan
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+          MIN_MARKET_CAP: ${{ secrets.MIN_MARKET_CAP }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+        run: python scanner.py --date ${{ github.event.inputs.date }}
