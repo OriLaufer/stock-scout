@@ -349,11 +349,25 @@ def main():
     buzz["enhanced_score"] = enhanced
 
     # Save to Supabase
-    supabase.table("ticker_buzz").upsert({
-        "ticker": ticker,
-        "buzz_json": json.dumps(buzz),
-        "updated_at": datetime.now().isoformat(),
-    }).execute()
+    try:
+        supabase.table("ticker_buzz").upsert({
+            "ticker": ticker,
+            "buzz_json": json.dumps(buzz),
+            "updated_at": datetime.now().isoformat(),
+        }).execute()
+        print(f"\nSaved to Supabase.")
+    except Exception as e:
+        print(f"\nSupabase save error: {e}")
+        print("Trying insert instead of upsert...")
+        try:
+            supabase.table("ticker_buzz").insert({
+                "ticker": ticker,
+                "buzz_json": json.dumps(buzz),
+                "updated_at": datetime.now().isoformat(),
+            }).execute()
+            print("Insert succeeded.")
+        except Exception as e2:
+            print(f"Insert also failed: {e2}")
 
     print(f"\nDone. Refresh the dashboard to see the full panel for {ticker}.")
 
