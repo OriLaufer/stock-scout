@@ -315,6 +315,7 @@ def find_top20_by_marketcap(price_data, names_dict):
         name = names_dict.get(t, t)
         sector, industry = "", ""
         try:
+            time.sleep(0.3)  # avoid rate limiting when fetching details for final picks
             info = yf.Ticker(t).info
             name = info.get("longName") or info.get("shortName") or name
             sector = info.get("sector") or ""
@@ -964,17 +965,29 @@ def build_buzz(ticker, name):
 # ============== STREAK / HISTORY ==============
 def get_previous_week_data():
     try:
+        # Fetch recent scans and sort by week_label date (not created_at).
+        # Backfill scans are created after real weekly scans, so created_at order
+        # can return the wrong "previous" week.
         r = (
             supabase.table("weekly_scans")
             .select("*")
             .order("created_at", desc=True)
-            .limit(1)
+            .limit(30)
             .execute()
         )
-        if r.data:
-            data = json.loads(r.data[0]["stocks_json"])
-            stocks = data.get("stocks", data) if isinstance(data, dict) else data
-            return {s["ticker"]: s for s in stocks if isinstance(s, dict)}
+        if not r.data:
+            return {}
+
+        def parse_week_end(label):
+            m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", label)
+            if not m:
+                return datetime(2000, 1, 1)
+            return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+
+        sorted_scans = sorted(r.data, key=lambda s: parse_week_end(s["week_label"]), reverse=True)
+        data = json.loads(sorted_scans[0]["stocks_json"])
+        stocks = data.get("stocks", data) if isinstance(data, dict) else data
+        return {s["ticker"]: s for s in stocks if isinstance(s, dict)}
     except Exception as e:
         print(f"Previous week error: {e}")
     return {}
