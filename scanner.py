@@ -195,37 +195,23 @@ def fetch_weekly_changes(tickers, reference_date=None):
         return float(valid.iloc[-1])
 
     all_data = {}
-    empty_batches = 0
     for i in range(0, len(tickers), BATCH):
         batch = tickers[i : i + BATCH]
         batch_num = i // BATCH + 1
         total_batches = (len(tickers) + BATCH - 1) // BATCH
         print(f"  Batch {batch_num}/{total_batches} ({len(batch)} tickers)...")
-
-        df = None
-        for attempt in range(3):  # retry up to 3 times
-            try:
-                df = yf.download(
-                    tickers=" ".join(batch),
-                    start=start.strftime("%Y-%m-%d"),
-                    end=end.strftime("%Y-%m-%d"),
-                    progress=False,
-                    auto_adjust=True,
-                    threads=True,
-                    group_by="ticker",
-                )
-                if not df.empty:
-                    break
-                print(f"    Batch {batch_num} empty on attempt {attempt+1}, retrying...")
-                time.sleep(2 * (attempt + 1))
-            except Exception as e:
-                print(f"    Batch {batch_num} error attempt {attempt+1}: {e}")
-                time.sleep(2 * (attempt + 1))
-
-        if df is None or df.empty:
-            print(f"    WARNING: Batch {batch_num} failed after 3 attempts — {len(batch)} tickers skipped!")
-            empty_batches += 1
-            continue
+        try:
+            df = yf.download(
+                tickers=" ".join(batch),
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                progress=False,
+                auto_adjust=True,
+                threads=True,
+                group_by="ticker",
+            )
+            if df.empty:
+                continue
 
             # Process each ticker in the batch
             for t in batch:
@@ -254,9 +240,8 @@ def fetch_weekly_changes(tickers, reference_date=None):
                         continue
 
                     pct = ((this_close - prev_close) / prev_close) * 100
-                    
+
                     # Weekly total volume - sum of all trading days AFTER prev_friday up to this_friday
-                    # This is what TradingView shows when you select "1 Week"
                     if len(volumes) > 0:
                         prev_ts = pd.Timestamp(prev_friday.date())
                         this_ts = pd.Timestamp(this_friday.date())
@@ -284,55 +269,75 @@ def fetch_weekly_changes(tickers, reference_date=None):
         time.sleep(0.5)  # gentle rate limit
 
     print(f"Got price data for {len(all_data)} tickers")
-    if empty_batches > 0:
-        print(f"WARNING: {empty_batches} batches failed — up to {empty_batches * BATCH} tickers may be missing from results!")
     return all_data
 
 
 def find_top20_by_marketcap(price_data, names_dict):
-    """Walk through gainers in order of % gain. For each one, check market cap.
-    If passes filter → add to list. Stop when we have 20.
-    Simple and direct - exactly what we want."""
-    # Sort all gainers by % change (highest first)
+    """Find top 20 gainers that pass the market cap filter.
+
+    Strategy: check only the top 100 candidates by % gain — anything outside that
+    is not a meaningful top gainer anyway. Use fast_info for market cap (lightweight,
+    much less rate-limited than info) with a brief pause after the heavy batch downloads.
+    """
     sorted_gainers = sorted(price_data.values(), key=lambda x: x["change_pct"], reverse=True)
-    
-    print(f"Walking through gainers (highest % first), filtering by market cap >= ${MIN_MARKET_CAP/1e6:.0f}M...")
+    candidates = sorted_gainers[:100]  # only top 100 by % gain
+
+    print(f"Checking market caps for top {len(candidates)} gainers (>= ${MIN_MARKET_CAP/1e6:.0f}M)...")
+    print("  Pausing 8s to let rate limits recover after batch downloads...")
+    time.sleep(8)
+
+    # Step 1: bulk-fetch market caps via fast_info (lightweight endpoint)
+    market_caps = {}
+    for idx, c in enumerate(candidates):
+        t = c["ticker"]
+        try:
+            fi = yf.Ticker(t).fast_info
+            mc = getattr(fi, "market_cap", None) or 0
+            if mc and mc > 0:
+                market_caps[t] = int(mc)
+        except Exception:
+            pass
+        if (idx + 1) % 10 == 0:
+            time.sleep(0.5)
+
+    print(f"  Got market caps for {len(market_caps)}/{len(candidates)} candidates")
+
+    # Step 2: filter in % order, then fetch full details for the final 20
     top20 = []
-    checked = 0
-    
-    for c in sorted_gainers:
+    for c in candidates:
         if len(top20) >= 20:
             break
-        checked += 1
-        try:
-            t = c["ticker"]
-            ticker_obj = yf.Ticker(t)
-            info = ticker_obj.info
-            mcap = info.get("marketCap") or info.get("market_cap") or 0
-
-            if not mcap or mcap < MIN_MARKET_CAP:
-                continue  # too small, skip
-
-            name = info.get("longName") or info.get("shortName") or names_dict.get(t, t)
-            if len(name) > 60:
-                name = name[:57] + "..."
-
-            top20.append({
-                "ticker": t,
-                "name": name,
-                "change_pct": c["change_pct"],
-                "price": c["price"],
-                "volume": c["volume"],
-                "market_cap": int(mcap),
-                "sector": info.get("sector") or "",
-                "industry": info.get("industry") or "",
-            })
-            print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | {name[:40]}")
-        except Exception as e:
-            # Couldn't fetch market cap - skip this one and move on
+        t = c["ticker"]
+        mcap = market_caps.get(t, 0)
+        if not mcap or mcap < MIN_MARKET_CAP:
             continue
-    
-    print(f"Checked {checked} stocks to find {len(top20)} that pass market cap filter")
+
+        name = names_dict.get(t, t)
+        sector, industry = "", ""
+        try:
+            info = yf.Ticker(t).info
+            name = info.get("longName") or info.get("shortName") or name
+            sector = info.get("sector") or ""
+            industry = info.get("industry") or ""
+        except Exception:
+            pass
+
+        if len(name) > 60:
+            name = name[:57] + "..."
+
+        top20.append({
+            "ticker": t,
+            "name": name,
+            "change_pct": c["change_pct"],
+            "price": c["price"],
+            "volume": c["volume"],
+            "market_cap": mcap,
+            "sector": sector,
+            "industry": industry,
+        })
+        print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | {name[:40]}")
+
+    print(f"Found {len(top20)} stocks from top-100 gainers passing market cap filter")
     return top20
 
 
