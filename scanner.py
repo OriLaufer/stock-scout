@@ -985,12 +985,13 @@ def get_previous_week_data():
             return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
 
         sorted_scans = sorted(r.data, key=lambda s: parse_week_end(s["week_label"]), reverse=True)
-        data = json.loads(sorted_scans[0]["stocks_json"])
+        prev_scan = sorted_scans[0]
+        data = json.loads(prev_scan["stocks_json"])
         stocks = data.get("stocks", data) if isinstance(data, dict) else data
-        return {s["ticker"]: s for s in stocks if isinstance(s, dict)}
+        return {s["ticker"]: s for s in stocks if isinstance(s, dict)}, prev_scan["week_label"]
     except Exception as e:
         print(f"Previous week error: {e}")
-    return {}
+    return {}, ""
 
 
 def week_exists_in_supabase(week_label):
@@ -1052,7 +1053,7 @@ def compute_weekly_backtest(prev_week_data, price_data, week_label):
 
     print(f"  Backtest: {wins}/{len(valid)} picks rose | avg: {avg:+.2f}%")
     return {
-        "week":  week_label,
+        "week":  week_label,  # selection week (when picks were chosen)
         "picks": picks,
         "wins":  wins,
         "total": len(valid),
@@ -1373,15 +1374,16 @@ def main():
         return
 
     # 4. Streak + real backtest from previous week
-    prev = get_previous_week_data()
+    prev, prev_week_label = get_previous_week_data()
     for s in top20:
         s["streak"] = prev.get(s["ticker"], {}).get("streak", 0) + 1 if s["ticker"] in prev else 1
     returning_count = sum(1 for s in top20 if s["streak"] >= 2)
     print(f"Streak: {returning_count} stocks returning from last week")
 
     # Real backtest: how did last week's top 5 actually perform THIS week?
+    # Label by the SELECTION week (prev_week_label), not the current week.
     print("\nComputing real backtest (last week's picks vs this week's prices)...")
-    weekly_backtest = compute_weekly_backtest(prev, price_data, week_label)
+    weekly_backtest = compute_weekly_backtest(prev, price_data, prev_week_label)
 
     # 5. Save first so compute_backtest can include this week's data
     save_to_supabase(top20, [], week_label, backtest_entry=weekly_backtest)
