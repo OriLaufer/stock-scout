@@ -195,21 +195,37 @@ def fetch_weekly_changes(tickers, reference_date=None):
         return float(valid.iloc[-1])
 
     all_data = {}
+    empty_batches = 0
     for i in range(0, len(tickers), BATCH):
         batch = tickers[i : i + BATCH]
-        print(f"  Batch {i // BATCH + 1}/{(len(tickers) + BATCH - 1) // BATCH} ({len(batch)} tickers)...")
-        try:
-            df = yf.download(
-                tickers=" ".join(batch),
-                start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
-                progress=False,
-                auto_adjust=True,
-                threads=True,
-                group_by="ticker",
-            )
-            if df.empty:
-                continue
+        batch_num = i // BATCH + 1
+        total_batches = (len(tickers) + BATCH - 1) // BATCH
+        print(f"  Batch {batch_num}/{total_batches} ({len(batch)} tickers)...")
+
+        df = None
+        for attempt in range(3):  # retry up to 3 times
+            try:
+                df = yf.download(
+                    tickers=" ".join(batch),
+                    start=start.strftime("%Y-%m-%d"),
+                    end=end.strftime("%Y-%m-%d"),
+                    progress=False,
+                    auto_adjust=True,
+                    threads=True,
+                    group_by="ticker",
+                )
+                if not df.empty:
+                    break
+                print(f"    Batch {batch_num} empty on attempt {attempt+1}, retrying...")
+                time.sleep(2 * (attempt + 1))
+            except Exception as e:
+                print(f"    Batch {batch_num} error attempt {attempt+1}: {e}")
+                time.sleep(2 * (attempt + 1))
+
+        if df is None or df.empty:
+            print(f"    WARNING: Batch {batch_num} failed after 3 attempts — {len(batch)} tickers skipped!")
+            empty_batches += 1
+            continue
 
             # Process each ticker in the batch
             for t in batch:
@@ -268,6 +284,8 @@ def fetch_weekly_changes(tickers, reference_date=None):
         time.sleep(0.5)  # gentle rate limit
 
     print(f"Got price data for {len(all_data)} tickers")
+    if empty_batches > 0:
+        print(f"WARNING: {empty_batches} batches failed — up to {empty_batches * BATCH} tickers may be missing from results!")
     return all_data
 
 
