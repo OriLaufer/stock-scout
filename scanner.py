@@ -1197,19 +1197,28 @@ def send_email(stocks, bonus, week_label, backtest=None):
             if sector else ""
         )
 
-        recommended_html = (
-            '<span style="background:#fff3cd;color:#856404;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;margin-left:6px">⭐ Pick of the week</span>'
-            if s.get("recommended") else ""
-        )
+        if s.get("recommended"):
+            cats = s.get("rec_catalysts", [])
+            cats_txt = " · ".join(cats) if cats else "highest score"
+            recommended_html = (
+                f'<div style="margin-top:6px;background:linear-gradient(90deg,#fff3cd 0%,#ffe9a8 100%);'
+                f'border-left:4px solid #ff8c00;padding:8px 12px;border-radius:6px">'
+                f'<div style="font-size:11px;font-weight:800;color:#7a4a00;letter-spacing:0.5px">🔥 PICK OF THE WEEK</div>'
+                f'<div style="font-size:11px;color:#7a4a00;margin-top:2px">{cats_txt}</div>'
+                f'</div>'
+            )
+        else:
+            recommended_html = ""
 
         rows += f"""<tr style="border-bottom:1px solid #f0f0f0">
 <td style="padding:10px 14px;color:#999;font-size:13px;font-weight:700">{i}</td>
 <td style="padding:10px 14px">
   <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
     <span style="font-size:15px;font-weight:800;color:#1a1a2e">{s["ticker"]}</span>
-    {streak_badge}{sector_html}{recommended_html}
+    {streak_badge}{sector_html}
   </div>
   <div style="font-size:11px;color:#999;margin-top:3px">{s["name"]}</div>
+  {recommended_html}
 </td>
 <td style="padding:10px 14px;white-space:nowrap">
   <span style="font-size:18px;font-weight:800;color:#097c3e">+{s["change_pct"]}%</span>
@@ -1328,18 +1337,25 @@ def send_email(stocks, bonus, week_label, backtest=None):
 def compute_recommendation_scores(top5):
     """Score each of the top 5 picks for momentum continuation likelihood.
 
-    Signals:
-      +3  weekly close in top 85% of week's range (buyers in control all week)
-      +1  weekly close in top 60-85%
-      -2  weekly close below 40% (distributed, sellers took over)
-      +2  distance from 52W high > 30% (plenty of room to run)
-      +1  distance from 52W high > 15%
-      +2  this-week volume > 2x the 3-month daily average
-      +1  this-week volume > 1.3x the 3-month daily average
-      +2  short interest > 15% of float (squeeze potential)
-      +1  short interest > 10%
+    Built from FORENSIC ANALYSIS of 9 historical winners vs 36 losers
+    (analyze_winners.py output). Findings:
+      - FLOAT SIZE is the dominant signal: winners median 14.6M vs losers 66.4M
+      - Volume ratio (3m): mild positive signal (3.1 vs 2.9)
+      - Short interest, close location, Friday volume: NO discriminative power
+        (winners actually had LOWER short interest — confounding factor)
 
-    Tags the highest scorer with recommended=True.
+    Signals (data-driven):
+      Float (THE killer signal):
+        +5  float < 15M   (tiny — explosive potential, like MGRT/AGL/ELA winners)
+        +3  float 15-30M  (small)
+        +1  float 30-60M  (medium)
+        -1  float > 100M  (too large to run hard)
+      Volume (mild confirmation):
+        +2  this-week volume > 4x 3-month daily average
+        +1  this-week volume > 2x 3-month daily average
+
+    Also collects display-only data (close_loc, short_pct) without scoring it.
+    Tags the highest scorer with recommended=True and catalysts list.
     """
     print("\nComputing recommendation scores for top 5...")
     time.sleep(3)
@@ -1349,74 +1365,80 @@ def compute_recommendation_scores(top5):
         t = stock["ticker"]
         score = 0
         signals = {}
+        catalysts = []  # human-readable reasons (the "why")
+
         try:
             time.sleep(0.8)
             obj = yf.Ticker(t)
 
-            # Weekly close location: high/low/close of the past 10 calendar days
-            hist = obj.history(period="10d", interval="1d")
-            if not hist.empty:
-                week_high  = float(hist["High"].max())
-                week_low   = float(hist["Low"].min())
-                week_close = float(hist["Close"].iloc[-1])
-                rng = week_high - week_low
-                if rng > 0:
-                    loc = (week_close - week_low) / rng
-                    signals["close_location_pct"] = round(loc * 100, 1)
-                    if loc >= 0.85:
-                        score += 3
-                    elif loc >= 0.60:
-                        score += 1
-                    elif loc < 0.40:
-                        score -= 2
-
-            fi = obj.fast_info
-
-            # Distance from 52-week high
-            high_52w = getattr(fi, "fifty_two_week_high", None)
-            if high_52w and stock["price"] > 0:
-                dist = (high_52w - stock["price"]) / high_52w * 100
-                signals["dist_from_52w_high_pct"] = round(dist, 1)
-                if dist > 30:
-                    score += 2
-                elif dist > 15:
-                    score += 1
-
-            # Volume ratio vs 3-month daily average
-            avg_vol = getattr(fi, "three_month_average_volume", None)
-            if avg_vol and avg_vol > 0 and stock.get("volume", 0) > 0:
-                ratio = stock["volume"] / (avg_vol * 5)  # weekly sum vs avg_daily * 5 days
-                signals["volume_ratio"] = round(ratio, 2)
-                if ratio >= 2.0:
-                    score += 2
-                elif ratio >= 1.3:
-                    score += 1
-
-            # Short interest
+            # --- FLOAT (the killer signal) ---
+            float_m = 0
             try:
                 info = obj.info
-                short_pct = info.get("shortPercentOfFloat") or 0
-                if short_pct > 0:
-                    signals["short_interest_pct"] = round(float(short_pct) * 100, 1)
-                    if short_pct >= 0.15:
-                        score += 2
-                    elif short_pct >= 0.10:
+                fl = info.get("floatShares") or 0
+                if fl:
+                    float_m = round(fl / 1e6, 1)
+                    signals["float_m"] = float_m
+                    if float_m < 15:
+                        score += 5
+                        catalysts.append(f"🔥 Tiny float ({float_m}M)")
+                    elif float_m < 30:
+                        score += 3
+                        catalysts.append(f"Small float ({float_m}M)")
+                    elif float_m < 60:
                         score += 1
+                    elif float_m > 100:
+                        score -= 1
+                # Display-only short interest (not scored — historical analysis showed no signal)
+                sp = info.get("shortPercentOfFloat") or 0
+                if sp:
+                    signals["short_pct"] = round(float(sp) * 100, 1)
             except Exception:
                 pass
+
+            # --- VOLUME RATIO (mild confirmation) ---
+            fi = obj.fast_info
+            avg_vol = getattr(fi, "three_month_average_volume", None)
+            if avg_vol and avg_vol > 0 and stock.get("volume", 0) > 0:
+                ratio = stock["volume"] / (avg_vol * 5)
+                signals["volume_ratio"] = round(ratio, 2)
+                if ratio >= 4.0:
+                    score += 2
+                    catalysts.append(f"Volume {ratio:.1f}x avg")
+                elif ratio >= 2.0:
+                    score += 1
+                    catalysts.append(f"Volume {ratio:.1f}x avg")
+
+            # --- DISPLAY-ONLY: close location and 52W (not scored — historically not discriminative) ---
+            hist = obj.history(period="10d", interval="1d")
+            if not hist.empty:
+                wh = float(hist["High"].max())
+                wl = float(hist["Low"].min())
+                wc = float(hist["Close"].iloc[-1])
+                rng = wh - wl
+                if rng > 0:
+                    signals["close_location_pct"] = round((wc - wl) / rng * 100, 1)
+            high_52w = getattr(fi, "fifty_two_week_high", None)
+            if high_52w and stock["price"] > 0:
+                signals["dist_from_52w_high_pct"] = round((high_52w - stock["price"]) / high_52w * 100, 1)
 
         except Exception as e:
             print(f"  {t}: score error — {e}")
 
-        scored.append({**stock, "rec_score": max(0, score), "rec_signals": signals})
-        print(f"  {t}: rec_score={score} | {signals}")
+        scored.append({
+            **stock,
+            "rec_score":     max(0, score),
+            "rec_signals":   signals,
+            "rec_catalysts": catalysts,
+        })
+        print(f"  {t}: score={score} | float={signals.get('float_m', 'N/A')}M | vol={signals.get('volume_ratio', 'N/A')}x")
 
     # Tag the winner
     if scored:
         best = max(scored, key=lambda x: x["rec_score"])
         for s in scored:
             s["recommended"] = (s["ticker"] == best["ticker"])
-        print(f"  => Recommended: {best['ticker']} (score {best['rec_score']})")
+        print(f"  => 🔥 Pick of the week: {best['ticker']} (score {best['rec_score']}) — {', '.join(best.get('rec_catalysts', [])) or 'no strong catalysts'}")
 
     return scored
 
