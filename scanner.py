@@ -1180,10 +1180,16 @@ def send_email(stocks, bonus, week_label, backtest=None):
         if s.get("recommended"):
             cats = s.get("rec_catalysts", [])
             cats_txt = " · ".join(cats) if cats else "highest score"
+            conf  = s.get("rec_confidence", "low")
+            gap   = s.get("rec_gap", 0)
+            conf_emoji = {"high": "🔥", "medium": "✨", "low": "⚠️"}.get(conf, "")
+            conf_label = {"high": "High confidence", "medium": "Medium confidence", "low": "Low confidence"}.get(conf, "")
+            score = s.get("rec_score", 0)
             recommended_html = (
                 f'<div style="margin-top:6px;background:linear-gradient(90deg,#fff3cd 0%,#ffe9a8 100%);'
                 f'border-left:4px solid #ff8c00;padding:8px 12px;border-radius:6px">'
-                f'<div style="font-size:11px;font-weight:800;color:#7a4a00;letter-spacing:0.5px">🔥 PICK FOR NEXT WEEK</div>'
+                f'<div style="font-size:11px;font-weight:800;color:#7a4a00;letter-spacing:0.5px">🔥 PICK FOR NEXT WEEK '
+                f'<span style="font-size:10px;font-weight:600">· score {score} · {conf_emoji} {conf_label} (+{gap})</span></div>'
                 f'<div style="font-size:11px;color:#7a4a00;margin-top:2px">{cats_txt}</div>'
                 f'</div>'
             )
@@ -1314,79 +1320,112 @@ def send_email(stocks, bonus, week_label, backtest=None):
 
 
 # ============== RECOMMENDATION SCORING ==============
-def compute_recommendation_scores(top5):
-    """Score each of the top 5 picks for NEXT WEEK's likely winner.
+def float_score(float_m):
+    """Continuous float score, anchored on forensic data
+    (winners median ~14.6M, losers median ~66.4M).
 
-    Built from FORENSIC ANALYSIS of 9 historical winners vs 36 losers:
-      - FLOAT SIZE is the dominant signal (winners median 14.6M vs losers 66.4M)
-      - Volume ratio (3m): mild positive signal
-      - Short interest / close location / Friday volume: NO discriminative power
-
-    Signals scored:
-      FLOAT (the killer signal):
-        +5  float < 15M  (tiny — MGRT/AGL/ELA winners pattern)
-        +3  float 15-30M
-        +1  float 30-60M
-        -1  float > 100M (too large to run hard)
-      VOLUME (mild confirmation, week vs 3-month avg):
-        +2  weekly volume > 4x 3-month daily average
-        +1  weekly volume > 2x 3-month daily average
-      EARNINGS CATALYST:
-        +1  earnings within next 7 days (volatility = opportunity)
+    Piecewise-linear, no step discontinuities:
+      float <= 10M     →  +5.0  (winner cap)
+      float 10M → 75M  →  smooth 5 → 0
+      float 75M → 250M →  smooth 0 → -1
+      float >= 250M    →  -1.0  (penalty cap)
     """
-    print("\nComputing recommendation scores for top 5...")
+    if float_m is None or float_m <= 0:
+        return 0.0
+    if float_m <= 10:
+        return 5.0
+    if float_m < 75:
+        return 5.0 * (75 - float_m) / 65          # 5 at 10M → 0 at 75M
+    if float_m < 250:
+        return -(float_m - 75) / 175              # 0 at 75M → -1 at 250M
+    return -1.0
+
+
+def volume_score(ratio):
+    """Continuous volume score (week vs 3-month daily avg, * 5).
+    Mild signal (forensic: winners 3.1 vs losers 2.9), bounded 0-2."""
+    if ratio is None or ratio <= 1:
+        return 0.0
+    if ratio < 2:
+        return ratio - 1                          # 0 → 1 between 1x and 2x
+    if ratio < 5:
+        return 1.0 + (ratio - 2) / 3              # 1 → 2 between 2x and 5x
+    return 2.0
+
+
+def confidence_level(scored):
+    """Confidence in the pick = gap between #1 and #2.
+    Big gap = the pick stands out. Small gap = all 5 are similar = low confidence."""
+    if not scored or len(scored) < 2:
+        return "low", 0
+    ordered = sorted([s.get("rec_score", 0) for s in scored], reverse=True)
+    gap = ordered[0] - ordered[1]
+    if gap >= 2.5:
+        return "high", gap
+    if gap >= 1.0:
+        return "medium", gap
+    return "low", gap
+
+
+def compute_recommendation_scores(top5):
+    """Score each top-5 pick for NEXT WEEK's likely winner.
+
+    Built from FORENSIC ANALYSIS of 9 historical winners vs 36 losers.
+    Uses CONTINUOUS scoring (no step thresholds — fairer, no cliff drops):
+      FLOAT (data-driven, dominant signal): -1 → +5
+      VOLUME (data-driven, mild signal):      0 → +2
+      EARNINGS (theory, volatility catalyst): 0 or +1
+
+    Returns each stock enriched with rec_score (float), rec_signals (dict),
+    rec_catalysts (list), recommended (bool), rec_confidence ("high"/"medium"/"low").
+    """
+    print("\nComputing recommendation scores for top 5 (continuous)...")
     time.sleep(3)
 
     scored = []
     for stock in top5:
         t = stock["ticker"]
-        score = 0
         signals = {}
-        catalysts = []  # human-readable reasons (the "why")
+        catalysts = []
+        f_sc = v_sc = e_sc = 0.0
 
         try:
             time.sleep(0.8)
             obj = yf.Ticker(t)
 
-            # --- FLOAT (the killer signal) ---
-            float_m = 0
+            # --- FLOAT (continuous, -1 to +5) ---
             try:
                 info = obj.info
                 fl = info.get("floatShares") or 0
                 if fl:
-                    float_m = round(fl / 1e6, 1)
-                    signals["float_m"] = float_m
-                    if float_m < 15:
-                        score += 5
-                        catalysts.append(f"🔥 Tiny float ({float_m}M)")
-                    elif float_m < 30:
-                        score += 3
-                        catalysts.append(f"Small float ({float_m}M)")
-                    elif float_m < 60:
-                        score += 1
-                    elif float_m > 100:
-                        score -= 1
-                # Display-only short interest (not scored — historical analysis showed no signal)
+                    fm = round(fl / 1e6, 1)
+                    signals["float_m"] = fm
+                    f_sc = float_score(fm)
+                    if fm <= 15:
+                        catalysts.append(f"🔥 Tiny float ({fm}M)")
+                    elif fm <= 30:
+                        catalysts.append(f"Small float ({fm}M)")
+                    elif fm >= 150:
+                        catalysts.append(f"⚠️ Large float ({fm}M)")
                 sp = info.get("shortPercentOfFloat") or 0
                 if sp:
                     signals["short_pct"] = round(float(sp) * 100, 1)
             except Exception:
                 pass
 
-            # --- VOLUME RATIO (mild confirmation) ---
+            # --- VOLUME (continuous, 0 to +2) ---
             fi = obj.fast_info
             avg_vol = getattr(fi, "three_month_average_volume", None)
             if avg_vol and avg_vol > 0 and stock.get("volume", 0) > 0:
                 ratio = stock["volume"] / (avg_vol * 5)
                 signals["volume_ratio"] = round(ratio, 2)
+                v_sc = volume_score(ratio)
                 if ratio >= 4.0:
-                    score += 2
                     catalysts.append(f"Volume {ratio:.1f}x avg")
                 elif ratio >= 2.0:
-                    score += 1
                     catalysts.append(f"Volume {ratio:.1f}x avg")
 
-            # --- EARNINGS CATALYST (next 7 days) ---
+            # --- EARNINGS (binary, 0 or +1) ---
             try:
                 cal = obj.calendar
                 next_earn = None
@@ -1400,13 +1439,13 @@ def compute_recommendation_scores(top5):
                     earn_date = next_earn if isinstance(next_earn, datetime) else datetime.combine(next_earn, datetime.min.time())
                     days_to = (earn_date - datetime.now()).days
                     if 0 <= days_to <= 7:
-                        score += 1
+                        e_sc = 1.0
                         catalysts.append(f"📊 Earnings in {days_to}d")
                         signals["earnings_in_days"] = days_to
             except Exception:
                 pass
 
-            # --- DISPLAY-ONLY: close location and 52W (not scored — historically not discriminative) ---
+            # --- DISPLAY-ONLY (not scored, but shown in identity card) ---
             hist = obj.history(period="10d", interval="1d")
             if not hist.empty:
                 wh = float(hist["High"].max())
@@ -1422,20 +1461,32 @@ def compute_recommendation_scores(top5):
         except Exception as e:
             print(f"  {t}: score error — {e}")
 
+        total = round(max(0, f_sc + v_sc + e_sc), 2)
+        signals["score_breakdown"] = {
+            "float":    round(f_sc, 2),
+            "volume":   round(v_sc, 2),
+            "earnings": round(e_sc, 2),
+        }
         scored.append({
             **stock,
-            "rec_score":     max(0, score),
+            "rec_score":     total,
             "rec_signals":   signals,
             "rec_catalysts": catalysts,
         })
-        print(f"  {t}: score={score} | float={signals.get('float_m', 'N/A')}M | vol={signals.get('volume_ratio', 'N/A')}x")
+        print(f"  {t}: score={total} (float={f_sc:.2f} + vol={v_sc:.2f} + earn={e_sc:.2f})"
+              f" | float_m={signals.get('float_m', 'N/A')}")
 
-    # Tag the winner
+    # Pick the winner + measure confidence (gap to #2)
     if scored:
         best = max(scored, key=lambda x: x["rec_score"])
+        conf_label, gap = confidence_level(scored)
         for s in scored:
-            s["recommended"] = (s["ticker"] == best["ticker"])
-        print(f"  => 🔥 Pick for Next Week: {best['ticker']} (score {best['rec_score']}) — {', '.join(best.get('rec_catalysts', [])) or 'no strong catalysts'}")
+            s["recommended"]    = (s["ticker"] == best["ticker"])
+            s["rec_confidence"] = conf_label
+            s["rec_gap"]        = round(gap, 2)
+        emoji = {"high": "🔥", "medium": "✨", "low": "⚠️"}[conf_label]
+        print(f"  => {emoji} Pick for Next Week: {best['ticker']} "
+              f"(score {best['rec_score']}, gap +{gap:.2f}, confidence={conf_label})")
 
     return scored
 

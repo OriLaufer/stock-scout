@@ -72,6 +72,11 @@ const T = {
     earningsIn: 'דוח רבעוני בעוד',
     days: 'ימים',
     hotTheme: 'תמה חמה',
+    confHigh: 'אמון גבוה',
+    confMed: 'אמון בינוני',
+    confLow: 'אמון נמוך',
+    scoreBreakdown: 'פירוט הציון',
+    gap: 'פער מהשני',
   },
   en: {
     title: 'Stock Scout',
@@ -136,6 +141,11 @@ const T = {
     earningsIn: 'Earnings in',
     days: 'days',
     hotTheme: 'Hot theme',
+    confHigh: 'High confidence',
+    confMed: 'Medium confidence',
+    confLow: 'Low confidence',
+    scoreBreakdown: 'Score breakdown',
+    gap: 'Gap from #2',
   }
 }
 
@@ -1517,14 +1527,23 @@ function QuoteCard({ quote, c, dark }) {
 function IdentityCard({ stock, c, t, dark, lang }) {
   const sig = stock.rec_signals || {}
   const cats = stock.rec_catalysts || []
-  const themes = stock.themes || []
   const score = stock.rec_score
   const recommended = stock.recommended
+  const breakdown = sig.score_breakdown || null
+  const confidence = stock.rec_confidence || null
+  const gap = stock.rec_gap
 
   // Don't show anything if we don't have scoring data at all
-  if (score === undefined && !themes.length && !Object.keys(sig).length) return null
+  if (score === undefined && !Object.keys(sig).length) return null
 
   const he = lang === 'he'
+
+  const confInfo = {
+    high:   { label: t.confHigh, color: '#097c3e', bg: dark ? '#1a3a1a' : '#EAF3DE', emoji: '🔥' },
+    medium: { label: t.confMed,  color: '#cc8800', bg: dark ? '#3a2a0a' : '#FAEEDA', emoji: '✨' },
+    low:    { label: t.confLow,  color: '#888',    bg: dark ? '#2a2a3e' : '#f0f0f0', emoji: '⚠️' },
+  }
+  const conf = confidence && confInfo[confidence]
 
   const Stat = ({ label, value, color = c.text, hint }) => (
     <div style={{
@@ -1571,15 +1590,51 @@ function IdentityCard({ stock, c, t, dark, lang }) {
               {t.pickNextWeek}
             </span>
           )}
+          {recommended && conf && (
+            <span title={gap !== undefined ? `${t.gap}: +${gap}` : ''} style={{
+              background: conf.bg, color: conf.color,
+              padding: '3px 10px', borderRadius: 12,
+              fontSize: 11, fontWeight: 700,
+            }}>
+              {conf.emoji} {conf.label}{gap !== undefined ? ` (+${gap})` : ''}
+            </span>
+          )}
         </div>
         {score !== undefined && (
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
             <span style={{ fontSize: 10, color: c.muted, fontWeight: 600 }}>{t.recScore}:</span>
             <span style={{ fontSize: 22, fontWeight: 800, color: score >= 5 ? '#097c3e' : score >= 3 ? '#cc8800' : c.muted }}>{score}</span>
-            <span style={{ fontSize: 11, color: c.muted }}>/10</span>
+            <span style={{ fontSize: 11, color: c.muted }}>/8</span>
           </div>
         )}
       </div>
+
+      {/* Score breakdown (only when we have the data) */}
+      {breakdown && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+          {[
+            { label: 'Float',    val: breakdown.float,    max: 5 },
+            { label: 'Volume',   val: breakdown.volume,   max: 2 },
+            { label: 'Earnings', val: breakdown.earnings, max: 1 },
+          ].map(b => {
+            const v = b.val || 0
+            const positive = v > 0
+            const neutral  = v === 0
+            const fg = positive ? '#097c3e' : v < 0 ? '#c0392b' : c.muted
+            return (
+              <span key={b.label} title={`${b.label} contributes ${v >= 0 ? '+' : ''}${v} out of max ${b.max}`} style={{
+                fontSize: 10, fontWeight: 700,
+                background: c.card, border: `1px solid ${c.border}`,
+                padding: '3px 8px', borderRadius: 8,
+                color: c.muted, display: 'inline-flex', gap: 4, alignItems: 'center',
+              }}>
+                <span style={{ color: c.muted }}>{b.label}</span>
+                <span style={{ color: fg }}>{v >= 0 ? '+' : ''}{v}</span>
+              </span>
+            )
+          })}
+        </div>
+      )}
 
       {/* Stats grid */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: cats.length ? 12 : 0 }}>
