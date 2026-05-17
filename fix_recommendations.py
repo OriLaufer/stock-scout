@@ -13,16 +13,60 @@ TARGET_WEEK = "08.05-15.05.2026"
 
 # ---- Themes (mirror of scanner.py) ----
 THEME_KEYWORDS = {
-    "AI Infrastructure": ["semiconductor", "data center", "server", "memory", "storage", "gpu", "artificial intelligence", "cloud computing", "hpc", "chip"],
-    "Nuclear Power":     ["uranium", "nuclear", "atomic"],
-    "Biotech & Pharma":  ["biotech", "pharmaceutical", "therapeutics", "biopharmaceutical", "drug", "oncology", "genomic", "clinical"],
-    "Energy Transition": ["solar", "wind", "battery", "lithium", "electric vehicle", " ev ", "renewable", "clean energy", "hydrogen"],
-    "Crypto & Blockchain": ["bitcoin", "crypto", "blockchain", "digital asset", "mining"],
-    "Defense & Aerospace": ["defense", "aerospace", "military", "government contractor", "missile", "satellite"],
-    "Oil & Gas":         ["oil", "gas", "petroleum", "drilling", "upstream", "downstream", "lng"],
-    "Healthcare":        ["hospital", "medical device", "health services", "diagnostics", "health care"],
-    "Real Estate":       ["reit", "real estate", "mortgage", "property"],
-    "Financial":         ["bank", "insurance", "financial services", "asset management", "investment bank"],
+    # AI & Compute (granular)
+    "AI Infrastructure":     ["artificial intelligence", "machine learning", "ai chip", "ai accelerator", "neural network", "deep learning"],
+    "Semiconductors":        ["semiconductor", "wafer", "foundry", "integrated circuit", " chip ", "chipmaker"],
+    "Memory & Storage":      ["memory", "storage", "nand", "dram", "ssd", "flash memory", "solid state"],
+    "Cloud & Data Centers":  ["cloud computing", "data center", "hyperscale", "colocation"],
+    "Cybersecurity":         ["cybersecurity", "cyber security", "firewall", "endpoint security"],
+    "Software & SaaS":       ["software", "saas", "application software", "enterprise software"],
+    "Quantum Computing":     ["quantum"],
+    # Energy
+    "Nuclear Power":         ["uranium", "nuclear", "atomic energy", "small modular reactor", "smr"],
+    "Solar":                 ["solar", "photovoltaic"],
+    "Battery & Lithium":     ["battery", "lithium", "energy storage system"],
+    "Hydrogen & Fuel Cell":  ["hydrogen", "fuel cell"],
+    "Wind Power":            ["wind energy", "wind turbine", "wind farm"],
+    "Oil & Gas":             ["oil", "petroleum", "drilling", "upstream", "downstream", "refining"],
+    "Natural Gas & LNG":     ["natural gas", "lng", "liquefied natural"],
+    # Healthcare
+    "Biotech":               ["biotech", "biopharmaceutical", "biological"],
+    "Pharmaceuticals":       ["pharmaceutical", "drug manufacturer"],
+    "Oncology":              ["oncology", "cancer therapeutics", "tumor"],
+    "Gene & Cell Therapy":   ["gene therapy", "cell therapy", "genomic", "crispr", "mrna"],
+    "Medical Devices":       ["medical device", "medical equipment", "diagnostic equipment"],
+    "Weight Loss & GLP-1":   ["glp-1", "obesity", "weight loss", "anti-obesity"],
+    # Mobility & Robotics
+    "EV & Autonomous":       ["electric vehicle", " ev ", "autonomous vehicle", "lidar", "self-driving"],
+    "Robotics & Automation": ["robotics", "industrial automation", "industrial robot"],
+    "5G & Telecom":          ["5g", "telecom", "wireless infrastructure", "telecommunication"],
+    # Crypto
+    "Bitcoin & BTC Mining":  ["bitcoin", "btc"],
+    "Crypto Mining":         ["crypto mining", "cryptocurrency mining", "digital asset mining"],
+    "Blockchain":            ["blockchain", "digital asset", "cryptocurrency exchange"],
+    # Mining & Materials
+    "Gold & Silver":         ["gold mining", "silver mining", "precious metal"],
+    "Copper & Industrial Metals": ["copper", "iron ore", "aluminum", "industrial metal"],
+    "Rare Earth & Critical Minerals": ["rare earth", "critical mineral", "lithium mining"],
+    "Steel":                 ["steel"],
+    # Defense & Space
+    "Defense":               ["defense", "military", "missile", "weapons"],
+    "Aerospace":             ["aerospace", "aviation manufacturer"],
+    "Space":                 ["space", "satellite", "rocket", "spacecraft"],
+    # Consumer
+    "Cannabis":              ["cannabis", "marijuana", "hemp"],
+    "Gaming":                ["video game", "gaming"],
+    "Streaming & Media":     ["streaming", "media production"],
+    "Restaurants":           ["restaurant", "fast food", "quick service"],
+    "Travel & Leisure":      ["airline", "cruise", "hotel", "casino", "resort"],
+    "Retail":                ["retail store", "department store", "specialty retail"],
+    "E-commerce":            ["e-commerce", "online retail", "marketplace"],
+    # Real Estate & Finance
+    "REITs":                 ["reit", "real estate investment"],
+    "Banking":               ["bank", "commercial bank", "regional bank"],
+    "Insurance":             ["insurance"],
+    "Fintech & Payments":    ["fintech", "payment processing", "digital payment", "neobank"],
+    "Asset Management":      ["asset management", "investment management"],
 }
 
 
