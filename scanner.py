@@ -45,77 +45,6 @@ EARLY_SIGNAL_KEYWORDS = [
     "moving", "spiking", "running", "pumping", "ripping",
 ]
 
-THEME_KEYWORDS = {
-    # ===== AI & Compute (granular) =====
-    "AI Infrastructure":     ["artificial intelligence", "machine learning", "ai chip", "ai accelerator", "neural network", "deep learning"],
-    "Semiconductors":        ["semiconductor", "wafer", "foundry", "integrated circuit", " chip ", "chipmaker"],
-    "Memory & Storage":      ["memory", "storage", "nand", "dram", "ssd", "flash memory", "solid state"],
-    "Cloud & Data Centers":  ["cloud computing", "data center", "hyperscale", "colocation"],
-    "Cybersecurity":         ["cybersecurity", "cyber security", "firewall", "endpoint security", "threat intelligence"],
-    "Software & SaaS":       ["software", "saas", "application software", "enterprise software"],
-    "Quantum Computing":     ["quantum"],
-
-    # ===== Energy =====
-    "Nuclear Power":         ["uranium", "nuclear", "atomic energy", "small modular reactor", "smr"],
-    "Solar":                 ["solar", "photovoltaic"],
-    "Battery & Lithium":     ["battery", "lithium", "energy storage system"],
-    "Hydrogen & Fuel Cell":  ["hydrogen", "fuel cell"],
-    "Wind Power":            ["wind energy", "wind turbine", "wind farm"],
-    "Oil & Gas":             ["oil", "petroleum", "drilling", "upstream", "downstream", "refining"],
-    "Natural Gas & LNG":     ["natural gas", "lng", "liquefied natural"],
-
-    # ===== Healthcare =====
-    "Biotech":               ["biotech", "biopharmaceutical", "biological"],
-    "Pharmaceuticals":       ["pharmaceutical", "drug manufacturer"],
-    "Oncology":              ["oncology", "cancer therapeutics", "tumor"],
-    "Gene & Cell Therapy":   ["gene therapy", "cell therapy", "genomic", "crispr", "mrna"],
-    "Medical Devices":       ["medical device", "medical equipment", "diagnostic equipment"],
-    "Weight Loss & GLP-1":   ["glp-1", "obesity", "weight loss", "anti-obesity"],
-
-    # ===== Mobility & Robotics =====
-    "EV & Autonomous":       ["electric vehicle", " ev ", "autonomous vehicle", "lidar", "self-driving"],
-    "Robotics & Automation": ["robotics", "industrial automation", "industrial robot"],
-    "5G & Telecom":          ["5g", "telecom", "wireless infrastructure", "telecommunication"],
-
-    # ===== Crypto =====
-    "Bitcoin & BTC Mining":  ["bitcoin", "btc"],
-    "Crypto Mining":         ["crypto mining", "cryptocurrency mining", "digital asset mining"],
-    "Blockchain":            ["blockchain", "digital asset", "cryptocurrency exchange"],
-
-    # ===== Mining & Materials =====
-    "Gold & Silver":         ["gold mining", "silver mining", "precious metal"],
-    "Copper & Industrial Metals": ["copper", "iron ore", "aluminum", "industrial metal"],
-    "Rare Earth & Critical Minerals": ["rare earth", "critical mineral", "lithium mining"],
-    "Steel":                 ["steel"],
-
-    # ===== Defense & Space =====
-    "Defense":               ["defense", "military", "missile", "weapons"],
-    "Aerospace":             ["aerospace", "aviation manufacturer"],
-    "Space":                 ["space", "satellite", "rocket", "spacecraft"],
-
-    # ===== Consumer =====
-    "Cannabis":              ["cannabis", "marijuana", "hemp"],
-    "Gaming":                ["video game", "gaming"],
-    "Streaming & Media":     ["streaming", "media production"],
-    "Restaurants":           ["restaurant", "fast food", "quick service"],
-    "Travel & Leisure":      ["airline", "cruise", "hotel", "casino", "resort"],
-    "Retail":                ["retail store", "department store", "specialty retail"],
-    "E-commerce":            ["e-commerce", "online retail", "marketplace"],
-
-    # ===== Real Estate & Finance =====
-    "REITs":                 ["reit", "real estate investment"],
-    "Banking":               ["bank", "commercial bank", "regional bank"],
-    "Insurance":             ["insurance"],
-    "Fintech & Payments":    ["fintech", "payment processing", "digital payment", "neobank"],
-    "Asset Management":      ["asset management", "investment management"],
-}
-
-
-def get_themes(industry: str, name: str) -> list:
-    """Return relevant investment themes based on industry + company name."""
-    text = f"{industry} {name}".lower()
-    return [theme for theme, kws in THEME_KEYWORDS.items() if any(kw in text for kw in kws)]
-
 
 # ============== UTILITIES ==============
 def clean_text(text, max_len=140):
@@ -406,7 +335,6 @@ def find_top20_by_marketcap(price_data, names_dict):
             "market_cap": mcap,
             "sector": sector,
             "industry": industry,
-            "themes": get_themes(industry, name),
         })
         print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | {name[:40]}")
 
@@ -1386,7 +1314,7 @@ def send_email(stocks, bonus, week_label, backtest=None):
 
 
 # ============== RECOMMENDATION SCORING ==============
-def compute_recommendation_scores(top5, all_top20=None):
+def compute_recommendation_scores(top5):
     """Score each of the top 5 picks for NEXT WEEK's likely winner.
 
     Built from FORENSIC ANALYSIS of 9 historical winners vs 36 losers:
@@ -1400,24 +1328,14 @@ def compute_recommendation_scores(top5, all_top20=None):
         +3  float 15-30M
         +1  float 30-60M
         -1  float > 100M (too large to run hard)
-      VOLUME (mild confirmation):
+      VOLUME (mild confirmation, week vs 3-month avg):
         +2  weekly volume > 4x 3-month daily average
         +1  weekly volume > 2x 3-month daily average
-      THEMATIC CONFIRMATION (sector heat):
-        +2  shares a theme with 2+ other top-20 picks (sector is HOT)
-        +1  shares a theme with 1 other top-20 pick
       EARNINGS CATALYST:
         +1  earnings within next 7 days (volatility = opportunity)
     """
     print("\nComputing recommendation scores for top 5...")
     time.sleep(3)
-
-    # Pre-compute theme frequency across top 20 (for thematic confirmation)
-    theme_counts = {}
-    if all_top20:
-        for s in all_top20:
-            for theme in s.get("themes", []):
-                theme_counts[theme] = theme_counts.get(theme, 0) + 1
 
     scored = []
     for stock in top5:
@@ -1467,28 +1385,6 @@ def compute_recommendation_scores(top5, all_top20=None):
                 elif ratio >= 2.0:
                     score += 1
                     catalysts.append(f"Volume {ratio:.1f}x avg")
-
-            # --- THEMATIC CONFIRMATION (sector heat) ---
-            stock_themes = stock.get("themes", [])
-            shared = 0
-            hot_themes = []
-            for theme in stock_themes:
-                # count of OTHER top-20 stocks in this theme (excluding self)
-                others = max(0, theme_counts.get(theme, 0) - 1)
-                if others > shared:
-                    shared = others
-                if others >= 1:
-                    hot_themes.append(f"{theme} ({others+1} in top 20)")
-            if shared >= 2:
-                score += 2
-                catalysts.append(f"🌶️ Hot theme: {hot_themes[0]}")
-                signals["theme_companions"] = shared
-            elif shared == 1:
-                score += 1
-                catalysts.append(f"Theme companion: {hot_themes[0]}")
-                signals["theme_companions"] = shared
-            if hot_themes:
-                signals["hot_themes"] = hot_themes
 
             # --- EARNINGS CATALYST (next 7 days) ---
             try:
@@ -1602,7 +1498,7 @@ def main():
     # Compute recommendation scores for top 5 (which of the top 5 is most likely to continue)
     top5_tickers = sorted(top20, key=lambda x: x["change_pct"], reverse=True)[:5]
     if not historical_mode:
-        scored = compute_recommendation_scores(top5_tickers, all_top20=top20)
+        scored = compute_recommendation_scores(top5_tickers)
         scored_map = {s["ticker"]: s for s in scored}
         for s in top20:
             if s["ticker"] in scored_map:

@@ -1221,8 +1221,11 @@ function VolSpike({ ticker, dark, c }) {
   const icon  = hot ? '🔥' : warm ? '📊' : '📉'
 
   return (
-    <span style={{ background: bg, color, padding: '3px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
-      {icon} {spike >= 0 ? '+' : ''}{spike}% vol
+    <span
+      title="Last 5 trading days vs prior 25-day baseline"
+      style={{ background: bg, color, padding: '3px 9px', borderRadius: 12, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.1 }}>
+      <span>{icon} {spike >= 0 ? '+' : ''}{spike}% vol</span>
+      <span style={{ fontSize: 8, fontWeight: 500, opacity: 0.75, marginTop: 1 }}>5d vs 25d</span>
     </span>
   )
 }
@@ -1447,17 +1450,6 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
           <Sparkline ticker={stock.ticker} width={72} height={20} />
           <RSIBadge ticker={stock.ticker} dark={dark} c={c} size="small" />
-          {(stock.themes || []).slice(0, 2).map((theme, ti) => (
-            <span key={ti} style={{
-              fontSize: 9, fontWeight: 600,
-              background: dark ? '#1a2a3a' : '#e8f0fa',
-              color: dark ? '#7daaff' : '#1a4d8f',
-              padding: '1px 6px', borderRadius: 6,
-              border: `1px solid ${dark ? '#2a3a5a' : '#c8d4f0'}`,
-            }}>
-              {theme}
-            </span>
-          ))}
         </div>
       </td>
       <td style={{ padding: '11px 14px' }}>
@@ -1589,23 +1581,6 @@ function IdentityCard({ stock, c, t, dark, lang }) {
         )}
       </div>
 
-      {/* Themes */}
-      {themes.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
-          {themes.map((theme, i) => (
-            <span key={i} style={{
-              fontSize: 11, fontWeight: 700,
-              background: dark ? '#1a2a3a' : '#e8f0fa',
-              color: dark ? '#7daaff' : '#1a4d8f',
-              padding: '3px 10px', borderRadius: 10,
-              border: `1px solid ${dark ? '#2a3a5a' : '#c8d4f0'}`,
-            }}>
-              {theme}
-            </span>
-          ))}
-        </div>
-      )}
-
       {/* Stats grid */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: cats.length ? 12 : 0 }}>
         {sig.float_m !== undefined && (
@@ -1621,6 +1596,7 @@ function IdentityCard({ stock, c, t, dark, lang }) {
             label={t.volRatio}
             value={`${sig.volume_ratio}x`}
             color={sig.volume_ratio >= 4 ? '#097c3e' : sig.volume_ratio >= 2 ? '#cc8800' : c.text}
+            hint={he ? 'שבוע מול ממוצע 3 חודשים' : 'Week vs 3-mo avg'}
           />
         )}
         {sig.short_pct !== undefined && (

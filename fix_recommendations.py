@@ -1,5 +1,8 @@
-"""One-time fix: compute themes + recommendation scores for the current scan
-and update Supabase, so the dashboard shows the Identity Card immediately."""
+"""One-time fix: compute recommendation scores for the current scan
+and update Supabase, so the dashboard shows the Identity Card immediately.
+
+Themes were removed — only float + volume + earnings are scored (the signals
+we know are reliable from forensic analysis)."""
 import os
 import json
 import time
@@ -10,70 +13,6 @@ from supabase import create_client
 supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"])
 
 TARGET_WEEK = "08.05-15.05.2026"
-
-# ---- Themes (mirror of scanner.py) ----
-THEME_KEYWORDS = {
-    # AI & Compute (granular)
-    "AI Infrastructure":     ["artificial intelligence", "machine learning", "ai chip", "ai accelerator", "neural network", "deep learning"],
-    "Semiconductors":        ["semiconductor", "wafer", "foundry", "integrated circuit", " chip ", "chipmaker"],
-    "Memory & Storage":      ["memory", "storage", "nand", "dram", "ssd", "flash memory", "solid state"],
-    "Cloud & Data Centers":  ["cloud computing", "data center", "hyperscale", "colocation"],
-    "Cybersecurity":         ["cybersecurity", "cyber security", "firewall", "endpoint security"],
-    "Software & SaaS":       ["software", "saas", "application software", "enterprise software"],
-    "Quantum Computing":     ["quantum"],
-    # Energy
-    "Nuclear Power":         ["uranium", "nuclear", "atomic energy", "small modular reactor", "smr"],
-    "Solar":                 ["solar", "photovoltaic"],
-    "Battery & Lithium":     ["battery", "lithium", "energy storage system"],
-    "Hydrogen & Fuel Cell":  ["hydrogen", "fuel cell"],
-    "Wind Power":            ["wind energy", "wind turbine", "wind farm"],
-    "Oil & Gas":             ["oil", "petroleum", "drilling", "upstream", "downstream", "refining"],
-    "Natural Gas & LNG":     ["natural gas", "lng", "liquefied natural"],
-    # Healthcare
-    "Biotech":               ["biotech", "biopharmaceutical", "biological"],
-    "Pharmaceuticals":       ["pharmaceutical", "drug manufacturer"],
-    "Oncology":              ["oncology", "cancer therapeutics", "tumor"],
-    "Gene & Cell Therapy":   ["gene therapy", "cell therapy", "genomic", "crispr", "mrna"],
-    "Medical Devices":       ["medical device", "medical equipment", "diagnostic equipment"],
-    "Weight Loss & GLP-1":   ["glp-1", "obesity", "weight loss", "anti-obesity"],
-    # Mobility & Robotics
-    "EV & Autonomous":       ["electric vehicle", " ev ", "autonomous vehicle", "lidar", "self-driving"],
-    "Robotics & Automation": ["robotics", "industrial automation", "industrial robot"],
-    "5G & Telecom":          ["5g", "telecom", "wireless infrastructure", "telecommunication"],
-    # Crypto
-    "Bitcoin & BTC Mining":  ["bitcoin", "btc"],
-    "Crypto Mining":         ["crypto mining", "cryptocurrency mining", "digital asset mining"],
-    "Blockchain":            ["blockchain", "digital asset", "cryptocurrency exchange"],
-    # Mining & Materials
-    "Gold & Silver":         ["gold mining", "silver mining", "precious metal"],
-    "Copper & Industrial Metals": ["copper", "iron ore", "aluminum", "industrial metal"],
-    "Rare Earth & Critical Minerals": ["rare earth", "critical mineral", "lithium mining"],
-    "Steel":                 ["steel"],
-    # Defense & Space
-    "Defense":               ["defense", "military", "missile", "weapons"],
-    "Aerospace":             ["aerospace", "aviation manufacturer"],
-    "Space":                 ["space", "satellite", "rocket", "spacecraft"],
-    # Consumer
-    "Cannabis":              ["cannabis", "marijuana", "hemp"],
-    "Gaming":                ["video game", "gaming"],
-    "Streaming & Media":     ["streaming", "media production"],
-    "Restaurants":           ["restaurant", "fast food", "quick service"],
-    "Travel & Leisure":      ["airline", "cruise", "hotel", "casino", "resort"],
-    "Retail":                ["retail store", "department store", "specialty retail"],
-    "E-commerce":            ["e-commerce", "online retail", "marketplace"],
-    # Real Estate & Finance
-    "REITs":                 ["reit", "real estate investment"],
-    "Banking":               ["bank", "commercial bank", "regional bank"],
-    "Insurance":             ["insurance"],
-    "Fintech & Payments":    ["fintech", "payment processing", "digital payment", "neobank"],
-    "Asset Management":      ["asset management", "investment management"],
-}
-
-
-def get_themes(industry, name):
-    text = f"{industry or ''} {name or ''}".lower()
-    return [theme for theme, kws in THEME_KEYWORDS.items() if any(kw in text for kw in kws)]
-
 
 # ---- Load current scan ----
 print(f"Loading {TARGET_WEEK} from Supabase...")
@@ -86,20 +25,6 @@ row = r.data[0]
 payload = json.loads(row["stocks_json"])
 stocks = payload.get("stocks", payload) if isinstance(payload, dict) else payload
 print(f"Found {len(stocks)} stocks.\n")
-
-# ---- Add themes to ALL top 20 ----
-print("Computing themes for all 20...")
-for s in stocks:
-    s["themes"] = get_themes(s.get("industry", ""), s.get("name", ""))
-    print(f"  {s['ticker']:7} themes: {s['themes']}")
-
-# ---- Compute theme_counts for thematic confirmation ----
-theme_counts = {}
-for s in stocks:
-    for theme in s.get("themes", []):
-        theme_counts[theme] = theme_counts.get(theme, 0) + 1
-
-print(f"\nTheme distribution in top 20: {theme_counts}\n")
 
 # ---- Top 5 ----
 top5 = sorted(stocks, key=lambda s: s.get("change_pct", 0), reverse=True)[:5]
@@ -121,7 +46,7 @@ for stock in top5:
         time.sleep(1.5)
         obj = yf.Ticker(t)
 
-        # Float
+        # Float (the killer signal)
         try:
             info = obj.info
             fl = info.get("floatShares") or 0
@@ -144,7 +69,7 @@ for stock in top5:
         except Exception as e:
             print(f"    {t}: info error — {e}")
 
-        # Volume ratio
+        # Volume ratio (week vs 3-month daily avg)
         fi = obj.fast_info
         avg_vol = getattr(fi, "three_month_average_volume", None)
         if avg_vol and avg_vol > 0 and stock.get("volume", 0) > 0:
@@ -157,28 +82,7 @@ for stock in top5:
                 score += 1
                 catalysts.append(f"Volume {ratio:.1f}x avg")
 
-        # Thematic confirmation
-        stock_themes = stock.get("themes", [])
-        shared = 0
-        hot_themes = []
-        for theme in stock_themes:
-            others = max(0, theme_counts.get(theme, 0) - 1)
-            if others > shared:
-                shared = others
-            if others >= 1:
-                hot_themes.append(f"{theme} ({others+1} in top 20)")
-        if shared >= 2:
-            score += 2
-            catalysts.append(f"🌶️ Hot theme: {hot_themes[0]}")
-            signals["theme_companions"] = shared
-        elif shared == 1:
-            score += 1
-            catalysts.append(f"Theme companion: {hot_themes[0]}")
-            signals["theme_companions"] = shared
-        if hot_themes:
-            signals["hot_themes"] = hot_themes
-
-        # Earnings
+        # Earnings within next 7 days
         try:
             cal = obj.calendar
             next_earn = None
@@ -198,7 +102,7 @@ for stock in top5:
         except Exception:
             pass
 
-        # Display-only: close location, 52W
+        # Display-only: close location, 52W distance
         hist = obj.history(period="10d", interval="1d")
         if not hist.empty:
             wh = float(hist["High"].max())
@@ -219,23 +123,25 @@ for stock in top5:
         "rec_signals":   signals,
         "rec_catalysts": catalysts,
     }
-    print(f"  {t}: score={score} | float={signals.get('float_m', 'N/A')}M | vol={signals.get('volume_ratio', 'N/A')}x | themes={stock_themes}")
+    print(f"  {t}: score={score} | float={signals.get('float_m', 'N/A')}M | vol={signals.get('volume_ratio', 'N/A')}x")
 
 # ---- Pick the winner ----
+best_ticker = None
 if scored_by_ticker:
     best_ticker = max(scored_by_ticker, key=lambda k: scored_by_ticker[k]["rec_score"])
     best = scored_by_ticker[best_ticker]
     print(f"\n🔥 PICK FOR NEXT WEEK: {best_ticker} (score {best['rec_score']})")
     print(f"   Why: {' · '.join(best['rec_catalysts']) or 'no strong catalysts'}\n")
 
-# ---- Write back to all 20 ----
+# ---- Write back to all 20 (strip any old themes too) ----
 for s in stocks:
     t = s["ticker"]
+    # Clean any leftover theme fields
+    s.pop("themes", None)
     if t in scored_by_ticker:
         s.update(scored_by_ticker[t])
         s["recommended"] = (t == best_ticker)
     else:
-        # Not in top 5 — empty defaults so dashboard doesn't break
         s["rec_score"] = 0
         s["rec_signals"] = {}
         s["rec_catalysts"] = []
@@ -247,4 +153,4 @@ supabase.table("weekly_scans").update({
     "stocks_json": json.dumps(payload)
 }).eq("week_label", TARGET_WEEK).execute()
 
-print("Done. Supabase updated with themes + recommendation scoring.")
+print("Done. Supabase updated.")
