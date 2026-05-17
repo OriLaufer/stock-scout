@@ -315,7 +315,7 @@ def find_top20_by_marketcap(price_data, names_dict):
         name = names_dict.get(t, t)
         sector, industry = "", ""
         try:
-            time.sleep(0.3)  # avoid rate limiting when fetching details for final picks
+            time.sleep(0.8)  # avoid rate limiting when fetching details for final picks
             info = yf.Ticker(t).info
             name = info.get("longName") or info.get("shortName") or name
             sector = info.get("sector") or ""
