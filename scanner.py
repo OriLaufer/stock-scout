@@ -1203,7 +1203,7 @@ def send_email(stocks, bonus, week_label, backtest=None):
             recommended_html = (
                 f'<div style="margin-top:6px;background:linear-gradient(90deg,#fff3cd 0%,#ffe9a8 100%);'
                 f'border-left:4px solid #ff8c00;padding:8px 12px;border-radius:6px">'
-                f'<div style="font-size:11px;font-weight:800;color:#7a4a00;letter-spacing:0.5px">🔥 PICK OF THE WEEK</div>'
+                f'<div style="font-size:11px;font-weight:800;color:#7a4a00;letter-spacing:0.5px">🔥 PICK FOR NEXT WEEK</div>'
                 f'<div style="font-size:11px;color:#7a4a00;margin-top:2px">{cats_txt}</div>'
                 f'</div>'
             )
@@ -1334,31 +1334,38 @@ def send_email(stocks, bonus, week_label, backtest=None):
 
 
 # ============== RECOMMENDATION SCORING ==============
-def compute_recommendation_scores(top5):
-    """Score each of the top 5 picks for momentum continuation likelihood.
+def compute_recommendation_scores(top5, all_top20=None):
+    """Score each of the top 5 picks for NEXT WEEK's likely winner.
 
-    Built from FORENSIC ANALYSIS of 9 historical winners vs 36 losers
-    (analyze_winners.py output). Findings:
-      - FLOAT SIZE is the dominant signal: winners median 14.6M vs losers 66.4M
-      - Volume ratio (3m): mild positive signal (3.1 vs 2.9)
-      - Short interest, close location, Friday volume: NO discriminative power
-        (winners actually had LOWER short interest — confounding factor)
+    Built from FORENSIC ANALYSIS of 9 historical winners vs 36 losers:
+      - FLOAT SIZE is the dominant signal (winners median 14.6M vs losers 66.4M)
+      - Volume ratio (3m): mild positive signal
+      - Short interest / close location / Friday volume: NO discriminative power
 
-    Signals (data-driven):
-      Float (THE killer signal):
-        +5  float < 15M   (tiny — explosive potential, like MGRT/AGL/ELA winners)
-        +3  float 15-30M  (small)
-        +1  float 30-60M  (medium)
-        -1  float > 100M  (too large to run hard)
-      Volume (mild confirmation):
-        +2  this-week volume > 4x 3-month daily average
-        +1  this-week volume > 2x 3-month daily average
-
-    Also collects display-only data (close_loc, short_pct) without scoring it.
-    Tags the highest scorer with recommended=True and catalysts list.
+    Signals scored:
+      FLOAT (the killer signal):
+        +5  float < 15M  (tiny — MGRT/AGL/ELA winners pattern)
+        +3  float 15-30M
+        +1  float 30-60M
+        -1  float > 100M (too large to run hard)
+      VOLUME (mild confirmation):
+        +2  weekly volume > 4x 3-month daily average
+        +1  weekly volume > 2x 3-month daily average
+      THEMATIC CONFIRMATION (sector heat):
+        +2  shares a theme with 2+ other top-20 picks (sector is HOT)
+        +1  shares a theme with 1 other top-20 pick
+      EARNINGS CATALYST:
+        +1  earnings within next 7 days (volatility = opportunity)
     """
     print("\nComputing recommendation scores for top 5...")
     time.sleep(3)
+
+    # Pre-compute theme frequency across top 20 (for thematic confirmation)
+    theme_counts = {}
+    if all_top20:
+        for s in all_top20:
+            for theme in s.get("themes", []):
+                theme_counts[theme] = theme_counts.get(theme, 0) + 1
 
     scored = []
     for stock in top5:
@@ -1409,6 +1416,48 @@ def compute_recommendation_scores(top5):
                     score += 1
                     catalysts.append(f"Volume {ratio:.1f}x avg")
 
+            # --- THEMATIC CONFIRMATION (sector heat) ---
+            stock_themes = stock.get("themes", [])
+            shared = 0
+            hot_themes = []
+            for theme in stock_themes:
+                # count of OTHER top-20 stocks in this theme (excluding self)
+                others = max(0, theme_counts.get(theme, 0) - 1)
+                if others > shared:
+                    shared = others
+                if others >= 1:
+                    hot_themes.append(f"{theme} ({others+1} in top 20)")
+            if shared >= 2:
+                score += 2
+                catalysts.append(f"🌶️ Hot theme: {hot_themes[0]}")
+                signals["theme_companions"] = shared
+            elif shared == 1:
+                score += 1
+                catalysts.append(f"Theme companion: {hot_themes[0]}")
+                signals["theme_companions"] = shared
+            if hot_themes:
+                signals["hot_themes"] = hot_themes
+
+            # --- EARNINGS CATALYST (next 7 days) ---
+            try:
+                cal = obj.calendar
+                next_earn = None
+                if isinstance(cal, dict):
+                    ed = cal.get("Earnings Date")
+                    if isinstance(ed, list) and ed:
+                        next_earn = ed[0]
+                    elif ed:
+                        next_earn = ed
+                if next_earn:
+                    earn_date = next_earn if isinstance(next_earn, datetime) else datetime.combine(next_earn, datetime.min.time())
+                    days_to = (earn_date - datetime.now()).days
+                    if 0 <= days_to <= 7:
+                        score += 1
+                        catalysts.append(f"📊 Earnings in {days_to}d")
+                        signals["earnings_in_days"] = days_to
+            except Exception:
+                pass
+
             # --- DISPLAY-ONLY: close location and 52W (not scored — historically not discriminative) ---
             hist = obj.history(period="10d", interval="1d")
             if not hist.empty:
@@ -1438,7 +1487,7 @@ def compute_recommendation_scores(top5):
         best = max(scored, key=lambda x: x["rec_score"])
         for s in scored:
             s["recommended"] = (s["ticker"] == best["ticker"])
-        print(f"  => 🔥 Pick of the week: {best['ticker']} (score {best['rec_score']}) — {', '.join(best.get('rec_catalysts', [])) or 'no strong catalysts'}")
+        print(f"  => 🔥 Pick for Next Week: {best['ticker']} (score {best['rec_score']}) — {', '.join(best.get('rec_catalysts', [])) or 'no strong catalysts'}")
 
     return scored
 
@@ -1501,7 +1550,7 @@ def main():
     # Compute recommendation scores for top 5 (which of the top 5 is most likely to continue)
     top5_tickers = sorted(top20, key=lambda x: x["change_pct"], reverse=True)[:5]
     if not historical_mode:
-        scored = compute_recommendation_scores(top5_tickers)
+        scored = compute_recommendation_scores(top5_tickers, all_top20=top20)
         scored_map = {s["ticker"]: s for s in scored}
         for s in top20:
             if s["ticker"] in scored_map:

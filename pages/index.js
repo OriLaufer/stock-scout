@@ -59,6 +59,19 @@ const T = {
     relativeBuzz: 'יחסית למרקט קאפ',
     noQuotes: 'אין ציטוטים זמינים',
     noBuzz: 'אין באז משמעותי השבוע',
+    pickNextWeek: '🔥 הבחירה לשבוע הקרוב',
+    identityCard: 'כרטיס זהות',
+    whyRecommended: 'למה זאת?',
+    floatLabel: 'Float',
+    volRatio: 'יחס נפח',
+    shortInt: 'שורט',
+    closeLoc: 'סגירה בטווח',
+    distHigh: 'מרחק משיא 52W',
+    themes: 'תמות',
+    recScore: 'ציון המלצה',
+    earningsIn: 'דוח רבעוני בעוד',
+    days: 'ימים',
+    hotTheme: 'תמה חמה',
   },
   en: {
     title: 'Stock Scout',
@@ -110,6 +123,19 @@ const T = {
     relativeBuzz: 'relative to market cap',
     noQuotes: 'No quotes available',
     noBuzz: 'No significant buzz this week',
+    pickNextWeek: '🔥 Pick for Next Week',
+    identityCard: 'Identity Card',
+    whyRecommended: 'Why this pick?',
+    floatLabel: 'Float',
+    volRatio: 'Volume Ratio',
+    shortInt: 'Short Interest',
+    closeLoc: 'Close in Range',
+    distHigh: 'Distance from 52W high',
+    themes: 'Themes',
+    recScore: 'Recommendation Score',
+    earningsIn: 'Earnings in',
+    days: 'days',
+    hotTheme: 'Hot theme',
   }
 }
 
@@ -1404,14 +1430,34 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
       onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = c.card }}>
       <td style={{ padding: '11px 14px', color: c.muted, fontSize: 13 }}>{rank}</td>
       <td style={{ padding: '11px 14px' }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {stock.ticker}
           {isBuzzAlert && <span title="High buzz" style={{ fontSize: 13 }}>🔥</span>}
+          {stock.recommended && (
+            <span title={t.whyRecommended} style={{
+              background: 'linear-gradient(90deg,#ff8c00 0%,#ffaa33 100%)',
+              color: 'white', padding: '2px 8px', borderRadius: 10,
+              fontSize: 10, fontWeight: 800, letterSpacing: '.3px',
+            }}>
+              {t.pickNextWeek}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{stock.name}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3, flexWrap: 'wrap' }}>
           <Sparkline ticker={stock.ticker} width={72} height={20} />
           <RSIBadge ticker={stock.ticker} dark={dark} c={c} size="small" />
+          {(stock.themes || []).slice(0, 2).map((theme, ti) => (
+            <span key={ti} style={{
+              fontSize: 9, fontWeight: 600,
+              background: dark ? '#1a2a3a' : '#e8f0fa',
+              color: dark ? '#7daaff' : '#1a4d8f',
+              padding: '1px 6px', borderRadius: 6,
+              border: `1px solid ${dark ? '#2a3a5a' : '#c8d4f0'}`,
+            }}>
+              {theme}
+            </span>
+          ))}
         </div>
       </td>
       <td style={{ padding: '11px 14px' }}>
@@ -1476,6 +1522,149 @@ function QuoteCard({ quote, c, dark }) {
   )
 }
 
+function IdentityCard({ stock, c, t, dark, lang }) {
+  const sig = stock.rec_signals || {}
+  const cats = stock.rec_catalysts || []
+  const themes = stock.themes || []
+  const score = stock.rec_score
+  const recommended = stock.recommended
+
+  // Don't show anything if we don't have scoring data at all
+  if (score === undefined && !themes.length && !Object.keys(sig).length) return null
+
+  const he = lang === 'he'
+
+  const Stat = ({ label, value, color = c.text, hint }) => (
+    <div style={{
+      background: c.card, border: `1px solid ${c.border}`,
+      borderRadius: 8, padding: '10px 12px', minWidth: 110, flex: '1 1 110px',
+    }}>
+      <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', letterSpacing: '.05em', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 800, color, marginTop: 2 }}>{value}</div>
+      {hint && <div style={{ fontSize: 10, color: c.muted, marginTop: 2 }}>{hint}</div>}
+    </div>
+  )
+
+  // Float hint for the boss
+  const floatHint = sig.float_m
+    ? (sig.float_m < 15  ? (he ? '🔥 זעיר — פוטנציאל פיצוץ' : '🔥 Tiny — explosive')
+    : sig.float_m < 30   ? (he ? 'קטן — חיובי' : 'Small — bullish')
+    : sig.float_m < 60   ? (he ? 'בינוני' : 'Medium')
+    : sig.float_m > 100  ? (he ? 'גדול — שלילי' : 'Large — bearish')
+    : null) : null
+
+  const bg = recommended
+    ? `linear-gradient(135deg, ${dark ? '#3a2a05' : '#fff8e8'} 0%, ${dark ? '#2a1f08' : '#fff3cd'} 100%)`
+    : c.panelBg
+  const border = recommended ? '#ff8c00' : c.border
+
+  return (
+    <div style={{
+      background: bg,
+      border: `2px solid ${border}`,
+      borderRadius: 12, padding: 16, marginBottom: 18,
+    }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: recommended ? '#7a4a00' : c.muted, textTransform: 'uppercase', letterSpacing: '.08em' }}>
+            🧬 {t.identityCard}
+          </div>
+          {recommended && (
+            <span style={{
+              background: 'linear-gradient(90deg,#ff8c00 0%,#ffaa33 100%)',
+              color: 'white', padding: '4px 12px', borderRadius: 14,
+              fontSize: 11, fontWeight: 800, letterSpacing: '.3px',
+            }}>
+              {t.pickNextWeek}
+            </span>
+          )}
+        </div>
+        {score !== undefined && (
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+            <span style={{ fontSize: 10, color: c.muted, fontWeight: 600 }}>{t.recScore}:</span>
+            <span style={{ fontSize: 22, fontWeight: 800, color: score >= 5 ? '#097c3e' : score >= 3 ? '#cc8800' : c.muted }}>{score}</span>
+            <span style={{ fontSize: 11, color: c.muted }}>/10</span>
+          </div>
+        )}
+      </div>
+
+      {/* Themes */}
+      {themes.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+          {themes.map((theme, i) => (
+            <span key={i} style={{
+              fontSize: 11, fontWeight: 700,
+              background: dark ? '#1a2a3a' : '#e8f0fa',
+              color: dark ? '#7daaff' : '#1a4d8f',
+              padding: '3px 10px', borderRadius: 10,
+              border: `1px solid ${dark ? '#2a3a5a' : '#c8d4f0'}`,
+            }}>
+              {theme}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Stats grid */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: cats.length ? 12 : 0 }}>
+        {sig.float_m !== undefined && (
+          <Stat
+            label={t.floatLabel}
+            value={`${sig.float_m}M`}
+            color={sig.float_m < 30 ? '#097c3e' : sig.float_m > 100 ? '#c0392b' : c.text}
+            hint={floatHint}
+          />
+        )}
+        {sig.volume_ratio !== undefined && (
+          <Stat
+            label={t.volRatio}
+            value={`${sig.volume_ratio}x`}
+            color={sig.volume_ratio >= 4 ? '#097c3e' : sig.volume_ratio >= 2 ? '#cc8800' : c.text}
+          />
+        )}
+        {sig.short_pct !== undefined && (
+          <Stat label={t.shortInt} value={`${sig.short_pct}%`} />
+        )}
+        {sig.close_location_pct !== undefined && (
+          <Stat
+            label={t.closeLoc}
+            value={`${sig.close_location_pct}%`}
+            color={sig.close_location_pct >= 85 ? '#097c3e' : c.text}
+          />
+        )}
+        {sig.dist_from_52w_high_pct !== undefined && (
+          <Stat label={t.distHigh} value={`${sig.dist_from_52w_high_pct}%`} />
+        )}
+        {sig.earnings_in_days !== undefined && (
+          <Stat
+            label={t.earningsIn}
+            value={`${sig.earnings_in_days} ${t.days}`}
+            color="#cc8800"
+            hint={he ? '📊 וולטיליות צפויה' : '📊 Volatility ahead'}
+          />
+        )}
+      </div>
+
+      {/* Why this pick — catalysts */}
+      {cats.length > 0 && (
+        <div style={{
+          background: dark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.5)',
+          padding: '10px 12px', borderRadius: 8,
+          borderLeft: `3px solid ${recommended ? '#ff8c00' : c.muted}`,
+        }}>
+          <div style={{ fontSize: 10, color: c.muted, fontWeight: 700, textTransform: 'uppercase', marginBottom: 4 }}>
+            ✨ {t.whyRecommended}
+          </div>
+          <div style={{ fontSize: 13, color: c.text, lineHeight: 1.5 }}>
+            {cats.join(' · ')}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StockPanel({ stock, scans, c, t, dark, lang, onClose, buzzByTicker }) {
   const buzz = (buzzByTicker && buzzByTicker[stock.ticker]) || stock.buzz || {}
   const quotes = buzz.quotes || []
@@ -1533,6 +1722,9 @@ function StockPanel({ stock, scans, c, t, dark, lang, onClose, buzzByTicker }) {
           </button>
         </div>
       </div>
+
+      {/* IDENTITY CARD — recommendation signals from the data-driven scoring */}
+      <IdentityCard stock={stock} c={c} t={t} dark={dark} lang={lang} />
 
       {/* Analyst consensus banner — show when available */}
       {buzz.analyst_target && (() => {
