@@ -45,6 +45,25 @@ EARLY_SIGNAL_KEYWORDS = [
     "moving", "spiking", "running", "pumping", "ripping",
 ]
 
+THEME_KEYWORDS = {
+    "AI Infrastructure": ["semiconductor", "data center", "server", "memory", "storage", "gpu", "artificial intelligence", "cloud computing", "hpc", "chip"],
+    "Nuclear Power":     ["uranium", "nuclear", "atomic"],
+    "Biotech & Pharma":  ["biotech", "pharmaceutical", "therapeutics", "biopharmaceutical", "drug", "oncology", "genomic", "clinical"],
+    "Energy Transition": ["solar", "wind", "battery", "lithium", "electric vehicle", " ev ", "renewable", "clean energy", "hydrogen"],
+    "Crypto & Blockchain": ["bitcoin", "crypto", "blockchain", "digital asset", "mining"],
+    "Defense & Aerospace": ["defense", "aerospace", "military", "government contractor", "missile", "satellite"],
+    "Oil & Gas":         ["oil", "gas", "petroleum", "drilling", "upstream", "downstream", "lng"],
+    "Healthcare":        ["hospital", "medical device", "health services", "diagnostics", "health care"],
+    "Real Estate":       ["reit", "real estate", "mortgage", "property"],
+    "Financial":         ["bank", "insurance", "financial services", "asset management", "investment bank"],
+}
+
+
+def get_themes(industry: str, name: str) -> list:
+    """Return relevant investment themes based on industry + company name."""
+    text = f"{industry} {name}".lower()
+    return [theme for theme, kws in THEME_KEYWORDS.items() if any(kw in text for kw in kws)]
+
 
 # ============== UTILITIES ==============
 def clean_text(text, max_len=140):
@@ -335,6 +354,7 @@ def find_top20_by_marketcap(price_data, names_dict):
             "market_cap": mcap,
             "sector": sector,
             "industry": industry,
+            "themes": get_themes(industry, name),
         })
         print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | {name[:40]}")
 
@@ -1177,12 +1197,17 @@ def send_email(stocks, bonus, week_label, backtest=None):
             if sector else ""
         )
 
+        recommended_html = (
+            '<span style="background:#fff3cd;color:#856404;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;margin-left:6px">⭐ Pick of the week</span>'
+            if s.get("recommended") else ""
+        )
+
         rows += f"""<tr style="border-bottom:1px solid #f0f0f0">
 <td style="padding:10px 14px;color:#999;font-size:13px;font-weight:700">{i}</td>
 <td style="padding:10px 14px">
   <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
     <span style="font-size:15px;font-weight:800;color:#1a1a2e">{s["ticker"]}</span>
-    {streak_badge}{sector_html}
+    {streak_badge}{sector_html}{recommended_html}
   </div>
   <div style="font-size:11px;color:#999;margin-top:3px">{s["name"]}</div>
 </td>
@@ -1299,6 +1324,103 @@ def send_email(stocks, bonus, week_label, backtest=None):
         print(f"Email error: {e}")
 
 
+# ============== RECOMMENDATION SCORING ==============
+def compute_recommendation_scores(top5):
+    """Score each of the top 5 picks for momentum continuation likelihood.
+
+    Signals:
+      +3  weekly close in top 85% of week's range (buyers in control all week)
+      +1  weekly close in top 60-85%
+      -2  weekly close below 40% (distributed, sellers took over)
+      +2  distance from 52W high > 30% (plenty of room to run)
+      +1  distance from 52W high > 15%
+      +2  this-week volume > 2x the 3-month daily average
+      +1  this-week volume > 1.3x the 3-month daily average
+      +2  short interest > 15% of float (squeeze potential)
+      +1  short interest > 10%
+
+    Tags the highest scorer with recommended=True.
+    """
+    print("\nComputing recommendation scores for top 5...")
+    time.sleep(3)
+
+    scored = []
+    for stock in top5:
+        t = stock["ticker"]
+        score = 0
+        signals = {}
+        try:
+            time.sleep(0.8)
+            obj = yf.Ticker(t)
+
+            # Weekly close location: high/low/close of the past 10 calendar days
+            hist = obj.history(period="10d", interval="1d")
+            if not hist.empty:
+                week_high  = float(hist["High"].max())
+                week_low   = float(hist["Low"].min())
+                week_close = float(hist["Close"].iloc[-1])
+                rng = week_high - week_low
+                if rng > 0:
+                    loc = (week_close - week_low) / rng
+                    signals["close_location_pct"] = round(loc * 100, 1)
+                    if loc >= 0.85:
+                        score += 3
+                    elif loc >= 0.60:
+                        score += 1
+                    elif loc < 0.40:
+                        score -= 2
+
+            fi = obj.fast_info
+
+            # Distance from 52-week high
+            high_52w = getattr(fi, "fifty_two_week_high", None)
+            if high_52w and stock["price"] > 0:
+                dist = (high_52w - stock["price"]) / high_52w * 100
+                signals["dist_from_52w_high_pct"] = round(dist, 1)
+                if dist > 30:
+                    score += 2
+                elif dist > 15:
+                    score += 1
+
+            # Volume ratio vs 3-month daily average
+            avg_vol = getattr(fi, "three_month_average_volume", None)
+            if avg_vol and avg_vol > 0 and stock.get("volume", 0) > 0:
+                ratio = stock["volume"] / (avg_vol * 5)  # weekly sum vs avg_daily * 5 days
+                signals["volume_ratio"] = round(ratio, 2)
+                if ratio >= 2.0:
+                    score += 2
+                elif ratio >= 1.3:
+                    score += 1
+
+            # Short interest
+            try:
+                info = obj.info
+                short_pct = info.get("shortPercentOfFloat") or 0
+                if short_pct > 0:
+                    signals["short_interest_pct"] = round(float(short_pct) * 100, 1)
+                    if short_pct >= 0.15:
+                        score += 2
+                    elif short_pct >= 0.10:
+                        score += 1
+            except Exception:
+                pass
+
+        except Exception as e:
+            print(f"  {t}: score error — {e}")
+
+        scored.append({**stock, "rec_score": max(0, score), "rec_signals": signals})
+        print(f"  {t}: rec_score={score} | {signals}")
+
+    # Tag the winner
+    if scored:
+        best = max(scored, key=lambda x: x["rec_score"])
+        for s in scored:
+            s["recommended"] = (s["ticker"] == best["ticker"])
+        print(f"  => Recommended: {best['ticker']} (score {best['rec_score']})")
+
+    return scored
+
+
 # ============== MAIN ==============
 def main():
     parser = argparse.ArgumentParser()
@@ -1353,6 +1475,20 @@ def main():
         print("FATAL: no stocks passed market cap filter")
         return
     print(f"  [+{int(time.time()-t_start)}s]\n")
+
+    # Compute recommendation scores for top 5 (which of the top 5 is most likely to continue)
+    top5_tickers = sorted(top20, key=lambda x: x["change_pct"], reverse=True)[:5]
+    if not historical_mode:
+        scored = compute_recommendation_scores(top5_tickers)
+        scored_map = {s["ticker"]: s for s in scored}
+        for s in top20:
+            if s["ticker"] in scored_map:
+                s.update(scored_map[s["ticker"]])
+    else:
+        for s in top20:
+            s["recommended"] = False
+            s["rec_score"] = 0
+            s["rec_signals"] = {}
 
     # Buzz is fetched on-demand from Hall of Fame, not during weekly scans
     # This saves Apify costs — boss uses the "Get Buzz" button for stocks he cares about
