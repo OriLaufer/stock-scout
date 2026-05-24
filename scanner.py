@@ -364,6 +364,10 @@ def find_top20_by_marketcap(price_data, names_dict):
         if high_52w:
             basic_signals["high_52w"] = round(float(high_52w), 2)
             if price > 0:
+                # % the stock would need to GAIN (from current price) to retest the 52W high.
+                # Consistent with gain_from_52w_low_pct which is also from current-price perspective.
+                basic_signals["gain_to_52w_high_pct"] = round((high_52w - price) / price * 100, 1)
+                # Old "distance from high as % of high" kept for backwards compat
                 basic_signals["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
         if low_52w:
             basic_signals["low_52w"] = round(float(low_52w), 2)

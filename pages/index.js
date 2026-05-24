@@ -66,7 +66,8 @@ const T = {
     volRatio: 'יחס נפח',
     shortInt: 'שורט',
     closeLoc: 'סגירה בטווח',
-    distHigh: 'מרחק משיא 52W',
+    distHigh: 'נדרשת עלייה כדי לחזור לשיא',
+    gainToHigh: 'אפסייד עד השיא',
     themes: 'תמות',
     recScore: 'ציון המלצה',
     earningsIn: 'דוח רבעוני בעוד',
@@ -140,7 +141,8 @@ const T = {
     volRatio: 'Volume Ratio',
     shortInt: 'Short Interest',
     closeLoc: 'Close in Range',
-    distHigh: 'Distance from 52W high',
+    distHigh: 'to retest 52W high',
+    gainToHigh: 'upside to 52W high',
     themes: 'Themes',
     recScore: 'Recommendation Score',
     earningsIn: 'Earnings in',
@@ -1754,6 +1756,7 @@ function IdentityCard({ stock, c, t, dark, lang }) {
         const pos = sig.pos_in_52w_range_pct
         const fromLow = sig.gain_from_52w_low_pct
         const distHigh = sig.dist_from_52w_high_pct
+        const gainToHigh = sig.gain_to_52w_high_pct
         const price = stock.price
         // Color the position dot: greener as it approaches the high
         const posColor = pos === undefined ? c.muted
@@ -1795,12 +1798,14 @@ function IdentityCard({ stock, c, t, dark, lang }) {
                 <div>{t.high52}</div>
               </div>
             </div>
-            {(fromLow !== undefined || distHigh !== undefined) && (
+            {(fromLow !== undefined || gainToHigh !== undefined || distHigh !== undefined) && (
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: c.muted, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${c.border}` }}>
                 {fromLow !== undefined && (
                   <span><span style={{ color: '#097c3e', fontWeight: 700 }}>+{fromLow}%</span> {t.fromLow}</span>
                 )}
-                {distHigh !== undefined && (
+                {gainToHigh !== undefined ? (
+                  <span title={distHigh !== undefined ? `${distHigh}% ${he ? 'מהשיא' : 'below high'}` : ''}><span style={{ color: '#cc8800', fontWeight: 700 }}>+{gainToHigh}%</span> {t.gainToHigh}</span>
+                ) : distHigh !== undefined && (
                   <span>-{distHigh}% {t.distHigh}</span>
                 )}
               </div>

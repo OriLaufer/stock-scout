@@ -84,6 +84,9 @@ for stock in stocks:
     if high_52w:
         bsig["high_52w"] = round(float(high_52w), 2)
         if price > 0:
+            # Symmetrical with gain_from_52w_low_pct: % the stock needs to GAIN from current
+            # price to retest the 52W high. This is the trader's framing — upside potential.
+            bsig["gain_to_52w_high_pct"] = round((high_52w - price) / price * 100, 1)
             bsig["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
     if low_52w:
         bsig["low_52w"] = round(float(low_52w), 2)
