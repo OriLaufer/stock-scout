@@ -314,12 +314,38 @@ def find_top20_by_marketcap(price_data, names_dict):
 
         name = names_dict.get(t, t)
         sector, industry = "", ""
+        basic_signals = {}  # baseline identity-card data for ALL top 20
         try:
             time.sleep(0.8)  # avoid rate limiting when fetching details for final picks
-            info = yf.Ticker(t).info
+            obj  = yf.Ticker(t)
+            info = obj.info
             name = info.get("longName") or info.get("shortName") or name
             sector = info.get("sector") or ""
             industry = info.get("industry") or ""
+
+            # Float
+            fl = info.get("floatShares") or 0
+            if fl:
+                basic_signals["float_m"] = round(fl / 1e6, 1)
+            # Short interest
+            sp = info.get("shortPercentOfFloat") or 0
+            if sp:
+                basic_signals["short_pct"] = round(float(sp) * 100, 1)
+            # 52W range (from fast_info, no extra rate cost)
+            fi = obj.fast_info
+            high_52w = getattr(fi, "fifty_two_week_high", None)
+            low_52w  = getattr(fi, "fifty_two_week_low", None)
+            price    = c["price"]
+            if high_52w:
+                basic_signals["high_52w"] = round(float(high_52w), 2)
+                if price > 0:
+                    basic_signals["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
+            if low_52w:
+                basic_signals["low_52w"] = round(float(low_52w), 2)
+                if price > 0 and low_52w > 0:
+                    basic_signals["gain_from_52w_low_pct"] = round((price - low_52w) / low_52w * 100, 1)
+            if high_52w and low_52w and high_52w > low_52w and price > 0:
+                basic_signals["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
         except Exception:
             pass
 
@@ -335,8 +361,9 @@ def find_top20_by_marketcap(price_data, names_dict):
             "market_cap": mcap,
             "sector": sector,
             "industry": industry,
+            "rec_signals": basic_signals,  # baseline data for identity card
         })
-        print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | {name[:40]}")
+        print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | float={basic_signals.get('float_m', 'N/A')}M | {name[:40]}")
 
     print(f"Found {len(top20)} stocks from top-100 gainers passing market cap filter")
     return top20
@@ -1385,7 +1412,9 @@ def compute_recommendation_scores(top5):
     scored = []
     for stock in top5:
         t = stock["ticker"]
-        signals = {}
+        # Start from any baseline signals already collected during find_top20_by_marketcap
+        # (float, short, 52W high/low). compute_recommendation_scores ADDS to it.
+        signals = dict(stock.get("rec_signals") or {})
         catalysts = []
         f_sc = v_sc = e_sc = 0.0
 

@@ -54,39 +54,65 @@ top5 = sorted(stocks, key=lambda s: s.get("change_pct", 0), reverse=True)[:5]
 top5_tickers = {s["ticker"] for s in top5}
 print(f"Top 5: {sorted(top5_tickers)}\n")
 
-# ---- Score each top 5 ----
-print("Fetching signals + scoring top 5...")
+# ---- Fetch baseline identity-card data for ALL 20 (float, short, 52W) ----
+print(f"Fetching baseline data for all {len(stocks)} stocks...")
+baseline_signals = {}  # ticker -> dict of basic signals
+for stock in stocks:
+    t = stock["ticker"]
+    bsig = {}
+    try:
+        time.sleep(1.2)
+        obj  = yf.Ticker(t)
+        info = obj.info
+        fl = info.get("floatShares") or 0
+        if fl:
+            bsig["float_m"] = round(fl / 1e6, 1)
+        sp = info.get("shortPercentOfFloat") or 0
+        if sp:
+            bsig["short_pct"] = round(float(sp) * 100, 1)
+        fi = obj.fast_info
+        high_52w = getattr(fi, "fifty_two_week_high", None)
+        low_52w  = getattr(fi, "fifty_two_week_low", None)
+        price    = stock.get("price", 0)
+        if high_52w:
+            bsig["high_52w"] = round(float(high_52w), 2)
+            if price > 0:
+                bsig["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
+        if low_52w:
+            bsig["low_52w"] = round(float(low_52w), 2)
+            if price > 0 and low_52w > 0:
+                bsig["gain_from_52w_low_pct"] = round((price - low_52w) / low_52w * 100, 1)
+        if high_52w and low_52w and high_52w > low_52w and price > 0:
+            bsig["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
+    except Exception as e:
+        print(f"  {t}: baseline error — {type(e).__name__}")
+    baseline_signals[t] = bsig
+    print(f"  {t}: float={bsig.get('float_m', 'N/A')}M | 52W=${bsig.get('low_52w', '—')}-${bsig.get('high_52w', '—')}")
+
+# ---- Score each top 5 (adds to baseline) ----
+print("\nFetching signals + scoring top 5...")
 time.sleep(3)
 
 scored_list = []
 for stock in top5:
     t = stock["ticker"]
-    signals = {}
+    # Start from baseline (float, short, 52W already fetched) — scoring ADDS to it
+    signals = dict(baseline_signals.get(t) or {})
     catalysts = []
     f_sc = v_sc = e_sc = 0.0
+    # Re-derive float score from baseline data (no extra yfinance call)
+    if "float_m" in signals:
+        f_sc = float_score(signals["float_m"])
+        fm = signals["float_m"]
+        if fm <= 15:    catalysts.append(f"🔥 Tiny float ({fm}M)")
+        elif fm <= 30:  catalysts.append(f"Small float ({fm}M)")
+        elif fm >= 150: catalysts.append(f"⚠️ Large float ({fm}M)")
 
     try:
         time.sleep(1.5)
         obj = yf.Ticker(t)
 
-        # FLOAT (continuous)
-        try:
-            info = obj.info
-            fl = info.get("floatShares") or 0
-            if fl:
-                fm = round(fl / 1e6, 1)
-                signals["float_m"] = fm
-                f_sc = float_score(fm)
-                if fm <= 15:    catalysts.append(f"🔥 Tiny float ({fm}M)")
-                elif fm <= 30:  catalysts.append(f"Small float ({fm}M)")
-                elif fm >= 150: catalysts.append(f"⚠️ Large float ({fm}M)")
-            sp = info.get("shortPercentOfFloat") or 0
-            if sp:
-                signals["short_pct"] = round(float(sp) * 100, 1)
-        except Exception as e:
-            print(f"    {t}: info error — {e}")
-
-        # VOLUME (continuous)
+        # VOLUME (continuous) — float/short/52W already gathered in baseline
         fi = obj.fast_info
         avg_vol = getattr(fi, "three_month_average_volume", None)
         if avg_vol and avg_vol > 0 and stock.get("volume", 0) > 0:
@@ -116,7 +142,7 @@ for stock in top5:
         except Exception:
             pass
 
-        # DISPLAY-ONLY
+        # DISPLAY-ONLY: close_location_pct (this week's close vs week's range)
         hist = obj.history(period="10d", interval="1d")
         if not hist.empty:
             wh = float(hist["High"].max())
@@ -125,20 +151,6 @@ for stock in top5:
             rng = wh - wl
             if rng > 0:
                 signals["close_location_pct"] = round((wc - wl) / rng * 100, 1)
-        # 52-week range — raw values + position in range
-        high_52w = getattr(fi, "fifty_two_week_high", None)
-        low_52w  = getattr(fi, "fifty_two_week_low", None)
-        price    = stock.get("price", 0)
-        if high_52w:
-            signals["high_52w"] = round(float(high_52w), 2)
-            if price > 0:
-                signals["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
-        if low_52w:
-            signals["low_52w"] = round(float(low_52w), 2)
-            if price > 0 and low_52w > 0:
-                signals["gain_from_52w_low_pct"] = round((price - low_52w) / low_52w * 100, 1)
-        if high_52w and low_52w and high_52w > low_52w and price > 0:
-            signals["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
 
     except Exception as e:
         print(f"  {t}: error — {e}")
@@ -182,8 +194,9 @@ for s in stocks:
         s["rec_confidence"] = conf_label
         s["rec_gap"]        = round(gap, 2)
     else:
+        # Non-top-5: no score, but baseline identity-card data (float, short, 52W)
         s["rec_score"] = 0
-        s["rec_signals"] = {}
+        s["rec_signals"] = baseline_signals.get(t, {})
         s["rec_catalysts"] = []
         s["recommended"] = False
         s["rec_confidence"] = "low"
