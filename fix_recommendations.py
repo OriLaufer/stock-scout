@@ -1,7 +1,9 @@
-"""One-time fix: compute CONTINUOUS recommendation scores for the current scan
-and update Supabase so the dashboard shows the Identity Card immediately."""
+"""One-time fix: compute CONTINUOUS recommendation scores + baseline data
+(float, short, 52W) for the LATEST scan in Supabase. Updates in place so
+the dashboard shows the Identity Card immediately."""
 import os
 import json
+import re
 import time
 import yfinance as yf
 from datetime import datetime
@@ -9,7 +11,19 @@ from supabase import create_client
 
 supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"])
 
-TARGET_WEEK = "08.05-15.05.2026"
+# Find the latest scan automatically by week_label end-date
+def _parse_week_end(label):
+    m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", label)
+    if not m:
+        return datetime(2000, 1, 1)
+    return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+
+_all = supabase.table("weekly_scans").select("week_label").execute()
+if not _all.data:
+    print("No scans found.")
+    exit(1)
+TARGET_WEEK = max((row["week_label"] for row in _all.data), key=_parse_week_end)
+print(f"Auto-detected latest week: {TARGET_WEEK}")
 
 
 def float_score(fm):
