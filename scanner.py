@@ -1369,187 +1369,264 @@ def send_email(stocks, bonus, week_label, backtest=None):
         print(f"Email error: {e}")
 
 
-# ============== RECOMMENDATION SCORING ==============
-def float_score(float_m):
-    """Continuous float score, anchored on forensic data
-    (winners median ~14.6M, losers median ~66.4M).
+# ============== RECOMMENDATION SCORING (V3 — Conviction Score) ==============
+# Built after the BRUN -18.85% failure: the previous float-dominant scoring
+# picked a stock with WEAK weekly close (50.5% of range) — a textbook
+# "rejection" pattern. V3 rewrites the logic to:
+#  1) gate-reject stocks with weak closes (the master signal)
+#  2) score remaining stocks on strength minus weakness signals
+#  3) refuse to pick when no stock stands out (honest "no pick" state)
 
-    Piecewise-linear, no step discontinuities:
-      float <= 10M     →  +5.0  (winner cap)
-      float 10M → 75M  →  smooth 5 → 0
-      float 75M → 250M →  smooth 0 → -1
-      float >= 250M    →  -1.0  (penalty cap)
+
+def _decision_category(score, gap, was_rejected):
+    """Convert (score, gap_to_next) into a final category.
+    Returns: ('pick' | 'candidate' | 'possible' | 'avoid' | 'rejected', label, emoji)."""
+    if was_rejected:
+        return "rejected", "Rejected — weak close", "🔴"
+    if score >= 5 and gap >= 3:
+        return "pick", "Pick for Next Week", "🔥"
+    if score >= 3 and gap >= 1.5:
+        return "candidate", "Best Candidate", "✨"
+    if score >= 1:
+        return "possible", "Possible", "•"
+    return "avoid", "Avoid", "🔴"
+
+
+def _compute_signals_v3(stock, obj):
+    """Compute V3 strength/weakness signals from yfinance.
+    Returns (signals_dict, plus_breakdown, minus_breakdown, was_rejected_at_gate).
+
+    Plus and minus breakdowns are lists of (label, value) tuples — kept so
+    the dashboard can show exactly which signals fired (transparency).
     """
-    if float_m is None or float_m <= 0:
-        return 0.0
-    if float_m <= 10:
-        return 5.0
-    if float_m < 75:
-        return 5.0 * (75 - float_m) / 65          # 5 at 10M → 0 at 75M
-    if float_m < 250:
-        return -(float_m - 75) / 175              # 0 at 75M → -1 at 250M
-    return -1.0
+    signals = dict(stock.get("rec_signals") or {})
+    plus  = []   # strength contributions
+    minus = []   # weakness contributions
+    rejected = False
+
+    # ---- Pull data we need ----
+    price = stock.get("price", 0)
+    # 30-day daily history — for close_loc, MA20, 4-week high, intra-week volume profile
+    try:
+        hist = obj.history(period="30d", interval="1d")
+    except Exception:
+        hist = None
+
+    # Weekly close-in-range (last ~5 trading days)
+    close_loc = None
+    if hist is not None and not hist.empty and len(hist) >= 5:
+        last5 = hist.tail(5)
+        wh = float(last5["High"].max())
+        wl = float(last5["Low"].min())
+        wc = float(last5["Close"].iloc[-1])
+        if wh > wl:
+            close_loc = (wc - wl) / (wh - wl) * 100
+            signals["close_location_pct"] = round(close_loc, 1)
+
+    # ============ STAGE 1: THE GATE ============
+    # If close < 60% of weekly range → reject. This is the BRUN-style filter.
+    if close_loc is not None and close_loc < 60:
+        rejected = True
+        signals["rejected_reason"] = f"Weak close ({close_loc:.0f}% of weekly range)"
+        return signals, plus, minus, rejected
+
+    # ============ STAGE 2: STRENGTH SIGNALS ============
+    # Close strength (most important)
+    if close_loc is not None:
+        if close_loc >= 90:
+            plus.append(("close>90%", 3))
+        elif close_loc >= 70:
+            plus.append(("close 70-90%", 1))
+
+    # Daily volume pattern from last 5 trading days
+    if hist is not None and not hist.empty and len(hist) >= 5:
+        vols = hist["Volume"].tail(5).tolist()
+        if len(vols) == 5 and all(v > 0 for v in vols):
+            fri_vol  = vols[-1]
+            week_avg = sum(vols) / 5
+            first_half  = sum(vols[:2])
+            second_half = sum(vols[2:])
+
+            signals["fri_vol_ratio_week"] = round(fri_vol / week_avg, 2) if week_avg > 0 else None
+
+            # Friday volume spike vs weekly avg
+            if week_avg > 0:
+                fri_ratio = fri_vol / week_avg
+                if fri_ratio >= 3:
+                    plus.append(("Fri vol >3x week avg (institutional)", 2))
+                elif fri_ratio >= 1:
+                    plus.append(("Fri vol > week avg", 1))
+                elif fri_ratio < 0.5:
+                    minus.append(("Fri vol <50% week avg (climax)", -2))
+
+            # Building volume profile (accumulation)
+            if second_half > first_half * 1.2:
+                plus.append(("Volume building thru week", 1))
+
+    # Above 20-day MA
+    if hist is not None and not hist.empty and len(hist) >= 20:
+        ma20 = float(hist["Close"].tail(20).mean())
+        last_close = float(hist["Close"].iloc[-1])
+        signals["ma20"] = round(ma20, 2)
+        if last_close > ma20:
+            plus.append(("Above 20-day MA", 1))
+
+    # 4-week high breakout (closing above prior 4-week high)
+    if hist is not None and not hist.empty and len(hist) >= 25:
+        prior_high = float(hist["High"].iloc[-25:-5].max())  # prior 20 trading days, excluding this week
+        this_close = float(hist["Close"].iloc[-1])
+        if this_close > prior_high:
+            plus.append(("Breakout above 4-week high", 1))
+
+    # Earnings catalyst (within next 7 days)
+    try:
+        cal = obj.calendar
+        next_earn = None
+        if isinstance(cal, dict):
+            ed = cal.get("Earnings Date")
+            if isinstance(ed, list) and ed:
+                next_earn = ed[0]
+            elif ed:
+                next_earn = ed
+        if next_earn:
+            earn_date = next_earn if isinstance(next_earn, datetime) else datetime.combine(next_earn, datetime.min.time())
+            days_to = (earn_date - datetime.now()).days
+            if 0 <= days_to <= 7:
+                plus.append((f"Earnings in {days_to}d", 1))
+                signals["earnings_in_days"] = days_to
+    except Exception:
+        pass
+
+    # ============ STAGE 2: WEAKNESS SIGNALS ============
+    # Extension risk (gain from 52W low)
+    gain_low = signals.get("gain_from_52w_low_pct")
+    if gain_low is not None:
+        if gain_low > 200:
+            minus.append(("Overextended (+200% from 52W low)", -2))
+        elif gain_low > 100:
+            minus.append(("Extended (+100% from 52W low)", -1))
+
+    # Large float penalty
+    fm = signals.get("float_m")
+    if fm is not None and fm > 500:
+        minus.append(("Float > 500M", -1))
+
+    return signals, plus, minus, rejected
 
 
-def volume_score(ratio):
-    """Continuous volume score (week vs 3-month daily avg, * 5).
-    Mild signal (forensic: winners 3.1 vs losers 2.9), bounded 0-2."""
-    if ratio is None or ratio <= 1:
-        return 0.0
-    if ratio < 2:
-        return ratio - 1                          # 0 → 1 between 1x and 2x
-    if ratio < 5:
-        return 1.0 + (ratio - 2) / 3              # 1 → 2 between 2x and 5x
-    return 2.0
+def compute_recommendation_scores(top5, all_top20=None):
+    """V3 — Gate + Conviction Score.
 
-
-def confidence_level(scored):
-    """Confidence in the pick = gap between #1 and #2.
-    Big gap = the pick stands out. Small gap = all 5 are similar = low confidence."""
-    if not scored or len(scored) < 2:
-        return "low", 0
-    ordered = sorted([s.get("rec_score", 0) for s in scored], reverse=True)
-    gap = ordered[0] - ordered[1]
-    if gap >= 2.5:
-        return "high", gap
-    if gap >= 1.0:
-        return "medium", gap
-    return "low", gap
-
-
-def compute_recommendation_scores(top5):
-    """Score each top-5 pick for NEXT WEEK's likely winner.
-
-    Built from FORENSIC ANALYSIS of 9 historical winners vs 36 losers.
-    Uses CONTINUOUS scoring (no step thresholds — fairer, no cliff drops):
-      FLOAT (data-driven, dominant signal): -1 → +5
-      VOLUME (data-driven, mild signal):      0 → +2
-      EARNINGS (theory, volatility catalyst): 0 or +1
-
-    Returns each stock enriched with rec_score (float), rec_signals (dict),
-    rec_catalysts (list), recommended (bool), rec_confidence ("high"/"medium"/"low").
+    1. GATE: stocks with weekly close < 60% of range get rejected outright
+       (the BRUN pattern — "rejection" candle).
+    2. SCORE remaining stocks on weighted strength vs weakness signals.
+    3. DECISION: 'pick' only when score >= 5 AND gap >= 3; otherwise honest
+       category (candidate / possible / avoid / no pick).
     """
-    print("\nComputing recommendation scores for top 5 (continuous)...")
+    print("\nComputing recommendation scores (V3 Conviction)...")
     time.sleep(3)
+
+    # Sector heat — count sectors across top 20
+    sector_counts = {}
+    if all_top20:
+        for s in all_top20:
+            sec = s.get("sector") or ""
+            if sec:
+                sector_counts[sec] = sector_counts.get(sec, 0) + 1
 
     scored = []
     for stock in top5:
         t = stock["ticker"]
-        # Start from any baseline signals already collected during find_top20_by_marketcap
-        # (float, short, 52W high/low). compute_recommendation_scores ADDS to it.
-        signals = dict(stock.get("rec_signals") or {})
         catalysts = []
-        f_sc = v_sc = e_sc = 0.0
+        plus, minus = [], []
+        rejected = False
+        signals = dict(stock.get("rec_signals") or {})
 
         try:
             time.sleep(0.8)
             obj = yf.Ticker(t)
 
-            # --- FLOAT (continuous, -1 to +5) ---
+            # Pull volume_ratio (week vs 3-mo avg) — kept as a display stat
             try:
-                info = obj.info
-                fl = info.get("floatShares") or 0
-                if fl:
-                    fm = round(fl / 1e6, 1)
-                    signals["float_m"] = fm
-                    f_sc = float_score(fm)
-                    if fm <= 15:
-                        catalysts.append(f"🔥 Tiny float ({fm}M)")
-                    elif fm <= 30:
-                        catalysts.append(f"Small float ({fm}M)")
-                    elif fm >= 150:
-                        catalysts.append(f"⚠️ Large float ({fm}M)")
-                sp = info.get("shortPercentOfFloat") or 0
-                if sp:
-                    signals["short_pct"] = round(float(sp) * 100, 1)
+                fi = obj.fast_info
+                avg_vol = getattr(fi, "three_month_average_volume", None)
+                if avg_vol and avg_vol > 0 and stock.get("volume", 0) > 0:
+                    ratio = stock["volume"] / (avg_vol * 5)
+                    signals["volume_ratio"] = round(ratio, 2)
             except Exception:
                 pass
 
-            # --- VOLUME (continuous, 0 to +2) ---
-            fi = obj.fast_info
-            avg_vol = getattr(fi, "three_month_average_volume", None)
-            if avg_vol and avg_vol > 0 and stock.get("volume", 0) > 0:
-                ratio = stock["volume"] / (avg_vol * 5)
-                signals["volume_ratio"] = round(ratio, 2)
-                v_sc = volume_score(ratio)
-                if ratio >= 4.0:
-                    catalysts.append(f"Volume {ratio:.1f}x avg")
-                elif ratio >= 2.0:
-                    catalysts.append(f"Volume {ratio:.1f}x avg")
+            signals, plus, minus, rejected = _compute_signals_v3({**stock, "rec_signals": signals}, obj)
 
-            # --- EARNINGS (binary, 0 or +1) ---
-            try:
-                cal = obj.calendar
-                next_earn = None
-                if isinstance(cal, dict):
-                    ed = cal.get("Earnings Date")
-                    if isinstance(ed, list) and ed:
-                        next_earn = ed[0]
-                    elif ed:
-                        next_earn = ed
-                if next_earn:
-                    earn_date = next_earn if isinstance(next_earn, datetime) else datetime.combine(next_earn, datetime.min.time())
-                    days_to = (earn_date - datetime.now()).days
-                    if 0 <= days_to <= 7:
-                        e_sc = 1.0
-                        catalysts.append(f"📊 Earnings in {days_to}d")
-                        signals["earnings_in_days"] = days_to
-            except Exception:
-                pass
-
-            # --- DISPLAY-ONLY (not scored, but shown in identity card) ---
-            hist = obj.history(period="10d", interval="1d")
-            if not hist.empty:
-                wh = float(hist["High"].max())
-                wl = float(hist["Low"].min())
-                wc = float(hist["Close"].iloc[-1])
-                rng = wh - wl
-                if rng > 0:
-                    signals["close_location_pct"] = round((wc - wl) / rng * 100, 1)
-            # 52-week range — raw values + where the price sits in the range
-            high_52w = getattr(fi, "fifty_two_week_high", None)
-            low_52w  = getattr(fi, "fifty_two_week_low", None)
-            price    = stock.get("price", 0)
-            if high_52w:
-                signals["high_52w"] = round(float(high_52w), 2)
-                if price > 0:
-                    signals["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
-            if low_52w:
-                signals["low_52w"] = round(float(low_52w), 2)
-                if price > 0 and low_52w > 0:
-                    signals["gain_from_52w_low_pct"] = round((price - low_52w) / low_52w * 100, 1)
-            if high_52w and low_52w and high_52w > low_52w and price > 0:
-                signals["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
+            # Sector heat bonus
+            sec = stock.get("sector") or ""
+            if sec and sector_counts.get(sec, 0) >= 2:
+                plus.append((f"Hot sector ({sec}: {sector_counts[sec]} in top 20)", 1))
 
         except Exception as e:
             print(f"  {t}: score error — {e}")
 
-        total = round(max(0, f_sc + v_sc + e_sc), 2)
+        plus_total  = sum(v for _, v in plus)
+        minus_total = sum(v for _, v in minus)
+        total = 0 if rejected else (plus_total + minus_total)
+
+        # Human-readable "why" — surface the top 3 most impactful signals
+        signal_lines = [f"+{v} {label}" for label, v in plus] + [f"{v} {label}" for label, v in minus]
+        catalysts = signal_lines[:5]
+
         signals["score_breakdown"] = {
-            "float":    round(f_sc, 2),
-            "volume":   round(v_sc, 2),
-            "earnings": round(e_sc, 2),
+            "plus":  [(label, v) for label, v in plus],
+            "minus": [(label, v) for label, v in minus],
+            "plus_total":  plus_total,
+            "minus_total": minus_total,
         }
+        signals["rejected"] = rejected
+
         scored.append({
             **stock,
-            "rec_score":     total,
+            "rec_score":     round(total, 2),
             "rec_signals":   signals,
             "rec_catalysts": catalysts,
+            "rec_rejected":  rejected,
         })
-        print(f"  {t}: score={total} (float={f_sc:.2f} + vol={v_sc:.2f} + earn={e_sc:.2f})"
-              f" | float_m={signals.get('float_m', 'N/A')}")
+        status = "REJECTED" if rejected else f"score={total} (+{plus_total}, {minus_total})"
+        print(f"  {t}: {status}")
 
-    # Pick the winner + measure confidence (gap to #2)
-    if scored:
-        best = max(scored, key=lambda x: x["rec_score"])
-        conf_label, gap = confidence_level(scored)
+    # ===== Decision: who is the pick? =====
+    # Among non-rejected stocks
+    eligible = [s for s in scored if not s["rec_rejected"]]
+    if eligible:
+        eligible_sorted = sorted(eligible, key=lambda x: x["rec_score"], reverse=True)
+        top  = eligible_sorted[0]
+        gap  = top["rec_score"] - (eligible_sorted[1]["rec_score"] if len(eligible_sorted) > 1 else 0)
+        category, label, emoji = _decision_category(top["rec_score"], gap, False)
+    else:
+        category, label, emoji, top, gap = "no_pick", "No Pick This Week", "⚠️", None, 0
+
+    # If top scored below "candidate" threshold, no stock should be flagged
+    if category in ("possible", "avoid"):
+        # Don't crown anyone — show all as informational only
         for s in scored:
-            s["recommended"]    = (s["ticker"] == best["ticker"])
-            s["rec_confidence"] = conf_label
+            s["recommended"]    = False
+            s["rec_category"]   = "rejected" if s["rec_rejected"] else category
             s["rec_gap"]        = round(gap, 2)
-        emoji = {"high": "🔥", "medium": "✨", "low": "⚠️"}[conf_label]
-        print(f"  => {emoji} Pick for Next Week: {best['ticker']} "
-              f"(score {best['rec_score']}, gap +{gap:.2f}, confidence={conf_label})")
+        print(f"  => {emoji} No clear pick — top score {top['rec_score']} is too low (gap {gap:.2f})")
+    elif category == "no_pick":
+        for s in scored:
+            s["recommended"]    = False
+            s["rec_category"]   = "rejected" if s["rec_rejected"] else "no_pick"
+            s["rec_gap"]        = 0
+        print(f"  => ⚠️ No Pick This Week — all 5 rejected or too weak")
+    else:
+        for s in scored:
+            s["recommended"]    = (top is not None and s["ticker"] == top["ticker"])
+            s["rec_category"]   = "rejected" if s["rec_rejected"] else (
+                category if s["ticker"] == top["ticker"] else (
+                    "possible" if s["rec_score"] >= 1 else "avoid"
+                )
+            )
+            s["rec_gap"]        = round(gap, 2)
+        print(f"  => {emoji} {label}: {top['ticker']} (score {top['rec_score']}, gap +{gap:.2f})")
 
     return scored
 
@@ -1612,7 +1689,7 @@ def main():
     # Compute recommendation scores for top 5 (which of the top 5 is most likely to continue)
     top5_tickers = sorted(top20, key=lambda x: x["change_pct"], reverse=True)[:5]
     if not historical_mode:
-        scored = compute_recommendation_scores(top5_tickers)
+        scored = compute_recommendation_scores(top5_tickers, all_top20=top20)
         scored_map = {s["ticker"]: s for s in scored}
         for s in top20:
             if s["ticker"] in scored_map:

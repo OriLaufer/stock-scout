@@ -1487,7 +1487,16 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
               color: 'white', padding: '2px 8px', borderRadius: 10,
               fontSize: 10, fontWeight: 800, letterSpacing: '.3px',
             }}>
-              {t.pickNextWeek}
+              {stock.rec_category === 'candidate' ? '✨ Candidate' : t.pickNextWeek}
+            </span>
+          )}
+          {stock.rec_rejected && (
+            <span title="Rejected — weak weekly close" style={{
+              background: dark ? '#3a1a1a' : '#FCEBEB',
+              color: '#c0392b', padding: '2px 8px', borderRadius: 10,
+              fontSize: 10, fontWeight: 700, border: `1px solid ${dark ? '#5a1f1f' : '#f5c6c4'}`,
+            }}>
+              🔴 Rejected
             </span>
           )}
         </div>
@@ -1565,20 +1574,31 @@ function IdentityCard({ stock, c, t, dark, lang }) {
   const score = stock.rec_score
   const recommended = stock.recommended
   const breakdown = sig.score_breakdown || null
-  const confidence = stock.rec_confidence || null
+  const category = stock.rec_category || null
+  const rejected = stock.rec_rejected === true || sig.rejected === true
+  const rejectedReason = sig.rejected_reason
   const gap = stock.rec_gap
+
+  // V3 breakdown: arrays of [label, value] tuples for plus and minus
+  const plusSignals  = Array.isArray(breakdown?.plus)  ? breakdown.plus  : null
+  const minusSignals = Array.isArray(breakdown?.minus) ? breakdown.minus : null
+  const isV3 = !!(plusSignals || minusSignals)
 
   // Don't show anything if we don't have scoring data at all
   if (score === undefined && !Object.keys(sig).length) return null
 
   const he = lang === 'he'
 
-  const confInfo = {
-    high:   { label: t.confHigh, color: '#097c3e', bg: dark ? '#1a3a1a' : '#EAF3DE', emoji: '🔥' },
-    medium: { label: t.confMed,  color: '#cc8800', bg: dark ? '#3a2a0a' : '#FAEEDA', emoji: '✨' },
-    low:    { label: t.confLow,  color: '#888',    bg: dark ? '#2a2a3e' : '#f0f0f0', emoji: '⚠️' },
+  // V3 category styling
+  const categoryInfo = {
+    pick:      { label: he ? '🔥 הבחירה לשבוע הקרוב' : '🔥 Pick for Next Week',  color: '#fff', bg: 'linear-gradient(90deg,#ff8c00,#ffaa33)' },
+    candidate: { label: he ? '✨ מועמדת מובילה'       : '✨ Best Candidate',       color: '#7a4a00', bg: dark ? '#3a2a0a' : '#FAEEDA' },
+    possible:  { label: he ? '• אופציה'              : '• Possible',              color: c.muted, bg: dark ? '#1e1e32' : '#f0f0f0' },
+    avoid:     { label: he ? '🔴 להימנע'              : '🔴 Avoid',                color: '#c0392b', bg: dark ? '#3a1a1a' : '#FCEBEB' },
+    rejected:  { label: he ? '🔴 נדחתה — סגירה חלשה'  : '🔴 Rejected — weak close', color: '#c0392b', bg: dark ? '#3a1a1a' : '#FCEBEB' },
+    no_pick:   { label: he ? '⚠️ אין בחירה'           : '⚠️ No Pick',              color: c.muted, bg: dark ? '#2a2a3e' : '#f0f0f0' },
   }
-  const conf = confidence && confInfo[confidence]
+  const catTag = category && categoryInfo[category]
 
   const Stat = ({ label, value, color = c.text, hint }) => (
     <div style={{
@@ -1601,8 +1621,10 @@ function IdentityCard({ stock, c, t, dark, lang }) {
 
   const bg = recommended
     ? `linear-gradient(135deg, ${dark ? '#3a2a05' : '#fff8e8'} 0%, ${dark ? '#2a1f08' : '#fff3cd'} 100%)`
+    : rejected
+    ? (dark ? '#1f0d0d' : '#fdf0ef')
     : c.panelBg
-  const border = recommended ? '#ff8c00' : c.border
+  const border = recommended ? '#ff8c00' : rejected ? '#c0392b' : c.border
 
   return (
     <div style={{
@@ -1613,61 +1635,77 @@ function IdentityCard({ stock, c, t, dark, lang }) {
       {/* Header row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 11, fontWeight: 800, color: recommended ? '#7a4a00' : c.muted, textTransform: 'uppercase', letterSpacing: '.08em' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: recommended ? '#7a4a00' : rejected ? '#c0392b' : c.muted, textTransform: 'uppercase', letterSpacing: '.08em' }}>
             🧬 {t.identityCard}
           </div>
-          {recommended && (
-            <span style={{
-              background: 'linear-gradient(90deg,#ff8c00 0%,#ffaa33 100%)',
-              color: 'white', padding: '4px 12px', borderRadius: 14,
+          {/* Category badge (V3) — shows pick / candidate / possible / avoid / rejected */}
+          {catTag && (
+            <span title={gap !== undefined && gap !== 0 ? `${t.gap}: +${gap}` : ''} style={{
+              background: catTag.bg, color: catTag.color,
+              padding: '4px 12px', borderRadius: 14,
               fontSize: 11, fontWeight: 800, letterSpacing: '.3px',
             }}>
-              {t.pickNextWeek}
-            </span>
-          )}
-          {recommended && conf && (
-            <span title={gap !== undefined ? `${t.gap}: +${gap}` : ''} style={{
-              background: conf.bg, color: conf.color,
-              padding: '3px 10px', borderRadius: 12,
-              fontSize: 11, fontWeight: 700,
-            }}>
-              {conf.emoji} {conf.label}{gap !== undefined ? ` (+${gap})` : ''}
+              {catTag.label}
             </span>
           )}
         </div>
-        {score !== undefined && (
+        {score !== undefined && !rejected && (
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
             <span style={{ fontSize: 10, color: c.muted, fontWeight: 600 }}>{t.recScore}:</span>
-            <span style={{ fontSize: 22, fontWeight: 800, color: score >= 5 ? '#097c3e' : score >= 3 ? '#cc8800' : c.muted }}>{score}</span>
-            <span style={{ fontSize: 11, color: c.muted }}>/8</span>
+            <span style={{ fontSize: 22, fontWeight: 800, color: score >= 5 ? '#097c3e' : score >= 3 ? '#cc8800' : score > 0 ? c.text : '#c0392b' }}>{score}</span>
           </div>
         )}
       </div>
 
-      {/* Score breakdown (only when we have the data) */}
-      {breakdown && (
-        <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-          {[
-            { label: 'Float',    val: breakdown.float,    max: 5 },
-            { label: 'Volume',   val: breakdown.volume,   max: 2 },
-            { label: 'Earnings', val: breakdown.earnings, max: 1 },
-          ].map(b => {
-            const v = b.val || 0
-            const positive = v > 0
-            const neutral  = v === 0
-            const fg = positive ? '#097c3e' : v < 0 ? '#c0392b' : c.muted
-            return (
-              <span key={b.label} title={`${b.label} contributes ${v >= 0 ? '+' : ''}${v} out of max ${b.max}`} style={{
-                fontSize: 10, fontWeight: 700,
-                background: c.card, border: `1px solid ${c.border}`,
-                padding: '3px 8px', borderRadius: 8,
-                color: c.muted, display: 'inline-flex', gap: 4, alignItems: 'center',
-              }}>
-                <span style={{ color: c.muted }}>{b.label}</span>
-                <span style={{ color: fg }}>{v >= 0 ? '+' : ''}{v}</span>
-              </span>
-            )
-          })}
+      {/* Rejected banner — explain why */}
+      {rejected && rejectedReason && (
+        <div style={{
+          background: dark ? '#2a0e0e' : '#fef0ef',
+          border: `1px solid ${dark ? '#5a1f1f' : '#f5c6c4'}`,
+          borderLeft: `4px solid #c0392b`,
+          padding: '10px 12px', borderRadius: 8, marginBottom: 12,
+        }}>
+          <div style={{ fontSize: 11, color: '#c0392b', fontWeight: 800, marginBottom: 3 }}>
+            {he ? '🔴 הסיבה לדחייה' : '🔴 Why rejected'}
+          </div>
+          <div style={{ fontSize: 13, color: c.text }}>{rejectedReason}</div>
+          <div style={{ fontSize: 11, color: c.muted, marginTop: 4 }}>
+            {he ? 'סגירה מתחת ל-60% מטווח השבוע = הקונים איבדו שליטה' : 'Closing below 60% of weekly range = buyers lost control'}
+          </div>
+        </div>
+      )}
+
+      {/* V3 — Strength signals (the +s) */}
+      {isV3 && plusSignals && plusSignals.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: '#097c3e', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>
+            🟢 {he ? 'אותות חוזק' : 'Strength signals'} (+{breakdown.plus_total || 0})
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {plusSignals.map(([label, v], i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: c.text }}>
+                <span>{label}</span>
+                <span style={{ color: '#097c3e', fontWeight: 700, marginLeft: 8, whiteSpace: 'nowrap' }}>+{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* V3 — Weakness signals (the -s) */}
+      {isV3 && minusSignals && minusSignals.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: '#c0392b', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>
+            🔴 {he ? 'אותות חולשה' : 'Weakness signals'} ({breakdown.minus_total || 0})
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {minusSignals.map(([label, v], i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: c.text }}>
+                <span>{label}</span>
+                <span style={{ color: '#c0392b', fontWeight: 700, marginLeft: 8, whiteSpace: 'nowrap' }}>{v}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
