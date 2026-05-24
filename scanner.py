@@ -1454,9 +1454,20 @@ def compute_recommendation_scores(top5):
                 rng = wh - wl
                 if rng > 0:
                     signals["close_location_pct"] = round((wc - wl) / rng * 100, 1)
+            # 52-week range — raw values + where the price sits in the range
             high_52w = getattr(fi, "fifty_two_week_high", None)
-            if high_52w and stock["price"] > 0:
-                signals["dist_from_52w_high_pct"] = round((high_52w - stock["price"]) / high_52w * 100, 1)
+            low_52w  = getattr(fi, "fifty_two_week_low", None)
+            price    = stock.get("price", 0)
+            if high_52w:
+                signals["high_52w"] = round(float(high_52w), 2)
+                if price > 0:
+                    signals["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
+            if low_52w:
+                signals["low_52w"] = round(float(low_52w), 2)
+                if price > 0 and low_52w > 0:
+                    signals["gain_from_52w_low_pct"] = round((price - low_52w) / low_52w * 100, 1)
+            if high_52w and low_52w and high_52w > low_52w and price > 0:
+                signals["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
 
         except Exception as e:
             print(f"  {t}: score error — {e}")

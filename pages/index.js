@@ -77,6 +77,11 @@ const T = {
     confLow: 'אמון נמוך',
     scoreBreakdown: 'פירוט הציון',
     gap: 'פער מהשני',
+    range52w: 'טווח 52 שבועות',
+    posInRange: 'מיקום בטווח',
+    high52: 'שיא 52W',
+    low52: 'תחתית 52W',
+    fromLow: 'מהתחתית',
   },
   en: {
     title: 'Stock Scout',
@@ -146,6 +151,11 @@ const T = {
     confLow: 'Low confidence',
     scoreBreakdown: 'Score breakdown',
     gap: 'Gap from #2',
+    range52w: '52-Week Range',
+    posInRange: 'Position in range',
+    high52: '52W High',
+    low52: '52W Low',
+    fromLow: 'from low',
   }
 }
 
@@ -1664,9 +1674,6 @@ function IdentityCard({ stock, c, t, dark, lang }) {
             color={sig.close_location_pct >= 85 ? '#097c3e' : c.text}
           />
         )}
-        {sig.dist_from_52w_high_pct !== undefined && (
-          <Stat label={t.distHigh} value={`${sig.dist_from_52w_high_pct}%`} />
-        )}
         {sig.earnings_in_days !== undefined && (
           <Stat
             label={t.earningsIn}
@@ -1676,6 +1683,68 @@ function IdentityCard({ stock, c, t, dark, lang }) {
           />
         )}
       </div>
+
+      {/* 52-week range — visual bar with high/low/current */}
+      {(sig.high_52w !== undefined || sig.low_52w !== undefined) && (() => {
+        const hi = sig.high_52w
+        const lo = sig.low_52w
+        const pos = sig.pos_in_52w_range_pct
+        const fromLow = sig.gain_from_52w_low_pct
+        const distHigh = sig.dist_from_52w_high_pct
+        const price = stock.price
+        // Color the position dot: greener as it approaches the high
+        const posColor = pos === undefined ? c.muted
+          : pos >= 80 ? '#097c3e'
+          : pos >= 50 ? '#cc8800'
+          : '#888'
+        return (
+          <div style={{
+            background: c.card, border: `1px solid ${c.border}`,
+            borderRadius: 8, padding: '12px 14px', marginBottom: 12,
+          }}>
+            <div style={{ fontSize: 10, color: c.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8 }}>
+              📅 {t.range52w}
+            </div>
+            {/* Bar */}
+            {hi !== undefined && lo !== undefined && pos !== undefined && (
+              <div style={{ position: 'relative', height: 8, background: dark ? '#0a1520' : '#e6f0fa', borderRadius: 4, marginBottom: 10 }}>
+                <div style={{
+                  position: 'absolute', left: `${Math.max(0, Math.min(100, pos))}%`,
+                  top: -3, width: 14, height: 14, borderRadius: '50%',
+                  background: posColor, transform: 'translateX(-50%)',
+                  boxShadow: `0 0 0 2px ${c.card}`,
+                }} />
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: c.muted }}>
+              <div>
+                <div style={{ fontWeight: 700, color: c.text }}>${lo !== undefined ? lo : '—'}</div>
+                <div>{t.low52}</div>
+              </div>
+              {price !== undefined && (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, color: posColor }}>${price}</div>
+                  {pos !== undefined && <div>{pos}% {t.posInRange}</div>}
+                </div>
+              )}
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontWeight: 700, color: c.text }}>${hi !== undefined ? hi : '—'}</div>
+                <div>{t.high52}</div>
+              </div>
+            </div>
+            {(fromLow !== undefined || distHigh !== undefined) && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: c.muted, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${c.border}` }}>
+                {fromLow !== undefined && (
+                  <span><span style={{ color: '#097c3e', fontWeight: 700 }}>+{fromLow}%</span> {t.fromLow}</span>
+                )}
+                {distHigh !== undefined && (
+                  <span>-{distHigh}% {t.distHigh}</span>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Why this pick — catalysts */}
       {cats.length > 0 && (
