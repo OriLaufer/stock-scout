@@ -76,8 +76,13 @@ for stock in stocks:
     bsig = {}
     time.sleep(1.2)
     obj = yf.Ticker(t)
+    price = stock.get("price", 0)
 
-    # --- .info call (float + short) — isolated so failure doesn't kill 52W ---
+    high_52w = None
+    low_52w  = None
+
+    # Try .info first — it reliably has fiftyTwoWeekHigh / fiftyTwoWeekLow
+    info = None
     try:
         info = obj.info
         fl = info.get("floatShares") or 0
@@ -86,27 +91,42 @@ for stock in stocks:
         sp = info.get("shortPercentOfFloat") or 0
         if sp:
             bsig["short_pct"] = round(float(sp) * 100, 1)
+        high_52w = info.get("fiftyTwoWeekHigh") or None
+        low_52w  = info.get("fiftyTwoWeekLow")  or None
     except Exception as e:
         print(f"  {t}: .info failed — {type(e).__name__}")
 
-    # --- fast_info call (52W high/low) — separate try so we always attempt it ---
-    try:
-        fi = obj.fast_info
-        high_52w = getattr(fi, "fifty_two_week_high", None)
-        low_52w  = getattr(fi, "fifty_two_week_low", None)
-        price    = stock.get("price", 0)
-        if high_52w:
-            bsig["high_52w"] = round(float(high_52w), 2)
-            if price > 0:
-                bsig["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
-        if low_52w:
-            bsig["low_52w"] = round(float(low_52w), 2)
-            if price > 0 and low_52w > 0:
-                bsig["gain_from_52w_low_pct"] = round((price - low_52w) / low_52w * 100, 1)
-        if high_52w and low_52w and high_52w > low_52w and price > 0:
-            bsig["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
-    except Exception as e:
-        print(f"  {t}: fast_info failed — {type(e).__name__}")
+    # Fallback: fast_info (try both attribute conventions across yfinance versions)
+    if not (high_52w and low_52w):
+        try:
+            fi = obj.fast_info
+            if not high_52w:
+                high_52w = getattr(fi, "year_high", None) or getattr(fi, "fifty_two_week_high", None)
+            if not low_52w:
+                low_52w  = getattr(fi, "year_low", None)  or getattr(fi, "fifty_two_week_low", None)
+        except Exception as e:
+            print(f"  {t}: fast_info failed — {type(e).__name__}")
+
+    # Final fallback: derive 52W from a 1-year history pull (always works if the ticker exists)
+    if not (high_52w and low_52w):
+        try:
+            hist1y = obj.history(period="1y", interval="1d")
+            if not hist1y.empty:
+                high_52w = high_52w or float(hist1y["High"].max())
+                low_52w  = low_52w  or float(hist1y["Low"].min())
+        except Exception:
+            pass
+
+    if high_52w:
+        bsig["high_52w"] = round(float(high_52w), 2)
+        if price > 0:
+            bsig["dist_from_52w_high_pct"] = round((high_52w - price) / high_52w * 100, 1)
+    if low_52w:
+        bsig["low_52w"] = round(float(low_52w), 2)
+        if price > 0 and low_52w > 0:
+            bsig["gain_from_52w_low_pct"] = round((price - low_52w) / low_52w * 100, 1)
+    if high_52w and low_52w and high_52w > low_52w and price > 0:
+        bsig["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
 
     baseline_signals[t] = bsig
     print(f"  {t}: float={bsig.get('float_m', 'N/A')}M | 52W=${bsig.get('low_52w', '—')}-${bsig.get('high_52w', '—')}")

@@ -832,18 +832,19 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                 : `All stocks across ${totalScans} scans — ranked by consistency`}
             </div>
           </div>
-          {/* Date labels above the dot timeline — scale gap to match dot scaling below */}
+          {/* Date labels above the dot timeline — scale to match dot scaling below */}
           {(() => {
             const n = weekLabels.length
             let gap, fontSize
-            if      (n <= 12) { gap = 16; fontSize = 10 }
-            else if (n <= 18) { gap = 12; fontSize = 9  }
-            else if (n <= 26) { gap = 9;  fontSize = 8  }
-            else              { gap = 7;  fontSize = 8  }
+            if      (n <= 8)  { gap = 16; fontSize = 10 }
+            else if (n <= 12) { gap = 11; fontSize = 9  }
+            else if (n <= 18) { gap = 9;  fontSize = 8  }
+            else if (n <= 26) { gap = 7;  fontSize = 8  }
+            else              { gap = 5;  fontSize = 7  }
             return (
-              <div style={{ marginLeft: 'auto', display: 'flex', gap }}>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap, maxWidth: 220, overflow: 'hidden' }}>
                 {weekLabels.map((w, i) => (
-                  <div key={i} style={{ fontSize, color: '#666', textAlign: 'center', writingMode: 'vertical-rl', transform: 'rotate(180deg)', lineHeight: 1.2 }}>{w.split('-')[1] || w}</div>
+                  <div key={i} style={{ fontSize, color: '#666', textAlign: 'center', writingMode: 'vertical-rl', transform: 'rotate(180deg)', lineHeight: 1.2, flexShrink: 0 }}>{w.split('-')[1] || w}</div>
                 ))}
               </div>
             )
@@ -910,21 +911,21 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                 </div>
 
                 {/* Dot timeline — intensity reflects gain magnitude.
-                    Dots shrink as more weeks accumulate, so the row never overflows. */}
+                    Shrinks aggressively to keep the row from overflowing into the right-hand stats. */}
                 {(() => {
-                  // Adaptive sizing: keep total dot-strip under ~210px no matter how many weeks
                   const n = totalScans || stock.weekPresence.length
                   let size, gap
-                  if      (n <= 12) { size = 13; gap = 5 }
-                  else if (n <= 18) { size = 11; gap = 4 }
-                  else if (n <= 26) { size = 9;  gap = 3 }
-                  else if (n <= 40) { size = 7;  gap = 2 }
-                  else              { size = 6;  gap = 2 }
+                  if      (n <= 8)  { size = 13; gap = 5 }
+                  else if (n <= 12) { size = 10; gap = 3 }
+                  else if (n <= 18) { size = 8;  gap = 3 }
+                  else if (n <= 26) { size = 7;  gap = 2 }
+                  else if (n <= 40) { size = 6;  gap = 2 }
+                  else              { size = 5;  gap = 1 }
                   return (
-                    <div style={{ display: 'flex', gap, alignItems: 'center', flexShrink: 0 }}>
+                    <div style={{ display: 'flex', gap, alignItems: 'center', flexShrink: 0, maxWidth: 220, overflow: 'hidden' }}>
                       {stock.weekPresence.map((gain, wi) => (
                         <div key={wi} title={gain !== null ? `${weekLabels[wi]}: +${gain.toFixed(1)}%` : weekLabels[wi]} style={{
-                          width: size, height: size, borderRadius: '50%',
+                          width: size, height: size, borderRadius: '50%', flexShrink: 0,
                           ...dotStyle(gain),
                         }} />
                       ))}
