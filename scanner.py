@@ -315,23 +315,27 @@ def find_top20_by_marketcap(price_data, names_dict):
         name = names_dict.get(t, t)
         sector, industry = "", ""
         basic_signals = {}  # baseline identity-card data for ALL top 20
+        time.sleep(0.8)
+        obj = yf.Ticker(t)
+
+        # .info — name/sector/industry/float/short. Wrap separately so failure
+        # doesn't take 52W with it.
         try:
-            time.sleep(0.8)  # avoid rate limiting when fetching details for final picks
-            obj  = yf.Ticker(t)
             info = obj.info
             name = info.get("longName") or info.get("shortName") or name
             sector = info.get("sector") or ""
             industry = info.get("industry") or ""
-
-            # Float
             fl = info.get("floatShares") or 0
             if fl:
                 basic_signals["float_m"] = round(fl / 1e6, 1)
-            # Short interest
             sp = info.get("shortPercentOfFloat") or 0
             if sp:
                 basic_signals["short_pct"] = round(float(sp) * 100, 1)
-            # 52W range (from fast_info, no extra rate cost)
+        except Exception:
+            pass
+
+        # fast_info — 52W range (cheap, almost never fails)
+        try:
             fi = obj.fast_info
             high_52w = getattr(fi, "fifty_two_week_high", None)
             low_52w  = getattr(fi, "fifty_two_week_low", None)

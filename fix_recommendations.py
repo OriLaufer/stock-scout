@@ -60,9 +60,11 @@ baseline_signals = {}  # ticker -> dict of basic signals
 for stock in stocks:
     t = stock["ticker"]
     bsig = {}
+    time.sleep(1.2)
+    obj = yf.Ticker(t)
+
+    # --- .info call (float + short) — isolated so failure doesn't kill 52W ---
     try:
-        time.sleep(1.2)
-        obj  = yf.Ticker(t)
         info = obj.info
         fl = info.get("floatShares") or 0
         if fl:
@@ -70,6 +72,11 @@ for stock in stocks:
         sp = info.get("shortPercentOfFloat") or 0
         if sp:
             bsig["short_pct"] = round(float(sp) * 100, 1)
+    except Exception as e:
+        print(f"  {t}: .info failed — {type(e).__name__}")
+
+    # --- fast_info call (52W high/low) — separate try so we always attempt it ---
+    try:
         fi = obj.fast_info
         high_52w = getattr(fi, "fifty_two_week_high", None)
         low_52w  = getattr(fi, "fifty_two_week_low", None)
@@ -85,7 +92,8 @@ for stock in stocks:
         if high_52w and low_52w and high_52w > low_52w and price > 0:
             bsig["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
     except Exception as e:
-        print(f"  {t}: baseline error — {type(e).__name__}")
+        print(f"  {t}: fast_info failed — {type(e).__name__}")
+
     baseline_signals[t] = bsig
     print(f"  {t}: float={bsig.get('float_m', 'N/A')}M | 52W=${bsig.get('low_52w', '—')}-${bsig.get('high_52w', '—')}")
 
