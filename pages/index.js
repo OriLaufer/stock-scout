@@ -1481,7 +1481,8 @@ function TheTrend({ trend, c, dark, lang }) {
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
   const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
 
-  // Scale weekly bars across all stocks for consistency
+  // For the COLLAPSED sparkline (single line per stock in the list view),
+  // use a shared scale so totals are visually comparable across rows.
   const allGains = trend.flatMap(s => (s.weekly_history || []).map(h => Math.abs(h.change_pct)))
   const maxAbs = Math.max(20, ...allGains)
 
@@ -1870,6 +1871,10 @@ function TheTrend({ trend, c, dark, lang }) {
                       const greensDim = '#0a5e30'
                       const reds = '#ff3b30'
                       const redsDim = '#9c2a1f'
+                      // PER-STOCK max so this stock's biggest week takes the full bar height —
+                      // makes small weeks (+5% vs +10% vs +15%) visually distinguishable instead
+                      // of squished against a global +229% maximum.
+                      const stockMaxAbs = Math.max(5, ...history.map(h => Math.abs(h.change_pct)))
                       return (
                         <div style={{
                           position: 'relative',
@@ -1890,7 +1895,8 @@ function TheTrend({ trend, c, dark, lang }) {
                             {history.map((h, hi) => {
                               const positive = h.change_pct >= 0
                               const abs = Math.abs(h.change_pct)
-                              const barH = Math.max(4, (abs / maxAbs) * HALF)
+                              // Per-stock scaling — visible differences between small weeks within ONE stock
+                              const barH = Math.max(8, (abs / stockMaxAbs) * HALF)
                               // ALL bars get the vivid color treatment — bold and prominent regardless of scan presence
                               const fill = positive ? greens : reds
                               const borderColor = positive ? greensDim : redsDim
