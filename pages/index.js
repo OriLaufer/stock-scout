@@ -1864,38 +1864,24 @@ function TheTrend({ trend, c, dark, lang }) {
                       </div>
                     </div>
 
-                    {/* Pro-grade bar chart: zero line in middle, greens UP, reds DOWN (Bloomberg/TradingView style) */}
+                    {/* Pro-grade diverging bar chart: greens UP, reds DOWN, no visible axis */}
                     {(() => {
-                      const HALF = 80   // pixels available on each side of the zero line
-                      const LABEL_SPACE = 18  // pixels reserved for the % label above/below the bar
-                      const greens = '#00c853'      // vibrant green for in-scan positive
-                      const greensDim = '#0a5e30'   // muted for not-in-scan positive
-                      const reds = '#ff3b30'        // vibrant red for in-scan negative
-                      const redsDim = '#9c2a1f'     // muted for not-in-scan negative
+                      const HALF = 80   // pixels for each direction (up/down)
+                      const LABEL_SPACE = 18  // pixels reserved above/below for labels
+                      const MIDLINE = HALF + LABEL_SPACE  // y-coordinate of the invisible 0 line
+                      const TOTAL_H = HALF * 2 + LABEL_SPACE * 2
+                      const greens = '#00c853'
+                      const greensDim = '#0a5e30'
+                      const reds = '#ff3b30'
+                      const redsDim = '#9c2a1f'
                       return (
                         <div style={{
                           position: 'relative',
-                          height: HALF * 2 + LABEL_SPACE * 2,
+                          height: TOTAL_H,
                           marginBottom: 8,
                         }}>
-                          {/* Zero baseline */}
-                          <div style={{
-                            position: 'absolute',
-                            top: HALF + LABEL_SPACE - 1,
-                            left: 0, right: 0,
-                            height: 2,
-                            background: dark ? '#3a3a4e' : '#bbb',
-                            zIndex: 1,
-                          }} />
-                          <div style={{
-                            position: 'absolute',
-                            top: HALF + LABEL_SPACE - 8, left: -2,
-                            fontSize: 9, color: c.muted, fontWeight: 700,
-                            background: c.card, padding: '0 4px',
-                            zIndex: 2,
-                          }}>0%</div>
+                          {/* No zero line — clean look. Bars themselves define the up/down split. */}
 
-                          {/* Bars */}
                           <div style={{ display: 'flex', height: '100%', gap: 4 }}>
                             {history.map((h, hi) => {
                               const positive = h.change_pct >= 0
@@ -1904,17 +1890,17 @@ function TheTrend({ trend, c, dark, lang }) {
                               const fill = positive
                                 ? (h.in_scan ? greens : greensDim)
                                 : (h.in_scan ? reds   : redsDim)
-                              const labelColor = positive ? (h.in_scan ? greens : greensDim) : (h.in_scan ? reds : redsDim)
+                              const labelColor = fill
                               return (
                                 <div key={hi} style={{
                                   flex: 1, position: 'relative', minWidth: 0,
                                 }} title={`${h.week}: ${positive ? '+' : ''}${h.change_pct.toFixed(1)}%${h.in_scan ? ' · in our scans' : ''}`}>
                                   {positive ? (
                                     <>
-                                      {/* Label above the bar */}
+                                      {/* Label above */}
                                       <div style={{
                                         position: 'absolute',
-                                        bottom: HALF + barH + 2,
+                                        top: MIDLINE - barH - LABEL_SPACE,
                                         left: '50%', transform: 'translateX(-50%)',
                                         fontSize: 11, fontWeight: 800,
                                         color: labelColor,
@@ -1923,10 +1909,10 @@ function TheTrend({ trend, c, dark, lang }) {
                                       }}>
                                         +{Math.round(h.change_pct)}%
                                       </div>
-                                      {/* Bar growing UP from zero line */}
+                                      {/* Bar growing UP to midline */}
                                       <div style={{
                                         position: 'absolute',
-                                        bottom: HALF,
+                                        top: MIDLINE - barH,
                                         left: '50%', transform: 'translateX(-50%)',
                                         width: '85%', maxWidth: 34,
                                         height: barH,
@@ -1939,10 +1925,10 @@ function TheTrend({ trend, c, dark, lang }) {
                                     </>
                                   ) : (
                                     <>
-                                      {/* Bar dropping DOWN from zero line */}
+                                      {/* Bar dropping DOWN from midline */}
                                       <div style={{
                                         position: 'absolute',
-                                        top: HALF + LABEL_SPACE * 2 - HALF,  // = HALF + LABEL_SPACE (just below zero line)
+                                        top: MIDLINE,
                                         left: '50%', transform: 'translateX(-50%)',
                                         width: '85%', maxWidth: 34,
                                         height: barH,
@@ -1952,10 +1938,10 @@ function TheTrend({ trend, c, dark, lang }) {
                                         border: h.in_scan ? `2px solid ${redsDim}` : 'none',
                                         boxShadow: h.in_scan ? `0 0 8px ${reds}33` : 'none',
                                       }} />
-                                      {/* Label below the bar */}
+                                      {/* Label below */}
                                       <div style={{
                                         position: 'absolute',
-                                        top: HALF + LABEL_SPACE * 2 - HALF + barH + 2,
+                                        top: MIDLINE + barH + 2,
                                         left: '50%', transform: 'translateX(-50%)',
                                         fontSize: 11, fontWeight: 800,
                                         color: labelColor,
