@@ -1880,9 +1880,17 @@ function TheTrend({ trend, c, dark, lang }) {
                           height: TOTAL_H,
                           marginBottom: 8,
                         }}>
-                          {/* No zero line — clean look. Bars themselves define the up/down split. */}
+                          {/* Simple horizontal baseline — no label, just a clean line */}
+                          <div style={{
+                            position: 'absolute',
+                            top: MIDLINE,
+                            left: 0, right: 0,
+                            height: 1,
+                            background: dark ? '#2a2a3e' : '#dcdce6',
+                            zIndex: 1,
+                          }} />
 
-                          <div style={{ display: 'flex', height: '100%', gap: 4 }}>
+                          <div style={{ display: 'flex', height: '100%', gap: 4, position: 'relative', zIndex: 2 }}>
                             {history.map((h, hi) => {
                               const positive = h.change_pct >= 0
                               const abs = Math.abs(h.change_pct)
