@@ -190,8 +190,8 @@ export async function getServerSideProps() {
   const processed = (scans || []).map(scan => {
     try {
       const parsed = JSON.parse(scan.stocks_json)
-      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null }
-    } catch { return { ...scan, stocks: [], bonus: [], backtest: null } }
+      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null, trend: parsed.trend || null }
+    } catch { return { ...scan, stocks: [], bonus: [], backtest: null, trend: null } }
   })
 
   const unique = []
@@ -347,10 +347,13 @@ export async function getServerSideProps() {
     backtest = { pending: true, totalScans: unique.length }
   }
 
-  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest } }
+  // Pick The Trend from the LATEST scan (newest scan's trend field carries the snapshot)
+  const trend = (unique.length > 0 && unique[0].trend) ? unique[0].trend : null
+
+  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -460,8 +463,13 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         </div>
 
         {/* Tab switcher */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-          {[['weekly', `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`], ['hof', '🏆 Hall of Fame'], ['watchlist', `📌 ${lang === 'he' ? 'מעקב' : 'Watchlist'}`]].map(([key, label]) => (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+          {[
+            ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
+            ['trend',     `📈 ${lang === 'he' ? 'המגמה' : 'The Trend'}`],
+            ['hof',       '🏆 Hall of Fame'],
+            ['watchlist', `📌 ${lang === 'he' ? 'מעקב' : 'Watchlist'}`],
+          ].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ padding: '9px 22px', borderRadius: 22, border: `1px solid ${tab === key ? '#097c3e' : c.border}`, background: tab === key ? '#097c3e' : c.card, color: tab === key ? 'white' : c.muted, fontWeight: 700, cursor: 'pointer', fontSize: 14, transition: 'all 0.15s' }}>
               {label}
             </button>
@@ -473,6 +481,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             {backtest && <BacktestCard backtest={backtest} c={c} dark={dark} lang={lang} />}
             <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} winRateByTicker={winRateByTicker} watchlistProps={watchlistProps} />
           </>
+        )}
+
+        {tab === 'trend' && (
+          <TheTrend trend={trend} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'watchlist' && (
@@ -1418,6 +1430,180 @@ function WatchlistRow({ item, removeFromWatchlist, c, dark, lang }) {
     </tr>
   )
 }
+
+// ──────────────────────────────────────────────────────────────────
+// The Trend — top 10 stocks by compound return across all our scans,
+// with their FULL continuous weekly timeline (even weeks they weren't
+// in our top picks). This shows the boss real momentum-building stocks,
+// not single-week spikes.
+// ──────────────────────────────────────────────────────────────────
+function TheTrend({ trend, c, dark, lang }) {
+  const he = lang === 'he'
+  const [openTicker, setOpenTicker] = useState(null)
+
+  if (!trend || trend.length === 0) {
+    return (
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 40, textAlign: 'center', color: c.muted }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>📈</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
+          {he ? 'אין נתוני מגמה עדיין' : 'No trend data yet'}
+        </div>
+        <div style={{ fontSize: 13 }}>
+          {he ? 'הרץ את "Fix Trend" ב-Actions כדי לחשב.' : 'Run "Fix Trend" in Actions to compute.'}
+        </div>
+      </div>
+    )
+  }
+
+  const medals = ['🥇', '🥈', '🥉']
+  const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
+  const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
+
+  // For each stock, find max abs weekly gain to scale the bars
+  const allGains = trend.flatMap(s => (s.weekly_history || []).map(h => Math.abs(h.change_pct)))
+  const maxAbs = Math.max(20, ...allGains)
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{ background: dark ? '#12122a' : '#1a1a2e', borderRadius: '12px 12px 0 0', padding: '20px 24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 28 }}>📈</span>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: 'white' }}>
+              {he ? 'המגמה — טופ 10 לאורך זמן' : 'The Trend — Top 10 Over Time'}
+            </div>
+            <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>
+              {he
+                ? 'המניות עם התשואה המצטברת הגבוהה ביותר מאז שהתחלנו לסרוק — כולל שבועות שלא הופיעו אצלנו'
+                : 'Stocks with the highest compound return since we started — including weeks they weren\'t in our top picks'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Rows */}
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 12px 12px', overflow: 'hidden' }}>
+        {trend.map((stock, i) => {
+          const isTop3 = i < 3
+          const isOpen = openTicker === stock.ticker
+          const fullCmp = stock.full_compound_pct || 0
+          const scanCmp = stock.scan_compound_pct || 0
+          const compColor = fullCmp >= 0 ? '#097c3e' : '#c0392b'
+          const history = stock.weekly_history || []
+
+          return (
+            <div key={stock.ticker}>
+              <div
+                onClick={() => setOpenTicker(isOpen ? null : stock.ticker)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px',
+                  borderBottom: `1px solid ${c.border}`,
+                  background: isTop3 ? medalBg[i] : (i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa')),
+                  borderLeft: isTop3 ? `3px solid ${medalBorder[i]}` : '3px solid transparent',
+                  cursor: 'pointer',
+                }}
+              >
+                {/* Rank */}
+                <div style={{ width: 36, textAlign: 'center', flexShrink: 0 }}>
+                  {isTop3
+                    ? <span style={{ fontSize: 22 }}>{medals[i]}</span>
+                    : <span style={{ fontSize: 14, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
+                </div>
+
+                {/* Ticker + name */}
+                <div style={{ width: 160, flexShrink: 0 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: c.text }}>{stock.ticker}</div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 155 }}>
+                    {stock.name}
+                  </div>
+                </div>
+
+                {/* Mini sparkline of weekly gains */}
+                <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 36, flex: 1, minWidth: 100, maxWidth: 400, overflow: 'hidden' }}>
+                  {history.map((h, hi) => {
+                    const abs = Math.abs(h.change_pct)
+                    const barHeight = Math.max(2, (abs / maxAbs) * 32)
+                    const positive = h.change_pct >= 0
+                    return (
+                      <div key={hi} title={`${h.week}: ${positive ? '+' : ''}${h.change_pct}%${h.in_scan ? ' (in top picks)' : ''}`} style={{
+                        width: 6,
+                        height: barHeight,
+                        background: positive ? '#097c3e' : '#c0392b',
+                        opacity: h.in_scan ? 1 : 0.45,
+                        borderRadius: 1,
+                        flexShrink: 0,
+                      }} />
+                    )
+                  })}
+                </div>
+
+                {/* Compound return */}
+                <div style={{ textAlign: 'right', minWidth: 110 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: compColor }}>
+                    {fullCmp >= 0 ? '+' : ''}{fullCmp.toFixed(1)}%
+                  </div>
+                  <div style={{ fontSize: 10, color: c.muted, marginTop: 1 }}>
+                    {he ? 'מצטבר מלא' : 'full compound'}
+                  </div>
+                </div>
+
+                {/* Appearance count */}
+                <div style={{ textAlign: 'center', minWidth: 70 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>
+                    {stock.scan_appearances}/{stock.total_weeks}
+                  </div>
+                  <div style={{ fontSize: 10, color: c.muted, marginTop: 1 }}>
+                    {he ? 'הופעות' : 'in picks'}
+                  </div>
+                </div>
+
+                <span style={{ fontSize: 14, color: c.muted, marginLeft: 6 }}>{isOpen ? '▲' : '▼'}</span>
+              </div>
+
+              {/* Expanded panel — weekly breakdown */}
+              {isOpen && (
+                <div style={{ background: dark ? '#0f1820' : '#f5fafd', padding: '16px 24px', borderBottom: `1px solid ${c.border}`, borderLeft: '3px solid #097c3e' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>
+                    {he ? '📅 פירוט שבועי — מגמה מלאה' : '📅 Weekly breakdown — full trend'}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {history.map((h, hi) => {
+                      const positive = h.change_pct >= 0
+                      const bg = h.in_scan
+                        ? (positive ? (dark ? '#1a3a1a' : '#EAF3DE') : (dark ? '#3a1a1a' : '#FCEBEB'))
+                        : (dark ? '#1e1e32' : '#f0f0f0')
+                      const color = h.in_scan
+                        ? (positive ? '#097c3e' : '#c0392b')
+                        : c.muted
+                      return (
+                        <div key={hi} style={{
+                          background: bg, color, padding: '6px 10px', borderRadius: 6,
+                          fontSize: 11, fontWeight: 600,
+                          border: h.in_scan ? `1px solid ${positive ? '#097c3e' : '#c0392b'}` : `1px solid ${c.border}`,
+                          opacity: h.in_scan ? 1 : 0.7,
+                        }}>
+                          <div style={{ fontSize: 9, opacity: 0.7 }}>{h.week.split('-')[1] || h.week}</div>
+                          <div style={{ fontSize: 12, fontWeight: 800 }}>{positive ? '+' : ''}{h.change_pct.toFixed(1)}%</div>
+                          {h.in_scan && <div style={{ fontSize: 8, marginTop: 1 }}>★</div>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 12, display: 'flex', gap: 16 }}>
+                    <span>{he ? '★ = הופיעה בטופ הסריקה' : '★ = appeared in our top picks'}</span>
+                    <span>{he ? `סכום סריקה: ${scanCmp >= 0 ? '+' : ''}${scanCmp}%` : `Scan compound: ${scanCmp >= 0 ? '+' : ''}${scanCmp}%`}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 
 function WatchlistTab({ watchlist, removeFromWatchlist, c, dark, lang }) {
   const headers = lang === 'he'

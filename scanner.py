@@ -272,15 +272,18 @@ def fetch_weekly_changes(tickers, reference_date=None):
     return all_data
 
 
-def find_top20_by_marketcap(price_data, names_dict):
-    """Find top 20 gainers that pass the market cap filter.
+TOP_PICKS_TARGET = 40  # expanded from 20 to 40 — catches "building momentum" stocks
 
-    Strategy: check only the top 100 candidates by % gain — anything outside that
+
+def find_top_picks_by_marketcap(price_data, names_dict, target=TOP_PICKS_TARGET):
+    """Find top `target` gainers that pass the market cap filter.
+
+    Strategy: check the top 5*target candidates by % gain — anything outside that
     is not a meaningful top gainer anyway. Use fast_info for market cap (lightweight,
     much less rate-limited than info) with a brief pause after the heavy batch downloads.
     """
     sorted_gainers = sorted(price_data.values(), key=lambda x: x["change_pct"], reverse=True)
-    candidates = sorted_gainers[:100]  # only top 100 by % gain
+    candidates = sorted_gainers[:target * 5]  # check 5x the target to account for failures + cap rejections
 
     print(f"Checking market caps for top {len(candidates)} gainers (>= ${MIN_MARKET_CAP/1e6:.0f}M)...")
     print("  Pausing 8s to let rate limits recover after batch downloads...")
@@ -302,10 +305,10 @@ def find_top20_by_marketcap(price_data, names_dict):
 
     print(f"  Got market caps for {len(market_caps)}/{len(candidates)} candidates")
 
-    # Step 2: filter in % order, then fetch full details for the final 20
-    top20 = []
+    # Step 2: filter in % order, then fetch full details for the final picks
+    top_picks = []
     for c in candidates:
-        if len(top20) >= 20:
+        if len(top_picks) >= target:
             break
         t = c["ticker"]
         mcap = market_caps.get(t, 0)
@@ -314,7 +317,7 @@ def find_top20_by_marketcap(price_data, names_dict):
 
         name = names_dict.get(t, t)
         sector, industry = "", ""
-        basic_signals = {}  # baseline identity-card data for ALL top 20
+        basic_signals = {}  # baseline identity-card data for ALL picks
         time.sleep(0.8)
         obj = yf.Ticker(t)
 
@@ -379,7 +382,7 @@ def find_top20_by_marketcap(price_data, names_dict):
         if len(name) > 60:
             name = name[:57] + "..."
 
-        top20.append({
+        top_picks.append({
             "ticker": t,
             "name": name,
             "change_pct": c["change_pct"],
@@ -390,10 +393,10 @@ def find_top20_by_marketcap(price_data, names_dict):
             "industry": industry,
             "rec_signals": basic_signals,  # baseline data for identity card
         })
-        print(f"  [{len(top20)}/20] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | float={basic_signals.get('float_m', 'N/A')}M | {name[:40]}")
+        print(f"  [{len(top_picks)}/{target}] {t}: +{c['change_pct']}% | ${mcap/1e9:.2f}B | float={basic_signals.get('float_m', 'N/A')}M | {name[:40]}")
 
-    print(f"Found {len(top20)} stocks from top-100 gainers passing market cap filter")
-    return top20
+    print(f"Found {len(top_picks)} stocks from top-{len(candidates)} gainers passing market cap filter")
+    return top_picks
 
 
 # ============== BUZZ - APIFY (PAID, RELIABLE) ==============
@@ -1058,11 +1061,13 @@ def week_exists_in_supabase(week_label):
         return False
 
 
-def save_to_supabase(stocks, bonus, week_label, backtest_entry=None):
+def save_to_supabase(stocks, bonus, week_label, backtest_entry=None, trend_data=None):
     try:
         payload = {"stocks": stocks, "bonus": bonus}
         if backtest_entry:
             payload["backtest"] = backtest_entry
+        if trend_data:
+            payload["trend"] = trend_data
         supabase.table("weekly_scans").insert(
             {
                 "week_label": week_label,
@@ -1205,6 +1210,161 @@ def compute_backtest():
         "avg_weekly":    avg_weekly,
         "weeks":         weeks,
     }
+
+
+# ============== THE TREND — TOP-10 BY COMPOUND RETURN ACROSS ALL WEEKS ==============
+def _fetch_continuous_weekly_changes(ticker, fridays):
+    """Fetch the % change for each consecutive Friday-to-Friday week.
+    Returns dict: week_label -> change_pct. Even weeks the stock wasn't in our
+    scans are included — that's the whole point of 'continuous trend'."""
+    if len(fridays) < 2:
+        return {}
+    try:
+        time.sleep(0.4)
+        start = fridays[0] - timedelta(days=10)
+        end   = fridays[-1] + timedelta(days=2)
+        hist = yf.Ticker(ticker).history(
+            start=start.strftime("%Y-%m-%d"),
+            end=end.strftime("%Y-%m-%d"),
+            interval="1d",
+            auto_adjust=True,
+        )
+        if hist.empty:
+            return {}
+        closes = hist["Close"].dropna()
+
+        def close_on_or_before(target):
+            target_ts = pd.Timestamp(target.date())
+            valid = closes[closes.index.normalize() <= target_ts]
+            return float(valid.iloc[-1]) if len(valid) > 0 else None
+
+        result = {}
+        for i in range(1, len(fridays)):
+            this_friday = fridays[i]
+            prev_friday = fridays[i - 1]
+            week_label = f"{prev_friday.strftime('%d.%m')}-{this_friday.strftime('%d.%m.%Y')}"
+            this_close = close_on_or_before(this_friday)
+            prev_close = close_on_or_before(prev_friday)
+            if this_close and prev_close and prev_close > 0:
+                result[week_label] = round((this_close - prev_close) / prev_close * 100, 2)
+        return result
+    except Exception as e:
+        print(f"  {ticker}: trend fetch error — {type(e).__name__}")
+        return {}
+
+
+def compute_the_trend(top_n=10):
+    """Find the top N stocks by compound return across all our weekly scans,
+    then fetch their FULL continuous weekly history (including weeks they
+    didn't appear in our top picks) so the boss can see the real trend."""
+    try:
+        r = supabase.table("weekly_scans").select("*").order("created_at", desc=True).limit(100).execute()
+        scans = r.data or []
+    except Exception as e:
+        print(f"Trend: fetch error: {e}")
+        return []
+
+    # Build per-ticker history from our scans
+    ticker_history = {}  # ticker -> {week_label: change_pct}
+    name_lookup   = {}
+    weeks_seen    = set()
+    skip_labels   = {"__trend__"}
+
+    for scan in scans:
+        try:
+            label = scan["week_label"]
+            if label in skip_labels:
+                continue
+            weeks_seen.add(label)
+            payload = json.loads(scan["stocks_json"])
+            stocks = payload.get("stocks", payload) if isinstance(payload, dict) else payload
+            if not isinstance(stocks, list):
+                continue
+            for s in stocks:
+                if not isinstance(s, dict):
+                    continue
+                ticker = s.get("ticker")
+                if not ticker:
+                    continue
+                ticker_history.setdefault(ticker, {})[label] = s.get("change_pct", 0)
+                name_lookup.setdefault(ticker, s.get("name", ticker))
+        except Exception:
+            continue
+
+    if len(weeks_seen) < 2:
+        print("Trend: need at least 2 weeks of data, skipping")
+        return []
+
+    # Rank by compound return USING SCAN DATA (cheap ranking)
+    ticker_scan_compound = {}
+    for ticker, history in ticker_history.items():
+        if len(history) < 2:
+            continue
+        cmpd = 1.0
+        for change in history.values():
+            cmpd *= (1 + change / 100)
+        ticker_scan_compound[ticker] = cmpd - 1
+
+    top_tickers = sorted(ticker_scan_compound.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    if not top_tickers:
+        print("Trend: no qualifying tickers")
+        return []
+
+    # Build the consecutive Friday list spanning ALL weeks
+    sorted_labels = sorted(weeks_seen, key=lambda lbl: re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", lbl)
+                           and datetime(int(re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", lbl).group(3)),
+                                        int(re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", lbl).group(2)),
+                                        int(re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", lbl).group(1)))
+                           or datetime(2000, 1, 1))
+    def lbl_to_friday(lbl):
+        m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", lbl)
+        if not m: return None
+        return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    earliest_friday = lbl_to_friday(sorted_labels[0]) - timedelta(days=7)
+    latest_friday   = lbl_to_friday(sorted_labels[-1])
+    # Build all consecutive Fridays from earliest to latest
+    fridays = []
+    cur = earliest_friday
+    while cur <= latest_friday:
+        fridays.append(cur)
+        cur += timedelta(days=7)
+
+    print(f"Trend: computing top {len(top_tickers)} with full continuous timeline ({len(fridays)-1} weeks)")
+
+    trend_data = []
+    for ticker, scan_compound in top_tickers:
+        full_weekly = _fetch_continuous_weekly_changes(ticker, fridays)
+        if not full_weekly:
+            continue
+        full_compound = 1.0
+        for change in full_weekly.values():
+            full_compound *= (1 + change / 100)
+        full_compound -= 1
+
+        # Build ordered weekly history (in_scan flag marks weeks they appeared in our top picks)
+        scan_weeks = set(ticker_history.get(ticker, {}).keys())
+        history_entries = []
+        for week_label, change in sorted(full_weekly.items(), key=lambda x: lbl_to_friday(x[0]) or datetime(2000,1,1)):
+            history_entries.append({
+                "week": week_label,
+                "change_pct": change,
+                "in_scan": week_label in scan_weeks,
+            })
+
+        trend_data.append({
+            "ticker": ticker,
+            "name": name_lookup.get(ticker, ticker),
+            "scan_appearances": len(ticker_history[ticker]),
+            "total_weeks": len(history_entries),
+            "scan_compound_pct": round(scan_compound * 100, 1),
+            "full_compound_pct": round(full_compound * 100, 1),
+            "weekly_history": history_entries,
+        })
+
+    # Final sort by full compound (the real number)
+    trend_data.sort(key=lambda x: x["full_compound_pct"], reverse=True)
+    print(f"  Trend: {len(trend_data)} stocks computed, top: {trend_data[0]['ticker']} ({trend_data[0]['full_compound_pct']}%)" if trend_data else "")
+    return trend_data
 
 
 # ============== EMAIL ==============
@@ -1518,7 +1678,7 @@ def _compute_signals_v3(stock, obj):
     return signals, plus, minus, rejected
 
 
-def compute_recommendation_scores(top5, all_top20=None):
+def compute_recommendation_scores(top5, all_top_picks=None):
     """V3 — Gate + Conviction Score.
 
     1. GATE: stocks with weekly close < 60% of range get rejected outright
@@ -1530,10 +1690,10 @@ def compute_recommendation_scores(top5, all_top20=None):
     print("\nComputing recommendation scores (V3 Conviction)...")
     time.sleep(3)
 
-    # Sector heat — count sectors across top 20
+    # Sector heat — count sectors across all top picks (40)
     sector_counts = {}
-    if all_top20:
-        for s in all_top20:
+    if all_top_picks:
+        for s in all_top_picks:
             sec = s.get("sector") or ""
             if sec:
                 sector_counts[sec] = sector_counts.get(sec, 0) + 1
@@ -1565,7 +1725,7 @@ def compute_recommendation_scores(top5, all_top20=None):
             # Sector heat bonus
             sec = stock.get("sector") or ""
             if sec and sector_counts.get(sec, 0) >= 2:
-                plus.append((f"Hot sector ({sec}: {sector_counts[sec]} in top 20)", 1))
+                plus.append((f"Hot sector ({sec}: {sector_counts[sec]} in picks)", 1))
 
         except Exception as e:
             print(f"  {t}: score error — {e}")
@@ -1678,28 +1838,28 @@ def main():
         return
     print(f"  [+{int(time.time()-t_start)}s]\n")
 
-    # 3. Filter to gainers, find top 20 by % gain that pass market cap
+    # 3. Filter to gainers, find top picks (40) by % gain that pass market cap
     gainers = [p for p in price_data.values() if p["change_pct"] > 0]
     print(f"Total gainers: {len(gainers)}")
 
     gainers_dict = {g["ticker"]: g for g in gainers}
-    top20 = find_top20_by_marketcap(gainers_dict, names)
+    top_picks = find_top_picks_by_marketcap(gainers_dict, names)
 
-    if not top20:
+    if not top_picks:
         print("FATAL: no stocks passed market cap filter")
         return
     print(f"  [+{int(time.time()-t_start)}s]\n")
 
     # Compute recommendation scores for top 5 (which of the top 5 is most likely to continue)
-    top5_tickers = sorted(top20, key=lambda x: x["change_pct"], reverse=True)[:5]
+    top5_tickers = sorted(top_picks, key=lambda x: x["change_pct"], reverse=True)[:5]
     if not historical_mode:
-        scored = compute_recommendation_scores(top5_tickers, all_top20=top20)
+        scored = compute_recommendation_scores(top5_tickers, all_top_picks=top_picks)
         scored_map = {s["ticker"]: s for s in scored}
-        for s in top20:
+        for s in top_picks:
             if s["ticker"] in scored_map:
                 s.update(scored_map[s["ticker"]])
     else:
-        for s in top20:
+        for s in top_picks:
             s["recommended"] = False
             s["rec_score"] = 0
             s["rec_signals"] = {}
@@ -1712,22 +1872,22 @@ def main():
         "reddit_bullish_pct": 50, "stocktwits_bullish_pct": 50,
         "quotes": [], "topics": [],
     }
-    for s in top20:
+    for s in top_picks:
         s["buzz"] = empty_buzz
         s["buzz_alert"] = False
 
     if historical_mode:
-        for s in top20:
+        for s in top_picks:
             s["streak"] = 1
-        save_to_supabase(top20, [], week_label)
+        save_to_supabase(top_picks, [], week_label)
         print(f"\n=== DONE (historical) in {int(time.time()-t_start)}s ===")
         return
 
     # 4. Streak + real backtest from previous week
     prev, prev_week_label = get_previous_week_data()
-    for s in top20:
+    for s in top_picks:
         s["streak"] = prev.get(s["ticker"], {}).get("streak", 0) + 1 if s["ticker"] in prev else 1
-    returning_count = sum(1 for s in top20 if s["streak"] >= 2)
+    returning_count = sum(1 for s in top_picks if s["streak"] >= 2)
     print(f"Streak: {returning_count} stocks returning from last week")
 
     # Real backtest: how did last week's top 5 actually perform THIS week?
@@ -1735,8 +1895,8 @@ def main():
     print("\nComputing real backtest (last week's picks vs this week's prices)...")
     weekly_backtest = compute_weekly_backtest(prev, price_data, prev_week_label)
 
-    # 5. Save first so compute_backtest can include this week's data
-    save_to_supabase(top20, [], week_label, backtest_entry=weekly_backtest)
+    # 5. Save first so compute_backtest + compute_the_trend can include this week's data
+    save_to_supabase(top_picks, [], week_label, backtest_entry=weekly_backtest)
 
     # 6. Compute backtest from all historical scans (including the one just saved)
     print("\nComputing backtest track record...")
@@ -1744,8 +1904,23 @@ def main():
     if backtest:
         print(f"  Backtest: {backtest['total_weeks']} weeks | {backtest['win_rate']}% win rate | {backtest['avg_weekly']}% avg weekly | {backtest['compound_ret']}% compound")
 
-    # 7. Send email with track record
-    send_email(top20, [], week_label, backtest=backtest)
+    # 7. Compute "The Trend" — top 10 by compound return across ALL scans
+    print("\nComputing The Trend (top 10 by compound return)...")
+    trend = compute_the_trend(top_n=10)
+    if trend:
+        # Update the just-saved row with the trend data (re-save with trend embedded)
+        try:
+            r = supabase.table("weekly_scans").select("stocks_json").eq("week_label", week_label).execute()
+            if r.data:
+                pl = json.loads(r.data[0]["stocks_json"])
+                pl["trend"] = trend
+                supabase.table("weekly_scans").update({"stocks_json": json.dumps(pl)}).eq("week_label", week_label).execute()
+                print(f"  Trend saved with {len(trend)} stocks.")
+        except Exception as e:
+            print(f"  Trend save error: {e}")
+
+    # 8. Send email with track record
+    send_email(top_picks, [], week_label, backtest=backtest)
     print(f"\n=== DONE in {int(time.time()-t_start)}s ===")
 
 
