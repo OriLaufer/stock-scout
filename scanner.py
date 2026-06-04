@@ -1231,7 +1231,13 @@ def _fetch_continuous_weekly_changes(ticker, fridays):
         )
         if hist.empty:
             return {}
+        # yfinance returns timezone-aware index; strip it so naive Timestamp
+        # comparisons in close_on_or_before work without TypeError.
+        if hist.index.tz is not None:
+            hist.index = hist.index.tz_localize(None)
         closes = hist["Close"].dropna()
+        if closes.empty:
+            return {}
 
         def close_on_or_before(target):
             target_ts = pd.Timestamp(target.date())
@@ -1249,7 +1255,7 @@ def _fetch_continuous_weekly_changes(ticker, fridays):
                 result[week_label] = round((this_close - prev_close) / prev_close * 100, 2)
         return result
     except Exception as e:
-        print(f"  {ticker}: trend fetch error — {type(e).__name__}")
+        print(f"  {ticker}: trend fetch error — {type(e).__name__}: {e}")
         return {}
 
 
