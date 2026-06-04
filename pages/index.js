@@ -1854,12 +1854,8 @@ function TheTrend({ trend, c, dark, lang }) {
                       </div>
                       <div style={{ display: 'flex', gap: 12, fontSize: 10, color: c.muted }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 8, height: 8, background: '#097c3e', borderRadius: 2 }} />
-                          {he ? 'הופיעה בסריקה' : 'In our scans'}
-                        </span>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 8, height: 8, background: '#097c3e', opacity: 0.4, borderRadius: 2 }} />
-                          {he ? 'לא הופיעה' : 'Not in scans'}
+                          <span style={{ color: '#FFD700', fontSize: 13, lineHeight: 1, textShadow: '0 0 4px rgba(255,215,0,0.5)' }}>★</span>
+                          {he ? 'הופיעה בסריקה שלנו' : 'Appeared in our scans'}
                         </span>
                       </div>
                     </div>
@@ -1895,29 +1891,40 @@ function TheTrend({ trend, c, dark, lang }) {
                               const positive = h.change_pct >= 0
                               const abs = Math.abs(h.change_pct)
                               const barH = Math.max(4, (abs / maxAbs) * HALF)
-                              const fill = positive
-                                ? (h.in_scan ? greens : greensDim)
-                                : (h.in_scan ? reds   : redsDim)
-                              const labelColor = fill
+                              // ALL bars get the vivid color treatment — bold and prominent regardless of scan presence
+                              const fill = positive ? greens : reds
+                              const borderColor = positive ? greensDim : redsDim
+                              const glow = positive ? greens : reds
                               return (
                                 <div key={hi} style={{
                                   flex: 1, position: 'relative', minWidth: 0,
-                                }} title={`${h.week}: ${positive ? '+' : ''}${h.change_pct.toFixed(1)}%${h.in_scan ? ' · in our scans' : ''}`}>
+                                }} title={`${h.week}: ${positive ? '+' : ''}${h.change_pct.toFixed(1)}%${h.in_scan ? ' · ★ appeared in our scans' : ''}`}>
+                                  {/* Star marker at the top of the column — marks weeks the stock appeared in our scans */}
+                                  {h.in_scan && (
+                                    <div style={{
+                                      position: 'absolute',
+                                      top: 0,
+                                      left: '50%', transform: 'translateX(-50%)',
+                                      fontSize: 13, lineHeight: 1,
+                                      color: '#FFD700',
+                                      textShadow: '0 0 4px rgba(255,215,0,0.5)',
+                                      zIndex: 3,
+                                    }}>
+                                      ★
+                                    </div>
+                                  )}
                                   {positive ? (
                                     <>
-                                      {/* Label above */}
                                       <div style={{
                                         position: 'absolute',
                                         top: MIDLINE - barH - LABEL_SPACE,
                                         left: '50%', transform: 'translateX(-50%)',
                                         fontSize: 11, fontWeight: 800,
-                                        color: labelColor,
-                                        opacity: h.in_scan ? 1 : 0.7,
+                                        color: fill,
                                         whiteSpace: 'nowrap',
                                       }}>
                                         +{Math.round(h.change_pct)}%
                                       </div>
-                                      {/* Bar growing UP to midline */}
                                       <div style={{
                                         position: 'absolute',
                                         top: MIDLINE - barH,
@@ -1925,15 +1932,13 @@ function TheTrend({ trend, c, dark, lang }) {
                                         width: '85%', maxWidth: 34,
                                         height: barH,
                                         background: fill,
-                                        opacity: h.in_scan ? 1 : 0.55,
                                         borderRadius: '4px 4px 0 0',
-                                        border: h.in_scan ? `2px solid ${greensDim}` : 'none',
-                                        boxShadow: h.in_scan ? `0 0 8px ${greens}33` : 'none',
+                                        border: `2px solid ${borderColor}`,
+                                        boxShadow: `0 0 8px ${glow}40`,
                                       }} />
                                     </>
                                   ) : (
                                     <>
-                                      {/* Bar dropping DOWN from midline */}
                                       <div style={{
                                         position: 'absolute',
                                         top: MIDLINE,
@@ -1941,19 +1946,16 @@ function TheTrend({ trend, c, dark, lang }) {
                                         width: '85%', maxWidth: 34,
                                         height: barH,
                                         background: fill,
-                                        opacity: h.in_scan ? 1 : 0.55,
                                         borderRadius: '0 0 4px 4px',
-                                        border: h.in_scan ? `2px solid ${redsDim}` : 'none',
-                                        boxShadow: h.in_scan ? `0 0 8px ${reds}33` : 'none',
+                                        border: `2px solid ${borderColor}`,
+                                        boxShadow: `0 0 8px ${glow}40`,
                                       }} />
-                                      {/* Label below */}
                                       <div style={{
                                         position: 'absolute',
                                         top: MIDLINE + barH + 2,
                                         left: '50%', transform: 'translateX(-50%)',
                                         fontSize: 11, fontWeight: 800,
-                                        color: labelColor,
-                                        opacity: h.in_scan ? 1 : 0.7,
+                                        color: fill,
                                         whiteSpace: 'nowrap',
                                       }}>
                                         {Math.round(h.change_pct)}%
