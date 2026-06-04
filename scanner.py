@@ -1259,10 +1259,19 @@ def _fetch_continuous_weekly_changes(ticker, fridays):
         return {}
 
 
-def compute_the_trend(top_n=10):
-    """Find the top N stocks by compound return across all our weekly scans,
-    then fetch their FULL continuous weekly history (including weeks they
-    didn't appear in our top picks) so the boss can see the real trend."""
+def compute_the_trend(top_n=10, min_appearances=2, candidate_pool=20):
+    """Find the top N stocks by FULL compound return (continuous, including
+    weeks they weren't in our top picks). Algorithm:
+
+      1. Require min_appearances in our scans (filter one-week wonders)
+      2. Rank `candidate_pool` stocks by scan compound (cheap)
+      3. Fetch FULL continuous timeline for those candidates from yfinance
+      4. Re-rank candidates by FULL compound (the real return)
+      5. Take top_n
+
+    This is fully dynamic: every weekly scan re-runs from scratch. A stock
+    that was #1 last week but crashed this week will drop or disappear.
+    A new stock that built momentum will rise into the list naturally."""
     try:
         r = supabase.table("weekly_scans").select("*").order("created_at", desc=True).limit(100).execute()
         scans = r.data or []
@@ -1301,20 +1310,25 @@ def compute_the_trend(top_n=10):
         print("Trend: need at least 2 weeks of data, skipping")
         return []
 
-    # Rank by compound return USING SCAN DATA (cheap ranking)
+    # Rank by SCAN compound (cheap) to pick candidates. Require min_appearances
+    # so a single-week +60% doesn't beat a sustained 5-week run.
     ticker_scan_compound = {}
     for ticker, history in ticker_history.items():
-        if len(history) < 2:
+        if len(history) < min_appearances:
             continue
         cmpd = 1.0
         for change in history.values():
             cmpd *= (1 + change / 100)
         ticker_scan_compound[ticker] = cmpd - 1
 
-    top_tickers = sorted(ticker_scan_compound.items(), key=lambda x: x[1], reverse=True)[:top_n]
-    if not top_tickers:
-        print("Trend: no qualifying tickers")
+    if not ticker_scan_compound:
+        print(f"Trend: no tickers with >= {min_appearances} appearances")
         return []
+
+    # Wider candidate pool — final ranking uses FULL compound which may
+    # reorder things significantly.
+    candidates = sorted(ticker_scan_compound.items(), key=lambda x: x[1], reverse=True)[:candidate_pool]
+    print(f"Trend: {len(candidates)} candidates (>= {min_appearances} appearances), fetching full timelines...")
 
     # Build the consecutive Friday list spanning ALL weeks
     sorted_labels = sorted(weeks_seen, key=lambda lbl: re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", lbl)
@@ -1335,10 +1349,10 @@ def compute_the_trend(top_n=10):
         fridays.append(cur)
         cur += timedelta(days=7)
 
-    print(f"Trend: computing top {len(top_tickers)} with full continuous timeline ({len(fridays)-1} weeks)")
+    print(f"  Fetching {len(fridays)-1} weeks for {len(candidates)} candidates...")
 
-    trend_data = []
-    for ticker, scan_compound in top_tickers:
+    candidate_data = []
+    for ticker, scan_compound in candidates:
         full_weekly = _fetch_continuous_weekly_changes(ticker, fridays)
         if not full_weekly:
             continue
@@ -1347,7 +1361,6 @@ def compute_the_trend(top_n=10):
             full_compound *= (1 + change / 100)
         full_compound -= 1
 
-        # Build ordered weekly history (in_scan flag marks weeks they appeared in our top picks)
         scan_weeks = set(ticker_history.get(ticker, {}).keys())
         history_entries = []
         for week_label, change in sorted(full_weekly.items(), key=lambda x: lbl_to_friday(x[0]) or datetime(2000,1,1)):
@@ -1357,7 +1370,7 @@ def compute_the_trend(top_n=10):
                 "in_scan": week_label in scan_weeks,
             })
 
-        trend_data.append({
+        candidate_data.append({
             "ticker": ticker,
             "name": name_lookup.get(ticker, ticker),
             "scan_appearances": len(ticker_history[ticker]),
@@ -1367,9 +1380,17 @@ def compute_the_trend(top_n=10):
             "weekly_history": history_entries,
         })
 
-    # Final sort by full compound (the real number)
-    trend_data.sort(key=lambda x: x["full_compound_pct"], reverse=True)
-    print(f"  Trend: {len(trend_data)} stocks computed, top: {trend_data[0]['ticker']} ({trend_data[0]['full_compound_pct']}%)" if trend_data else "")
+    # Final ranking — by FULL compound (the real return for someone holding it).
+    # This is the dynamic part: stocks that crashed after their scan appearance
+    # have low full_compound and drop out; stocks that kept rising stay in.
+    candidate_data.sort(key=lambda x: x["full_compound_pct"], reverse=True)
+    trend_data = candidate_data[:top_n]
+
+    if trend_data:
+        print(f"  Trend top 10 (by full compound):")
+        for i, t in enumerate(trend_data, 1):
+            print(f"    #{i:2} {t['ticker']:7} full {t['full_compound_pct']:+7.1f}% | "
+                  f"scan {t['scan_compound_pct']:+7.1f}% | {t['scan_appearances']}/{t['total_weeks']} weeks")
     return trend_data
 
 
