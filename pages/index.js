@@ -1854,7 +1854,7 @@ function TheTrend({ trend, c, dark, lang }) {
                               marginBottom: 2,
                               opacity: h.in_scan ? 1 : 0.5,
                             }}>
-                              {positive ? '+' : ''}{Math.round(h.change_pct)}
+                              {positive ? '+' : ''}{Math.round(h.change_pct)}%
                             </div>
                             <div
                               title={`${h.week}: ${positive ? '+' : ''}${h.change_pct.toFixed(1)}%`}
