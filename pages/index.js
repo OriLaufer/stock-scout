@@ -1591,15 +1591,21 @@ function TheTrend({ trend, c, dark, lang }) {
                   })}
                 </div>
 
-                {/* Analyst rating badge */}
-                {rec && (
-                  <span style={{
-                    background: rec.bg, color: rec.color,
-                    padding: '3px 10px', borderRadius: 12,
-                    fontSize: 10, fontWeight: 700, letterSpacing: '.3px',
-                    flexShrink: 0,
-                  }}>{rec.label}</span>
-                )}
+                {/* Analyst rating badge — fixed-width slot so other columns stay aligned */}
+                <div style={{ width: 90, flexShrink: 0, display: 'flex', justifyContent: 'flex-end' }}>
+                  {rec ? (
+                    <span style={{
+                      background: rec.bg, color: rec.color,
+                      padding: '3px 10px', borderRadius: 12,
+                      fontSize: 10, fontWeight: 700, letterSpacing: '.3px',
+                    }}>{rec.label}</span>
+                  ) : (
+                    <span style={{
+                      color: c.muted, fontSize: 10, fontWeight: 600,
+                      opacity: 0.5, padding: '3px 6px',
+                    }}>—</span>
+                  )}
+                </div>
 
                 {/* Compound return */}
                 <div style={{ textAlign: 'right', minWidth: 120 }}>
@@ -1858,52 +1864,125 @@ function TheTrend({ trend, c, dark, lang }) {
                       </div>
                     </div>
 
-                    {/* Large bar chart */}
-                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 110, marginBottom: 8, paddingBottom: 4, borderBottom: `1px solid ${c.border}` }}>
-                      {history.map((h, hi) => {
-                        const abs = Math.abs(h.change_pct)
-                        const positive = h.change_pct >= 0
-                        const barHeight = Math.max(4, (abs / maxAbs) * 100)
-                        return (
-                          <div key={hi} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0 }}>
-                            <div style={{
-                              fontSize: 9,
-                              color: positive ? '#097c3e' : '#c0392b',
-                              fontWeight: 700,
-                              marginBottom: 2,
-                              opacity: h.in_scan ? 1 : 0.5,
-                            }}>
-                              {positive ? '+' : ''}{Math.round(h.change_pct)}%
-                            </div>
-                            <div
-                              title={`${h.week}: ${positive ? '+' : ''}${h.change_pct.toFixed(1)}%`}
-                              style={{
-                                width: '100%',
-                                maxWidth: 32,
-                                height: barHeight,
-                                background: positive ? '#097c3e' : '#c0392b',
-                                opacity: h.in_scan ? 1 : 0.4,
-                                borderRadius: '3px 3px 0 0',
-                                border: h.in_scan ? `2px solid ${positive ? '#0a5e30' : '#9c2a1f'}` : 'none',
-                              }}
-                            />
+                    {/* Pro-grade bar chart: zero line in middle, greens UP, reds DOWN (Bloomberg/TradingView style) */}
+                    {(() => {
+                      const HALF = 80   // pixels available on each side of the zero line
+                      const LABEL_SPACE = 18  // pixels reserved for the % label above/below the bar
+                      const greens = '#00c853'      // vibrant green for in-scan positive
+                      const greensDim = '#0a5e30'   // muted for not-in-scan positive
+                      const reds = '#ff3b30'        // vibrant red for in-scan negative
+                      const redsDim = '#9c2a1f'     // muted for not-in-scan negative
+                      return (
+                        <div style={{
+                          position: 'relative',
+                          height: HALF * 2 + LABEL_SPACE * 2,
+                          marginBottom: 8,
+                        }}>
+                          {/* Zero baseline */}
+                          <div style={{
+                            position: 'absolute',
+                            top: HALF + LABEL_SPACE - 1,
+                            left: 0, right: 0,
+                            height: 2,
+                            background: dark ? '#3a3a4e' : '#bbb',
+                            zIndex: 1,
+                          }} />
+                          <div style={{
+                            position: 'absolute',
+                            top: HALF + LABEL_SPACE - 8, left: -2,
+                            fontSize: 9, color: c.muted, fontWeight: 700,
+                            background: c.card, padding: '0 4px',
+                            zIndex: 2,
+                          }}>0%</div>
+
+                          {/* Bars */}
+                          <div style={{ display: 'flex', height: '100%', gap: 4 }}>
+                            {history.map((h, hi) => {
+                              const positive = h.change_pct >= 0
+                              const abs = Math.abs(h.change_pct)
+                              const barH = Math.max(4, (abs / maxAbs) * HALF)
+                              const fill = positive
+                                ? (h.in_scan ? greens : greensDim)
+                                : (h.in_scan ? reds   : redsDim)
+                              const labelColor = positive ? (h.in_scan ? greens : greensDim) : (h.in_scan ? reds : redsDim)
+                              return (
+                                <div key={hi} style={{
+                                  flex: 1, position: 'relative', minWidth: 0,
+                                }} title={`${h.week}: ${positive ? '+' : ''}${h.change_pct.toFixed(1)}%${h.in_scan ? ' · in our scans' : ''}`}>
+                                  {positive ? (
+                                    <>
+                                      {/* Label above the bar */}
+                                      <div style={{
+                                        position: 'absolute',
+                                        bottom: HALF + barH + 2,
+                                        left: '50%', transform: 'translateX(-50%)',
+                                        fontSize: 11, fontWeight: 800,
+                                        color: labelColor,
+                                        opacity: h.in_scan ? 1 : 0.7,
+                                        whiteSpace: 'nowrap',
+                                      }}>
+                                        +{Math.round(h.change_pct)}%
+                                      </div>
+                                      {/* Bar growing UP from zero line */}
+                                      <div style={{
+                                        position: 'absolute',
+                                        bottom: HALF,
+                                        left: '50%', transform: 'translateX(-50%)',
+                                        width: '85%', maxWidth: 34,
+                                        height: barH,
+                                        background: fill,
+                                        opacity: h.in_scan ? 1 : 0.55,
+                                        borderRadius: '4px 4px 0 0',
+                                        border: h.in_scan ? `2px solid ${greensDim}` : 'none',
+                                        boxShadow: h.in_scan ? `0 0 8px ${greens}33` : 'none',
+                                      }} />
+                                    </>
+                                  ) : (
+                                    <>
+                                      {/* Bar dropping DOWN from zero line */}
+                                      <div style={{
+                                        position: 'absolute',
+                                        top: HALF + LABEL_SPACE * 2 - HALF,  // = HALF + LABEL_SPACE (just below zero line)
+                                        left: '50%', transform: 'translateX(-50%)',
+                                        width: '85%', maxWidth: 34,
+                                        height: barH,
+                                        background: fill,
+                                        opacity: h.in_scan ? 1 : 0.55,
+                                        borderRadius: '0 0 4px 4px',
+                                        border: h.in_scan ? `2px solid ${redsDim}` : 'none',
+                                        boxShadow: h.in_scan ? `0 0 8px ${reds}33` : 'none',
+                                      }} />
+                                      {/* Label below the bar */}
+                                      <div style={{
+                                        position: 'absolute',
+                                        top: HALF + LABEL_SPACE * 2 - HALF + barH + 2,
+                                        left: '50%', transform: 'translateX(-50%)',
+                                        fontSize: 11, fontWeight: 800,
+                                        color: labelColor,
+                                        opacity: h.in_scan ? 1 : 0.7,
+                                        whiteSpace: 'nowrap',
+                                      }}>
+                                        {Math.round(h.change_pct)}%
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              )
+                            })}
                           </div>
-                        )
-                      })}
-                    </div>
+                        </div>
+                      )
+                    })()}
+
                     {/* Week labels */}
-                    <div style={{ display: 'flex', gap: 4 }}>
+                    <div style={{ display: 'flex', gap: 4, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${c.border}` }}>
                       {history.map((h, hi) => {
                         const dateOnly = h.week.split('-')[1] || h.week
-                        // Show only the day.month, drop year
                         const short = dateOnly.replace(/\.20\d\d$/, '')
                         return (
                           <div key={hi} style={{
                             flex: 1, textAlign: 'center', minWidth: 0,
-                            fontSize: 8, color: c.muted,
-                            transform: history.length > 18 ? 'rotate(-45deg)' : 'none',
-                            transformOrigin: 'center',
-                            height: history.length > 18 ? 26 : 14,
+                            fontSize: 9, color: c.muted, fontWeight: 600,
                             whiteSpace: 'nowrap',
                           }}>
                             {short}
