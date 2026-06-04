@@ -1679,8 +1679,8 @@ function TheTrend({ trend, c, dark, lang }) {
                   {/* Stats grid — analyst, 52W, float */}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 18 }}>
 
-                    {/* Analyst target */}
-                    {identity.target_mean && (
+                    {/* Analyst target — show data when available, honest empty state when not */}
+                    {identity.target_mean ? (
                       <div style={{
                         background: c.card, border: `1px solid ${c.border}`,
                         borderRadius: 10, padding: '14px 16px',
@@ -1714,6 +1714,25 @@ function TheTrend({ trend, c, dark, lang }) {
                             ? `${he ? 'טווח' : 'Range'}: $${identity.target_low}–$${identity.target_high}`
                             : ''}
                           {identity.analyst_count ? ` · ${identity.analyst_count} ${he ? 'אנליסטים' : 'analysts'}` : ''}
+                        </div>
+                      </div>
+                    ) : (
+                      <div title={he ? 'יכול לקרות כשהמנייה קטנה מדי, IPO טרי, חברה זרה, או OTC' : 'Common with small-cap, recent IPOs, foreign listings, or OTC stocks'} style={{
+                        background: dark ? '#1a1623' : '#fafafa',
+                        border: `1px dashed ${c.border}`,
+                        borderRadius: 10, padding: '14px 16px',
+                        borderTop: `3px solid #888`,
+                      }}>
+                        <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 6 }}>
+                          🎯 {he ? 'יעד אנליסטים' : 'Analyst Target'}
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: c.muted, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          ⚠️ {he ? 'אין כיסוי אנליסטים' : 'No analyst coverage'}
+                        </div>
+                        <div style={{ fontSize: 11, color: c.muted, marginTop: 4, lineHeight: 1.4 }}>
+                          {he
+                            ? 'מנייה קטנה, IPO טרי, או חברה זרה — אין נתונים זמינים ב-Yahoo Finance'
+                            : 'Small-cap, recent IPO, or foreign listing — no data in Yahoo Finance'}
                         </div>
                       </div>
                     )}
