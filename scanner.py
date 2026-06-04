@@ -1213,6 +1213,75 @@ def compute_backtest():
 
 
 # ============== THE TREND — TOP-10 BY COMPOUND RETURN ACROSS ALL WEEKS ==============
+def _fetch_trend_identity(ticker):
+    """Fetch the full identity-card data for a Trend stock:
+    - 52W range + current price
+    - Analyst targets (mean / high / low / # of analysts / recommendation)
+    - Float, short interest
+    - Sector, industry
+    - Business summary (what the company does)
+    - Market cap
+
+    All from yfinance .info — single call. Returns dict (may be partial on errors)."""
+    out = {}
+    try:
+        time.sleep(0.4)
+        obj = yf.Ticker(ticker)
+        info = obj.info
+        # Basic
+        out["name"]     = info.get("longName") or info.get("shortName")
+        out["sector"]   = info.get("sector") or ""
+        out["industry"] = info.get("industry") or ""
+        out["website"]  = info.get("website") or ""
+        out["country"]  = info.get("country") or ""
+        # Price
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        if price:
+            out["price"] = round(float(price), 2)
+        # Market cap
+        mc = info.get("marketCap") or 0
+        if mc:
+            out["market_cap"] = int(mc)
+        # 52W
+        high_52w = info.get("fiftyTwoWeekHigh")
+        low_52w  = info.get("fiftyTwoWeekLow")
+        if high_52w: out["high_52w"] = round(float(high_52w), 2)
+        if low_52w:  out["low_52w"]  = round(float(low_52w), 2)
+        if high_52w and low_52w and price and high_52w > low_52w:
+            out["pos_in_52w_range_pct"] = round((price - low_52w) / (high_52w - low_52w) * 100, 1)
+            out["gain_from_52w_low_pct"] = round((price - low_52w) / low_52w * 100, 1)
+            out["gain_to_52w_high_pct"] = round((high_52w - price) / price * 100, 1)
+        # Float + short
+        fl = info.get("floatShares") or 0
+        if fl: out["float_m"] = round(fl / 1e6, 1)
+        sp = info.get("shortPercentOfFloat") or 0
+        if sp: out["short_pct"] = round(float(sp) * 100, 1)
+        # Analyst targets — the boss wants TradingView-style ratings
+        tgt_mean = info.get("targetMeanPrice")
+        tgt_high = info.get("targetHighPrice")
+        tgt_low  = info.get("targetLowPrice")
+        tgt_med  = info.get("targetMedianPrice")
+        rec_key  = info.get("recommendationKey") or ""
+        n_analy  = info.get("numberOfAnalystOpinions") or 0
+        if tgt_mean: out["target_mean"]  = round(float(tgt_mean), 2)
+        if tgt_high: out["target_high"]  = round(float(tgt_high), 2)
+        if tgt_low:  out["target_low"]   = round(float(tgt_low), 2)
+        if tgt_med:  out["target_median"] = round(float(tgt_med), 2)
+        if rec_key:  out["recommendation"] = rec_key
+        if n_analy:  out["analyst_count"]  = int(n_analy)
+        if tgt_mean and price:
+            out["target_upside_pct"] = round((tgt_mean - price) / price * 100, 1)
+        # Business summary — the boss wants to know WHAT the company does
+        summary = info.get("longBusinessSummary") or ""
+        if summary:
+            # Cap at ~600 chars — enough to convey the business without
+            # overwhelming the UI
+            out["business_summary"] = summary[:600] + ("..." if len(summary) > 600 else "")
+    except Exception as e:
+        print(f"    {ticker}: identity fetch error — {type(e).__name__}")
+    return out
+
+
 def _fetch_continuous_weekly_changes(ticker, fridays):
     """Fetch the % change for each consecutive Friday-to-Friday week.
     Returns dict: week_label -> change_pct. Even weeks the stock wasn't in our
@@ -1370,14 +1439,19 @@ def compute_the_trend(top_n=10, min_appearances=2, candidate_pool=20):
                 "in_scan": week_label in scan_weeks,
             })
 
+        # Fetch the full identity card data — analyst targets, business summary,
+        # 52W range, sector, etc. This is The Trend's centerpiece.
+        identity = _fetch_trend_identity(ticker)
+
         candidate_data.append({
             "ticker": ticker,
-            "name": name_lookup.get(ticker, ticker),
+            "name": identity.get("name") or name_lookup.get(ticker, ticker),
             "scan_appearances": len(ticker_history[ticker]),
             "total_weeks": len(history_entries),
             "scan_compound_pct": round(scan_compound * 100, 1),
             "full_compound_pct": round(full_compound * 100, 1),
             "weekly_history": history_entries,
+            "identity": identity,
         })
 
     # Final ranking — by FULL compound (the real return for someone holding it).

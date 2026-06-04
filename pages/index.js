@@ -1432,14 +1432,36 @@ function WatchlistRow({ item, removeFromWatchlist, c, dark, lang }) {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// The Trend — top 10 stocks by compound return across all our scans,
-// with their FULL continuous weekly timeline (even weeks they weren't
-// in our top picks). This shows the boss real momentum-building stocks,
-// not single-week spikes.
+// The Trend — the centerpiece tab.
+// Top 10 stocks by compound return across all our scans, with full
+// identity card (52W range, analyst targets, business summary, weekly
+// trend visualization). Built to be the most professional tab — this
+// is where the boss decides what to look at deeply.
 // ──────────────────────────────────────────────────────────────────
+
+// Analyst recommendation → label + color
+function _recBadge(rec) {
+  const r = (rec || '').toLowerCase()
+  if (r === 'strong_buy')  return { label: 'Strong Buy',  color: '#fff', bg: '#097c3e' }
+  if (r === 'buy')         return { label: 'Buy',         color: '#fff', bg: '#1e9c50' }
+  if (r === 'hold')        return { label: 'Hold',        color: '#fff', bg: '#cc8800' }
+  if (r === 'sell')        return { label: 'Sell',        color: '#fff', bg: '#cc4444' }
+  if (r === 'strong_sell') return { label: 'Strong Sell', color: '#fff', bg: '#c0392b' }
+  return null
+}
+
+function _formatMcapShort(n) {
+  if (!n) return '—'
+  if (n >= 1e12) return `$${(n / 1e12).toFixed(2)}T`
+  if (n >= 1e9)  return `$${(n / 1e9).toFixed(2)}B`
+  if (n >= 1e6)  return `$${(n / 1e6).toFixed(0)}M`
+  return `$${n}`
+}
+
 function TheTrend({ trend, c, dark, lang }) {
   const he = lang === 'he'
   const [openTicker, setOpenTicker] = useState(null)
+  const [summaryExpanded, setSummaryExpanded] = useState({})
 
   if (!trend || trend.length === 0) {
     return (
@@ -1459,31 +1481,46 @@ function TheTrend({ trend, c, dark, lang }) {
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
   const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
 
-  // For each stock, find max abs weekly gain to scale the bars
+  // Scale weekly bars across all stocks for consistency
   const allGains = trend.flatMap(s => (s.weekly_history || []).map(h => Math.abs(h.change_pct)))
   const maxAbs = Math.max(20, ...allGains)
 
   return (
     <div style={{ marginBottom: 24 }}>
       {/* Header */}
-      <div style={{ background: dark ? '#12122a' : '#1a1a2e', borderRadius: '12px 12px 0 0', padding: '20px 24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 28 }}>📈</span>
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: 'white' }}>
-              {he ? 'המגמה — טופ 10 לאורך זמן' : 'The Trend — Top 10 Over Time'}
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#0d1830' : '#1a1a2e'} 0%, ${dark ? '#1a2855' : '#2d3561'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 32 }}>📈</span>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+              {he ? 'המגמה — מניות עם הביצוע הטוב ביותר' : 'The Trend — Best Performing Stocks'}
             </div>
-            <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>
+            <div style={{ fontSize: 13, color: '#b0bbd9', marginTop: 4 }}>
               {he
-                ? 'המניות עם התשואה המצטברת הגבוהה ביותר מאז שהתחלנו לסרוק — כולל שבועות שלא הופיעו אצלנו'
-                : 'Stocks with the highest compound return since we started — including weeks they weren\'t in our top picks'}
+                ? 'דירוג לפי תשואה מצטברת אמיתית. כל מנייה — כרטיס זהות מלא עם יעדי אנליסטים, טווח 52 שבועות וסקירה עסקית.'
+                : 'Ranked by real compound return. Each stock — full identity card with analyst targets, 52W range, and business overview.'}
+            </div>
+          </div>
+          <div style={{
+            background: 'rgba(255,255,255,0.08)',
+            padding: '8px 14px', borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.12)',
+          }}>
+            <div style={{ fontSize: 10, color: '#9aa3c2', textTransform: 'uppercase', letterSpacing: '.06em' }}>
+              {he ? 'מתעדכן כל סריקה' : 'Updates each scan'}
+            </div>
+            <div style={{ fontSize: 13, color: 'white', fontWeight: 700, marginTop: 2 }}>
+              🔄 {he ? 'מי שלא ראויה, יוצאת' : 'Dynamic ranking'}
             </div>
           </div>
         </div>
       </div>
 
       {/* Rows */}
-      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 12px 12px', overflow: 'hidden' }}>
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
         {trend.map((stock, i) => {
           const isTop3 = i < 3
           const isOpen = openTicker === stock.ticker
@@ -1491,108 +1528,377 @@ function TheTrend({ trend, c, dark, lang }) {
           const scanCmp = stock.scan_compound_pct || 0
           const compColor = fullCmp >= 0 ? '#097c3e' : '#c0392b'
           const history = stock.weekly_history || []
+          const identity = stock.identity || {}
+          const rec = _recBadge(identity.recommendation)
+          const sector = identity.sector || ''
 
           return (
             <div key={stock.ticker}>
+              {/* Collapsed row */}
               <div
                 onClick={() => setOpenTicker(isOpen ? null : stock.ticker)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 14, padding: '14px 20px',
-                  borderBottom: `1px solid ${c.border}`,
-                  background: isTop3 ? medalBg[i] : (i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa')),
-                  borderLeft: isTop3 ? `3px solid ${medalBorder[i]}` : '3px solid transparent',
-                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '16px 22px',
+                  borderBottom: isOpen ? 'none' : `1px solid ${c.border}`,
+                  background: isOpen ? (dark ? '#0e1828' : '#f6fafe') :
+                              isTop3 ? medalBg[i] : (i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa')),
+                  borderLeft: isTop3 ? `4px solid ${medalBorder[i]}` : '4px solid transparent',
+                  cursor: 'pointer', transition: 'all .15s',
                 }}
               >
                 {/* Rank */}
-                <div style={{ width: 36, textAlign: 'center', flexShrink: 0 }}>
+                <div style={{ width: 42, textAlign: 'center', flexShrink: 0 }}>
                   {isTop3
-                    ? <span style={{ fontSize: 22 }}>{medals[i]}</span>
-                    : <span style={{ fontSize: 14, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
+                    ? <span style={{ fontSize: 26 }}>{medals[i]}</span>
+                    : <span style={{ fontSize: 15, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
                 </div>
 
-                {/* Ticker + name */}
-                <div style={{ width: 160, flexShrink: 0 }}>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: c.text }}>{stock.ticker}</div>
-                  <div style={{ fontSize: 11, color: c.muted, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 155 }}>
+                {/* Ticker + name + sector */}
+                <div style={{ width: 200, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 17, fontWeight: 800, color: c.text }}>{stock.ticker}</span>
+                    {sector && (
+                      <span style={{
+                        fontSize: 9, fontWeight: 600,
+                        background: dark ? '#1a2a3a' : '#e8f0fa',
+                        color: dark ? '#7daaff' : '#1a4d8f',
+                        padding: '2px 7px', borderRadius: 8,
+                        border: `1px solid ${dark ? '#2a3a5a' : '#c8d4f0'}`,
+                      }}>{sector}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 195 }}>
                     {stock.name}
                   </div>
                 </div>
 
-                {/* Mini sparkline of weekly gains */}
-                <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 36, flex: 1, minWidth: 100, maxWidth: 400, overflow: 'hidden' }}>
+                {/* Sparkline of weekly gains */}
+                <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 42, flex: 1, minWidth: 100, maxWidth: 360, overflow: 'hidden' }}>
                   {history.map((h, hi) => {
                     const abs = Math.abs(h.change_pct)
-                    const barHeight = Math.max(2, (abs / maxAbs) * 32)
+                    const barHeight = Math.max(2, (abs / maxAbs) * 38)
                     const positive = h.change_pct >= 0
                     return (
                       <div key={hi} title={`${h.week}: ${positive ? '+' : ''}${h.change_pct}%${h.in_scan ? ' (in top picks)' : ''}`} style={{
-                        width: 6,
+                        width: 7,
                         height: barHeight,
                         background: positive ? '#097c3e' : '#c0392b',
-                        opacity: h.in_scan ? 1 : 0.45,
-                        borderRadius: 1,
+                        opacity: h.in_scan ? 1 : 0.42,
+                        borderRadius: 1.5,
                         flexShrink: 0,
                       }} />
                     )
                   })}
                 </div>
 
+                {/* Analyst rating badge */}
+                {rec && (
+                  <span style={{
+                    background: rec.bg, color: rec.color,
+                    padding: '3px 10px', borderRadius: 12,
+                    fontSize: 10, fontWeight: 700, letterSpacing: '.3px',
+                    flexShrink: 0,
+                  }}>{rec.label}</span>
+                )}
+
                 {/* Compound return */}
-                <div style={{ textAlign: 'right', minWidth: 110 }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: compColor }}>
+                <div style={{ textAlign: 'right', minWidth: 120 }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: compColor, lineHeight: 1 }}>
                     {fullCmp >= 0 ? '+' : ''}{fullCmp.toFixed(1)}%
                   </div>
-                  <div style={{ fontSize: 10, color: c.muted, marginTop: 1 }}>
-                    {he ? 'מצטבר מלא' : 'full compound'}
+                  <div style={{ fontSize: 10, color: c.muted, marginTop: 3 }}>
+                    {he ? 'תשואה מצטברת' : 'full compound'}
                   </div>
                 </div>
 
                 {/* Appearance count */}
-                <div style={{ textAlign: 'center', minWidth: 70 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>
+                <div style={{ textAlign: 'center', minWidth: 60 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>
                     {stock.scan_appearances}/{stock.total_weeks}
                   </div>
-                  <div style={{ fontSize: 10, color: c.muted, marginTop: 1 }}>
-                    {he ? 'הופעות' : 'in picks'}
+                  <div style={{ fontSize: 9, color: c.muted, marginTop: 2 }}>
+                    {he ? 'בסריקה' : 'in picks'}
                   </div>
                 </div>
 
-                <span style={{ fontSize: 14, color: c.muted, marginLeft: 6 }}>{isOpen ? '▲' : '▼'}</span>
+                <span style={{ fontSize: 14, color: c.muted, marginLeft: 4 }}>{isOpen ? '▲' : '▼'}</span>
               </div>
 
-              {/* Expanded panel — weekly breakdown */}
+              {/* Expanded — full identity card */}
               {isOpen && (
-                <div style={{ background: dark ? '#0f1820' : '#f5fafd', padding: '16px 24px', borderBottom: `1px solid ${c.border}`, borderLeft: '3px solid #097c3e' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 12 }}>
-                    {he ? '📅 פירוט שבועי — מגמה מלאה' : '📅 Weekly breakdown — full trend'}
+                <div style={{
+                  background: dark ? '#0a1422' : '#f3f7fc',
+                  padding: '24px 28px',
+                  borderBottom: `1px solid ${c.border}`,
+                  borderLeft: `4px solid ${isTop3 ? medalBorder[i] : '#097c3e'}`,
+                }}>
+
+                  {/* Identity hero — ticker, name, sector, industry */}
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, marginBottom: 18 }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 28, fontWeight: 800, color: c.text, letterSpacing: '-.02em' }}>{stock.ticker}</span>
+                        {identity.market_cap && (
+                          <span style={{ fontSize: 13, fontWeight: 600, color: c.muted, background: c.card, padding: '3px 9px', borderRadius: 6, border: `1px solid ${c.border}` }}>
+                            {_formatMcapShort(identity.market_cap)}
+                          </span>
+                        )}
+                        {identity.price && (
+                          <span style={{ fontSize: 15, fontWeight: 700, color: c.text }}>
+                            ${identity.price}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 14, color: c.text, marginTop: 4, fontWeight: 600 }}>{stock.name}</div>
+                      <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>
+                        {identity.industry && <span>{identity.industry}</span>}
+                        {identity.sector && identity.industry && <span> · </span>}
+                        {identity.sector && !identity.industry && <span>{identity.sector}</span>}
+                        {identity.country && <span> · {identity.country}</span>}
+                      </div>
+                    </div>
+                    {/* Big compound return card */}
+                    <div style={{
+                      background: `linear-gradient(135deg, ${compColor}20, ${compColor}05)`,
+                      border: `2px solid ${compColor}`,
+                      borderRadius: 12, padding: '12px 20px', textAlign: 'center',
+                      minWidth: 160,
+                    }}>
+                      <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: 700 }}>
+                        {he ? 'תשואה מצטברת' : 'Full Compound'}
+                      </div>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: compColor, lineHeight: 1.1, marginTop: 4 }}>
+                        {fullCmp >= 0 ? '+' : ''}{fullCmp.toFixed(1)}%
+                      </div>
+                      <div style={{ fontSize: 10, color: c.muted, marginTop: 4 }}>
+                        {he ? `מעל ${stock.total_weeks} שבועות` : `over ${stock.total_weeks} weeks`}
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {history.map((h, hi) => {
-                      const positive = h.change_pct >= 0
-                      const bg = h.in_scan
-                        ? (positive ? (dark ? '#1a3a1a' : '#EAF3DE') : (dark ? '#3a1a1a' : '#FCEBEB'))
-                        : (dark ? '#1e1e32' : '#f0f0f0')
-                      const color = h.in_scan
-                        ? (positive ? '#097c3e' : '#c0392b')
-                        : c.muted
-                      return (
-                        <div key={hi} style={{
-                          background: bg, color, padding: '6px 10px', borderRadius: 6,
-                          fontSize: 11, fontWeight: 600,
-                          border: h.in_scan ? `1px solid ${positive ? '#097c3e' : '#c0392b'}` : `1px solid ${c.border}`,
-                          opacity: h.in_scan ? 1 : 0.7,
-                        }}>
-                          <div style={{ fontSize: 9, opacity: 0.7 }}>{h.week.split('-')[1] || h.week}</div>
-                          <div style={{ fontSize: 12, fontWeight: 800 }}>{positive ? '+' : ''}{h.change_pct.toFixed(1)}%</div>
-                          {h.in_scan && <div style={{ fontSize: 8, marginTop: 1 }}>★</div>}
+
+                  {/* Stats grid — analyst, 52W, float */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 18 }}>
+
+                    {/* Analyst target */}
+                    {identity.target_mean && (
+                      <div style={{
+                        background: c.card, border: `1px solid ${c.border}`,
+                        borderRadius: 10, padding: '14px 16px',
+                        borderTop: `3px solid #1a6bb5`,
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em' }}>
+                            🎯 {he ? 'יעד אנליסטים' : 'Analyst Target'}
+                          </div>
+                          {rec && (
+                            <span style={{ background: rec.bg, color: rec.color, padding: '2px 8px', borderRadius: 10, fontSize: 9, fontWeight: 700 }}>
+                              {rec.label}
+                            </span>
+                          )}
                         </div>
-                      )
-                    })}
+                        <div style={{ fontSize: 20, fontWeight: 800, color: c.text }}>
+                          ${identity.target_mean}
+                          {identity.target_upside_pct !== undefined && (
+                            <span style={{
+                              fontSize: 13,
+                              marginLeft: 8,
+                              color: identity.target_upside_pct >= 15 ? '#097c3e' : identity.target_upside_pct >= 0 ? '#cc8800' : '#c0392b',
+                              fontWeight: 700,
+                            }}>
+                              {identity.target_upside_pct >= 0 ? '+' : ''}{identity.target_upside_pct}%
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: c.muted, marginTop: 4 }}>
+                          {identity.target_low && identity.target_high
+                            ? `${he ? 'טווח' : 'Range'}: $${identity.target_low}–$${identity.target_high}`
+                            : ''}
+                          {identity.analyst_count ? ` · ${identity.analyst_count} ${he ? 'אנליסטים' : 'analysts'}` : ''}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 52W Range — visual bar */}
+                    {identity.high_52w !== undefined && identity.low_52w !== undefined && (
+                      <div style={{
+                        background: c.card, border: `1px solid ${c.border}`,
+                        borderRadius: 10, padding: '14px 16px',
+                        borderTop: `3px solid #cc8800`,
+                      }}>
+                        <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 8 }}>
+                          📅 {he ? 'טווח 52 שבועות' : '52-Week Range'}
+                        </div>
+                        <div style={{ position: 'relative', height: 8, background: dark ? '#0a1520' : '#e6f0fa', borderRadius: 4, marginBottom: 8 }}>
+                          {identity.pos_in_52w_range_pct !== undefined && (
+                            <div style={{
+                              position: 'absolute', left: `${Math.max(0, Math.min(100, identity.pos_in_52w_range_pct))}%`,
+                              top: -3, width: 14, height: 14, borderRadius: '50%',
+                              background: identity.pos_in_52w_range_pct >= 80 ? '#097c3e' : identity.pos_in_52w_range_pct >= 50 ? '#cc8800' : '#888',
+                              transform: 'translateX(-50%)',
+                              boxShadow: `0 0 0 2px ${c.card}`,
+                            }} />
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: c.muted }}>
+                          <span style={{ fontWeight: 700, color: c.text }}>${identity.low_52w}</span>
+                          {identity.pos_in_52w_range_pct !== undefined && (
+                            <span style={{ fontSize: 10 }}>{identity.pos_in_52w_range_pct}%</span>
+                          )}
+                          <span style={{ fontWeight: 700, color: c.text }}>${identity.high_52w}</span>
+                        </div>
+                        {(identity.gain_from_52w_low_pct !== undefined || identity.gain_to_52w_high_pct !== undefined) && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: c.muted, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${c.border}` }}>
+                            <span><span style={{ color: '#097c3e', fontWeight: 700 }}>+{identity.gain_from_52w_low_pct}%</span> {he ? 'מהתחתית' : 'from low'}</span>
+                            <span><span style={{ color: '#cc8800', fontWeight: 700 }}>+{identity.gain_to_52w_high_pct}%</span> {he ? 'אפסייד לשיא' : 'upside to high'}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Float + short */}
+                    {(identity.float_m !== undefined || identity.short_pct !== undefined) && (
+                      <div style={{
+                        background: c.card, border: `1px solid ${c.border}`,
+                        borderRadius: 10, padding: '14px 16px',
+                        borderTop: `3px solid #097c3e`,
+                      }}>
+                        <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 8 }}>
+                          📊 {he ? 'מבנה ההון' : 'Share Structure'}
+                        </div>
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                          {identity.float_m !== undefined && (
+                            <div>
+                              <div style={{ fontSize: 11, color: c.muted }}>Float</div>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: identity.float_m < 30 ? '#097c3e' : identity.float_m > 100 ? '#c0392b' : c.text }}>
+                                {identity.float_m}M
+                              </div>
+                            </div>
+                          )}
+                          {identity.short_pct !== undefined && (
+                            <div>
+                              <div style={{ fontSize: 11, color: c.muted }}>{he ? 'שורט' : 'Short'}</div>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: identity.short_pct > 15 ? '#cc8800' : c.text }}>
+                                {identity.short_pct}%
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ fontSize: 11, color: c.muted, marginTop: 12, display: 'flex', gap: 16 }}>
-                    <span>{he ? '★ = הופיעה בטופ הסריקה' : '★ = appeared in our top picks'}</span>
-                    <span>{he ? `סכום סריקה: ${scanCmp >= 0 ? '+' : ''}${scanCmp}%` : `Scan compound: ${scanCmp >= 0 ? '+' : ''}${scanCmp}%`}</span>
+
+                  {/* Business summary */}
+                  {identity.business_summary && (
+                    <div style={{
+                      background: c.card, border: `1px solid ${c.border}`,
+                      borderRadius: 10, padding: '14px 18px', marginBottom: 18,
+                      borderLeft: `4px solid #1a1a2e`,
+                    }}>
+                      <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        🏢 {he ? 'תיאור עסקי' : 'Business Overview'}
+                        {identity.website && (
+                          <a href={identity.website} target="_blank" rel="noopener noreferrer" style={{ color: '#1a6bb5', fontSize: 10, textDecoration: 'none', marginLeft: 'auto' }}>
+                            🔗 {he ? 'אתר' : 'Website'}
+                          </a>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12.5, color: c.text, lineHeight: 1.6 }}>
+                        {summaryExpanded[stock.ticker] || identity.business_summary.length < 240
+                          ? identity.business_summary
+                          : identity.business_summary.slice(0, 240) + '... '}
+                        {identity.business_summary.length >= 240 && !summaryExpanded[stock.ticker] && (
+                          <button
+                            onClick={() => setSummaryExpanded(prev => ({ ...prev, [stock.ticker]: true }))}
+                            style={{ background: 'none', border: 'none', color: '#1a6bb5', cursor: 'pointer', fontSize: 12, fontWeight: 700, padding: 0 }}
+                          >
+                            {he ? '... קרא עוד' : '... read more'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Weekly trend visualization — big & beautiful */}
+                  <div style={{
+                    background: c.card, border: `1px solid ${c.border}`,
+                    borderRadius: 10, padding: '16px 20px',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+                      <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em' }}>
+                        📅 {he ? 'המגמה השבועית — תשואה לכל שבוע' : 'Weekly Trend — Returns by Week'}
+                      </div>
+                      <div style={{ display: 'flex', gap: 12, fontSize: 10, color: c.muted }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 8, height: 8, background: '#097c3e', borderRadius: 2 }} />
+                          {he ? 'הופיעה בסריקה' : 'In our scans'}
+                        </span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{ width: 8, height: 8, background: '#097c3e', opacity: 0.4, borderRadius: 2 }} />
+                          {he ? 'לא הופיעה' : 'Not in scans'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Large bar chart */}
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 110, marginBottom: 8, paddingBottom: 4, borderBottom: `1px solid ${c.border}` }}>
+                      {history.map((h, hi) => {
+                        const abs = Math.abs(h.change_pct)
+                        const positive = h.change_pct >= 0
+                        const barHeight = Math.max(4, (abs / maxAbs) * 100)
+                        return (
+                          <div key={hi} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0 }}>
+                            <div style={{
+                              fontSize: 9,
+                              color: positive ? '#097c3e' : '#c0392b',
+                              fontWeight: 700,
+                              marginBottom: 2,
+                              opacity: h.in_scan ? 1 : 0.5,
+                            }}>
+                              {positive ? '+' : ''}{Math.round(h.change_pct)}
+                            </div>
+                            <div
+                              title={`${h.week}: ${positive ? '+' : ''}${h.change_pct.toFixed(1)}%`}
+                              style={{
+                                width: '100%',
+                                maxWidth: 32,
+                                height: barHeight,
+                                background: positive ? '#097c3e' : '#c0392b',
+                                opacity: h.in_scan ? 1 : 0.4,
+                                borderRadius: '3px 3px 0 0',
+                                border: h.in_scan ? `2px solid ${positive ? '#0a5e30' : '#9c2a1f'}` : 'none',
+                              }}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {/* Week labels */}
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {history.map((h, hi) => {
+                        const dateOnly = h.week.split('-')[1] || h.week
+                        // Show only the day.month, drop year
+                        const short = dateOnly.replace(/\.20\d\d$/, '')
+                        return (
+                          <div key={hi} style={{
+                            flex: 1, textAlign: 'center', minWidth: 0,
+                            fontSize: 8, color: c.muted,
+                            transform: history.length > 18 ? 'rotate(-45deg)' : 'none',
+                            transformOrigin: 'center',
+                            height: history.length > 18 ? 26 : 14,
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {short}
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {/* Quick summary footer */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, paddingTop: 12, borderTop: `1px solid ${c.border}`, fontSize: 11, color: c.muted, flexWrap: 'wrap', gap: 12 }}>
+                      <span><strong style={{ color: c.text }}>{stock.scan_appearances}</strong> {he ? 'הופעות בסריקה' : 'scan appearances'}</span>
+                      <span><strong style={{ color: c.text }}>{history.filter(h => h.change_pct > 0).length}/{history.length}</strong> {he ? 'שבועות חיוביים' : 'positive weeks'}</span>
+                      <span><strong style={{ color: c.text }}>{scanCmp >= 0 ? '+' : ''}{scanCmp}%</strong> {he ? 'תשואת סריקה (רק שבועות שהופיעה)' : 'scan compound only'}</span>
+                    </div>
                   </div>
                 </div>
               )}
