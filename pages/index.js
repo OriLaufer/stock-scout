@@ -1910,20 +1910,6 @@ function TheTrend({ trend, c, dark, lang }) {
                                 <div key={hi} style={{
                                   flex: 1, position: 'relative', minWidth: 0,
                                 }} title={`${h.week}: ${positive ? '+' : ''}${h.change_pct.toFixed(1)}%${h.in_scan ? ' · ★ appeared in our scans' : ''}`}>
-                                  {/* Star marker at the top of the column — marks weeks the stock appeared in our scans */}
-                                  {h.in_scan && (
-                                    <div style={{
-                                      position: 'absolute',
-                                      top: 0,
-                                      left: '50%', transform: 'translateX(-50%)',
-                                      fontSize: 13, lineHeight: 1,
-                                      color: '#FFD700',
-                                      textShadow: '0 0 4px rgba(255,215,0,0.5)',
-                                      zIndex: 3,
-                                    }}>
-                                      ★
-                                    </div>
-                                  )}
                                   {positive ? (
                                     <>
                                       <div style={{
@@ -1933,7 +1919,9 @@ function TheTrend({ trend, c, dark, lang }) {
                                         fontSize: 11, fontWeight: 800,
                                         color: fill,
                                         whiteSpace: 'nowrap',
+                                        display: 'flex', alignItems: 'center', gap: 3,
                                       }}>
+                                        {h.in_scan && <span style={{ color: '#FFD700', fontSize: 12, textShadow: '0 0 3px rgba(255,215,0,0.6)' }}>★</span>}
                                         +{Math.round(h.change_pct)}%
                                       </div>
                                       <div style={{
@@ -1968,7 +1956,9 @@ function TheTrend({ trend, c, dark, lang }) {
                                         fontSize: 11, fontWeight: 800,
                                         color: fill,
                                         whiteSpace: 'nowrap',
+                                        display: 'flex', alignItems: 'center', gap: 3,
                                       }}>
+                                        {h.in_scan && <span style={{ color: '#FFD700', fontSize: 12, textShadow: '0 0 3px rgba(255,215,0,0.6)' }}>★</span>}
                                         {Math.round(h.change_pct)}%
                                       </div>
                                     </>
