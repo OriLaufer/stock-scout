@@ -363,9 +363,8 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [sectorFilter, setSectorFilter] = useState(null)
-  const [watchlist, setWatchlist] = useState([])
-  const [addingToWatchlist, setAddingToWatchlist] = useState(null)
-  const [entryPriceInput, setEntryPriceInput] = useState({})
+  // Trading Journal — manually-entered trades (replaces the old watchlist concept)
+  const [journal, setJournal] = useState([])
 
   const t = T[lang]
   const c = COLORS[dark ? 'dark' : 'light']
@@ -374,31 +373,48 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
     if (localStorage.getItem('dark') === 'true') setDark(true)
     if (localStorage.getItem('lang')) setLang(localStorage.getItem('lang'))
     try {
-      const stored = localStorage.getItem('ss_watchlist')
-      if (stored) setWatchlist(JSON.parse(stored))
+      // Load from new key first, fall back to old key for migration
+      const stored = localStorage.getItem('ss_journal') || localStorage.getItem('ss_watchlist')
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        // Migrate any old-format entries to the journal shape
+        const migrated = parsed.map((item, i) => ({
+          id:          item.id          || `${item.ticker}-${item.dateAdded || Date.now()}-${i}`,
+          ticker:      item.ticker,
+          name:        item.name || item.ticker,
+          quantity:    item.quantity    || 1,
+          entry_price: item.entry_price || item.entryPrice || 0,
+          entry_date:  item.entry_date  || item.dateAdded  || new Date().toISOString().split('T')[0],
+          notes:       item.notes       || '',
+        })).filter(t => t.entry_price > 0)
+        setJournal(migrated)
+        // Persist in new format
+        localStorage.setItem('ss_journal', JSON.stringify(migrated))
+      }
     } catch {}
   }, [])
 
-
-  function saveWatchlist(list) {
-    setWatchlist(list)
-    localStorage.setItem('ss_watchlist', JSON.stringify(list))
+  function saveJournal(list) {
+    setJournal(list)
+    localStorage.setItem('ss_journal', JSON.stringify(list))
   }
-  function addToWatchlist(stock, price) {
-    const p = parseFloat(price)
-    if (!p || p <= 0) return
-    const next = [...watchlist.filter(w => w.ticker !== stock.ticker), {
-      ticker: stock.ticker, name: stock.name,
-      entryPrice: p, dateAdded: new Date().toISOString().split('T')[0],
-    }]
-    saveWatchlist(next)
-    setAddingToWatchlist(null)
-    setEntryPriceInput(prev => ({ ...prev, [stock.ticker]: '' }))
+  function addTrade({ ticker, name, quantity, entry_price, notes }) {
+    const qty = parseFloat(quantity)
+    const px  = parseFloat(entry_price)
+    if (!ticker || !qty || qty <= 0 || !px || px <= 0) return false
+    const entry = {
+      id:          `${ticker.toUpperCase()}-${Date.now()}`,
+      ticker:      ticker.toUpperCase(),
+      name:        name || ticker.toUpperCase(),
+      quantity:    qty,
+      entry_price: px,
+      entry_date:  new Date().toISOString().split('T')[0],
+      notes:       notes || '',
+    }
+    saveJournal([entry, ...journal])
+    return true
   }
-  function removeFromWatchlist(ticker) { saveWatchlist(watchlist.filter(w => w.ticker !== ticker)) }
-  const isInWatchlist = ticker => watchlist.some(w => w.ticker === ticker)
-
-  const watchlistProps = { watchlist, addingToWatchlist, setAddingToWatchlist, entryPriceInput, setEntryPriceInput, addToWatchlist, isInWatchlist, lang }
+  function removeTrade(id) { saveJournal(journal.filter(t => t.id !== id)) }
 
   const toggleDark = () => setDark(d => { localStorage.setItem('dark', !d); return !d })
   const toggleLang = () => setLang(l => { const nl = l === 'he' ? 'en' : 'he'; localStorage.setItem('lang', nl); return nl })
@@ -468,7 +484,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
             ['trend',     `📈 ${lang === 'he' ? 'המגמה' : 'The Trend'}`],
             ['hof',       '🏆 Hall of Fame'],
-            ['watchlist', `📌 ${lang === 'he' ? 'מעקב' : 'Watchlist'}`],
+            ['watchlist', `📓 ${lang === 'he' ? 'יומן מסחר' : 'Journal'}`],
           ].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ padding: '9px 22px', borderRadius: 22, border: `1px solid ${tab === key ? '#097c3e' : c.border}`, background: tab === key ? '#097c3e' : c.card, color: tab === key ? 'white' : c.muted, fontWeight: 700, cursor: 'pointer', fontSize: 14, transition: 'all 0.15s' }}>
               {label}
@@ -479,7 +495,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         {tab === 'hof' && (
           <>
             {backtest && <BacktestCard backtest={backtest} c={c} dark={dark} lang={lang} />}
-            <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} winRateByTicker={winRateByTicker} watchlistProps={watchlistProps} />
+            <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} winRateByTicker={winRateByTicker} />
           </>
         )}
 
@@ -488,7 +504,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         )}
 
         {tab === 'watchlist' && (
-          <WatchlistTab watchlist={watchlist} removeFromWatchlist={removeFromWatchlist} c={c} dark={dark} lang={lang} />
+          <TradingJournal journal={journal} addTrade={addTrade} removeTrade={removeTrade} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'weekly' && (<>
@@ -532,7 +548,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
                   return (<>
                     <StockRow key={stock.ticker} stock={stock} rank={i + 1} isOpen={openStock === stock.ticker}
                       onClick={() => setOpenStock(openStock === stock.ticker ? null : stock.ticker)} c={c} t={t} dark={dark}
-                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} watchlistProps={watchlistProps} />
+                      appearanceCount={appearanceCounts[stock.ticker] || 1} totalScans={totalScans} />
                     {openStock === stock.ticker && (
                       <tr key={`${stock.ticker}-panel`}>
                         <td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${c.border}` }}>
@@ -751,7 +767,7 @@ function BacktestCard({ backtest, c, dark, lang }) {
   )
 }
 
-function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByTicker, winRateByTicker, watchlistProps }) {
+function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByTicker, winRateByTicker }) {
   const medals = ['🥇', '🥈', '🥉']
   const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
   const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
@@ -982,8 +998,6 @@ function HallOfFame({ hallOfFame, totalScans, weekLabels, c, dark, lang, buzzByT
                       </div>
                     )
                   })()}
-                  {/* Star / watchlist button */}
-                  {watchlistProps && <StarButton stock={stock} {...watchlistProps} c={c} />}
                   {buzz
                     ? <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, background: isOpen ? '#097c3e' : (dark ? '#1a2a1a' : '#eaf3de'), border: `1px solid ${isOpen ? '#097c3e' : (dark ? '#2a4a2a' : '#c3e6cb')}` }}>
                         <span style={{ fontSize: 13 }}>🔥</span>
@@ -1367,68 +1381,323 @@ function SectorHeatmap({ stocks, c, dark, sectorFilter, setSectorFilter, lang })
   )
 }
 
-// ── STAR / WATCHLIST BUTTON ───────────────────────────────────────
-function StarButton({ stock, watchlist, addingToWatchlist, setAddingToWatchlist, entryPriceInput, setEntryPriceInput, addToWatchlist, isInWatchlist, lang, c }) {
-  const inList = isInWatchlist(stock.ticker)
-  const isAdding = addingToWatchlist === stock.ticker && !inList
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-      <button
-        onClick={e => { e.stopPropagation(); setAddingToWatchlist(isAdding ? null : stock.ticker) }}
-        title={inList ? (lang === 'he' ? 'ברשימת מעקב' : 'In watchlist') : (lang === 'he' ? 'הוסף למעקב' : 'Watch')}
-        style={{ background: 'none', border: 'none', fontSize: 15, cursor: 'pointer', color: inList ? '#f4c430' : c.muted, padding: '0 2px', lineHeight: 1 }}
-      >{inList ? '⭐' : '☆'}</button>
-      {isAdding && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} onClick={e => e.stopPropagation()}>
-          <input autoFocus type="number" placeholder={lang === 'he' ? 'מחיר $' : 'Entry $'}
-            value={entryPriceInput[stock.ticker] || ''}
-            onChange={e => setEntryPriceInput(prev => ({ ...prev, [stock.ticker]: e.target.value }))}
-            onKeyDown={e => { if (e.key === 'Enter') addToWatchlist(stock, entryPriceInput[stock.ticker]) }}
-            style={{ width: 72, padding: '3px 7px', borderRadius: 6, border: `1px solid ${c.border}`, fontSize: 12, background: c.card, color: c.text }} />
-          <button onClick={() => addToWatchlist(stock, entryPriceInput[stock.ticker])}
-            style={{ padding: '3px 9px', borderRadius: 6, border: 'none', background: '#097c3e', color: 'white', fontSize: 12, cursor: 'pointer', fontWeight: 700 }}>
-            {lang === 'he' ? '✓' : '✓'}
-          </button>
-        </span>
-      )}
-    </span>
-  )
-}
-
-// ── WATCHLIST TAB ─────────────────────────────────────────────────
-function WatchlistRow({ item, removeFromWatchlist, c, dark, lang }) {
-  const data = usePriceHistory(item.ticker)
+// ── TRADING JOURNAL ──────────────────────────────────────────────
+// Single row in the journal — fetches current price and computes P&L.
+function JournalRow({ trade, removeTrade, c, dark, lang }) {
+  const he = lang === 'he'
+  const data = usePriceHistory(trade.ticker)
   const closes = data?.closes || []
   const current = closes.length ? closes[closes.length - 1] : null
-  const plPct = current != null ? (current - item.entryPrice) / item.entryPrice * 100 : null
-  const plColor = plPct == null ? c.muted : plPct >= 0 ? '#097c3e' : '#c0392b'
+
+  const costBasis = trade.quantity * trade.entry_price
+  const currentValue = current != null ? trade.quantity * current : null
+  const pnlDollars  = currentValue != null ? currentValue - costBasis : null
+  const pnlPct      = current != null ? (current - trade.entry_price) / trade.entry_price * 100 : null
+  const isProfit = (pnlPct ?? 0) >= 0
+  const pnlColor = pnlPct == null ? c.muted : isProfit ? '#097c3e' : '#c0392b'
+
+  const daysHeld = (() => {
+    if (!trade.entry_date) return null
+    const d = new Date(trade.entry_date)
+    return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000))
+  })()
+
   return (
     <tr style={{ borderBottom: `1px solid ${c.border}`, background: c.card }}
       onMouseEnter={e => e.currentTarget.style.background = c.rowHover}
       onMouseLeave={e => e.currentTarget.style.background = c.card}>
-      <td style={{ padding: '11px 14px' }}>
-        <div style={{ fontWeight: 800, fontSize: 14, color: c.text }}>{item.ticker}</div>
-        <Sparkline ticker={item.ticker} width={70} height={20} />
+      {/* Ticker */}
+      <td style={{ padding: '12px 14px' }}>
+        <div style={{ fontWeight: 800, fontSize: 15, color: c.text }}>{trade.ticker}</div>
+        <div style={{ fontSize: 10, color: c.muted, marginTop: 1, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trade.name}</div>
+        <Sparkline ticker={trade.ticker} width={70} height={18} />
       </td>
-      <td style={{ padding: '11px 14px', fontSize: 12, color: c.muted, maxWidth: 180 }}>{item.name}</td>
-      <td style={{ padding: '11px 14px', fontSize: 13, color: c.text }}>${item.entryPrice.toFixed(2)}</td>
-      <td style={{ padding: '11px 14px', fontSize: 13, color: c.text }}>
+      {/* Quantity */}
+      <td style={{ padding: '12px 14px', fontSize: 14, color: c.text, fontWeight: 600 }}>{trade.quantity}</td>
+      {/* Entry price */}
+      <td style={{ padding: '12px 14px', fontSize: 13, color: c.text }}>${trade.entry_price.toFixed(2)}</td>
+      {/* Current price */}
+      <td style={{ padding: '12px 14px', fontSize: 14, fontWeight: 700, color: c.text }}>
         {current != null ? `$${current.toFixed(2)}` : (data ? '—' : '⏳')}
       </td>
-      <td style={{ padding: '11px 14px' }}>
-        {plPct != null
-          ? <span style={{ fontWeight: 800, fontSize: 15, color: plColor }}>{plPct >= 0 ? '+' : ''}{plPct.toFixed(2)}%</span>
-          : <span style={{ color: c.muted }}>—</span>}
+      {/* Cost basis */}
+      <td style={{ padding: '12px 14px', fontSize: 13, color: c.muted }}>
+        ${costBasis.toFixed(2)}
       </td>
-      <td style={{ padding: '11px 14px', fontSize: 11, color: c.muted }}>{item.dateAdded}</td>
-      <td style={{ padding: '11px 14px' }}>
-        <button onClick={() => removeFromWatchlist(item.ticker)}
-          style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #c0392b', background: 'none', color: '#c0392b', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>
-          {lang === 'he' ? 'הסר' : 'Remove'}
+      {/* Current value */}
+      <td style={{ padding: '12px 14px', fontSize: 13, color: c.text, fontWeight: 600 }}>
+        {currentValue != null ? `$${currentValue.toFixed(2)}` : '—'}
+      </td>
+      {/* $ P&L */}
+      <td style={{ padding: '12px 14px' }}>
+        {pnlDollars != null ? (
+          <span style={{ fontWeight: 800, fontSize: 14, color: pnlColor }}>
+            {pnlDollars >= 0 ? '+' : ''}${pnlDollars.toFixed(2)}
+          </span>
+        ) : <span style={{ color: c.muted }}>—</span>}
+      </td>
+      {/* % P&L */}
+      <td style={{ padding: '12px 14px' }}>
+        {pnlPct != null ? (
+          <span style={{
+            background: isProfit ? (dark ? '#1a3a1a' : '#EAF3DE') : (dark ? '#3a1a1a' : '#FCEBEB'),
+            color: pnlColor, padding: '4px 10px', borderRadius: 10,
+            fontWeight: 800, fontSize: 14,
+            display: 'inline-block',
+          }}>
+            {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+          </span>
+        ) : <span style={{ color: c.muted }}>—</span>}
+      </td>
+      {/* Days held */}
+      <td style={{ padding: '12px 14px', fontSize: 11, color: c.muted, whiteSpace: 'nowrap' }}>
+        {daysHeld != null ? `${daysHeld}d` : '—'}
+        <div style={{ fontSize: 9, color: c.muted, marginTop: 1 }}>{trade.entry_date}</div>
+      </td>
+      {/* Remove */}
+      <td style={{ padding: '12px 14px' }}>
+        <button onClick={() => {
+          if (confirm(he ? `למחוק את העסקה ב-${trade.ticker}?` : `Delete ${trade.ticker} trade?`)) {
+            removeTrade(trade.id)
+          }
+        }} title={he ? 'מחק' : 'Remove'}
+          style={{ padding: '4px 8px', borderRadius: 6, border: 'none', background: 'transparent', color: c.muted, fontSize: 16, cursor: 'pointer' }}
+          onMouseEnter={e => e.currentTarget.style.color = '#c0392b'}
+          onMouseLeave={e => e.currentTarget.style.color = c.muted}>
+          ✕
         </button>
       </td>
     </tr>
   )
+}
+
+// Hook: feed it the journal and it returns aggregate totals based on
+// each trade's current price. Updates as prices stream in.
+function useJournalTotals(journal) {
+  // We need to read current prices from usePriceHistory — done in rows.
+  // For the totals card, we re-read them here using the same hook so the
+  // numbers update in real time as the rows resolve.
+  let totalCost = 0
+  let totalCurrent = 0
+  let resolvedCount = 0
+  for (const t of journal) {
+    totalCost += t.quantity * t.entry_price
+    // We can't call hooks in a loop, so totals shown here are based on
+    // entry only. The per-row current value is rendered separately.
+  }
+  return { totalCost }
+}
+
+function TradingJournal({ journal, addTrade, removeTrade, c, dark, lang }) {
+  const he = lang === 'he'
+  const [form, setForm] = useState({ ticker: '', quantity: '', entry_price: '' })
+  const [showForm, setShowForm] = useState(false)
+
+  // Calculate totals reactively from journal entries + live prices
+  // Each row's price comes from usePriceHistory cache; aggregate via a helper component
+  const [livePrices, setLivePrices] = useState({})
+
+  const totalCost = journal.reduce((sum, t) => sum + t.quantity * t.entry_price, 0)
+  const totalCurrent = journal.reduce((sum, t) => {
+    const p = livePrices[t.ticker]
+    return sum + (p != null ? t.quantity * p : t.quantity * t.entry_price)
+  }, 0)
+  const totalPnL = totalCurrent - totalCost
+  const totalPnLPct = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0
+  const profitColor = totalPnL >= 0 ? '#097c3e' : '#c0392b'
+  const profitBg    = totalPnL >= 0 ? (dark ? '#0d2018' : '#EAF3DE') : (dark ? '#2a0e0e' : '#FCEBEB')
+
+  function handleSubmit(e) {
+    e.preventDefault()
+    if (addTrade(form)) {
+      setForm({ ticker: '', quantity: '', entry_price: '' })
+      setShowForm(false)
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#0d1830' : '#1a1a2e'} 0%, ${dark ? '#1a2855' : '#2d3561'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 30 }}>📓</span>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+              {he ? 'יומן מסחר' : 'Trading Journal'}
+            </div>
+            <div style={{ fontSize: 13, color: '#b0bbd9', marginTop: 4 }}>
+              {he
+                ? 'הזן עסקאות שאתה נכנס אליהן — המערכת תעקוב אחרי המחיר העדכני ותחשב רווח/הפסד'
+                : 'Enter trades you take — the system tracks live prices and computes P&L'}
+            </div>
+          </div>
+          <button
+            onClick={() => setShowForm(v => !v)}
+            style={{
+              background: showForm ? '#cc4444' : '#00c853',
+              color: 'white', border: 'none', borderRadius: 10,
+              padding: '10px 18px', fontWeight: 800, fontSize: 14,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+            {showForm ? (he ? '✕ ביטול' : '✕ Cancel') : (he ? '➕ הוסף עסקה' : '➕ Add Trade')}
+          </button>
+        </div>
+
+        {/* Add trade form */}
+        {showForm && (
+          <form onSubmit={handleSubmit} style={{
+            marginTop: 16, padding: 16,
+            background: 'rgba(255,255,255,0.07)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 10,
+            display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end',
+          }}>
+            <div style={{ flex: '0 0 130px' }}>
+              <div style={{ fontSize: 11, color: '#b0bbd9', fontWeight: 700, marginBottom: 4 }}>
+                {he ? 'טיקר' : 'Ticker'}
+              </div>
+              <input autoFocus required type="text" value={form.ticker}
+                onChange={e => setForm({ ...form, ticker: e.target.value.toUpperCase() })}
+                placeholder="NVDA"
+                style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: 'none', background: 'rgba(255,255,255,0.95)', color: '#1a1a2e', fontWeight: 800, fontSize: 14 }} />
+            </div>
+            <div style={{ flex: '0 0 100px' }}>
+              <div style={{ fontSize: 11, color: '#b0bbd9', fontWeight: 700, marginBottom: 4 }}>
+                {he ? 'יחידות' : 'Quantity'}
+              </div>
+              <input required type="number" step="any" min="0.0001" value={form.quantity}
+                onChange={e => setForm({ ...form, quantity: e.target.value })}
+                placeholder="100"
+                style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: 'none', background: 'rgba(255,255,255,0.95)', color: '#1a1a2e', fontWeight: 700, fontSize: 14 }} />
+            </div>
+            <div style={{ flex: '0 0 130px' }}>
+              <div style={{ fontSize: 11, color: '#b0bbd9', fontWeight: 700, marginBottom: 4 }}>
+                {he ? 'מחיר כניסה $' : 'Entry Price $'}
+              </div>
+              <input required type="number" step="0.01" min="0.01" value={form.entry_price}
+                onChange={e => setForm({ ...form, entry_price: e.target.value })}
+                placeholder="145.50"
+                style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: 'none', background: 'rgba(255,255,255,0.95)', color: '#1a1a2e', fontWeight: 700, fontSize: 14 }} />
+            </div>
+            <button type="submit" style={{
+              padding: '9px 22px', borderRadius: 8, border: 'none',
+              background: '#00c853', color: 'white', fontWeight: 800, fontSize: 14,
+              cursor: 'pointer',
+            }}>
+              {he ? '✓ שמור' : '✓ Save'}
+            </button>
+          </form>
+        )}
+      </div>
+
+      {/* Summary stats */}
+      {journal.length > 0 && (
+        <div style={{
+          background: c.card, borderLeft: `1px solid ${c.border}`, borderRight: `1px solid ${c.border}`,
+          padding: '18px 24px',
+          display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12,
+        }}>
+          <SummaryCard label={he ? 'עלות כניסה' : 'Cost Basis'} value={`$${totalCost.toFixed(2)}`} c={c} />
+          <SummaryCard label={he ? 'שווי נוכחי' : 'Current Value'} value={`$${totalCurrent.toFixed(2)}`} c={c} />
+          <SummaryCard
+            label={he ? 'רווח/הפסד ($)' : 'Total P&L ($)'}
+            value={`${totalPnL >= 0 ? '+' : ''}$${totalPnL.toFixed(2)}`}
+            color={profitColor} bg={profitBg} c={c} />
+          <SummaryCard
+            label={he ? 'רווח/הפסד (%)' : 'Total P&L (%)'}
+            value={`${totalPnLPct >= 0 ? '+' : ''}${totalPnLPct.toFixed(2)}%`}
+            color={profitColor} bg={profitBg} c={c} />
+          <SummaryCard label={he ? 'פוזיציות פתוחות' : 'Open Positions'} value={journal.length} c={c} />
+        </div>
+      )}
+
+      {/* Trades table */}
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderTop: journal.length > 0 ? 'none' : `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
+        {journal.length === 0 ? (
+          <div style={{ padding: 60, textAlign: 'center', color: c.muted }}>
+            <div style={{ fontSize: 48, marginBottom: 14, opacity: 0.6 }}>📊</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: c.text, marginBottom: 8 }}>
+              {he ? 'אין עסקאות עדיין' : 'No trades yet'}
+            </div>
+            <div style={{ fontSize: 13 }}>
+              {he ? 'לחץ "הוסף עסקה" למעלה כדי להתחיל לעקוב' : 'Click "Add Trade" above to start tracking'}
+            </div>
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: c.thead }}>
+                {[
+                  he ? 'מנייה'         : 'Stock',
+                  he ? 'יחידות'        : 'Qty',
+                  he ? 'מחיר כניסה'    : 'Entry $',
+                  he ? 'מחיר נוכחי'    : 'Current $',
+                  he ? 'עלות'          : 'Cost Basis',
+                  he ? 'שווי נוכחי'    : 'Value',
+                  he ? 'P&L $'         : 'P&L $',
+                  he ? 'P&L %'         : 'P&L %',
+                  he ? 'ימים'          : 'Days',
+                  '',
+                ].map((h, i) => (
+                  <th key={i} style={{
+                    padding: '11px 14px', textAlign: 'left', fontSize: 10,
+                    color: c.muted, fontWeight: 700, textTransform: 'uppercase',
+                    letterSpacing: '.05em', borderBottom: `1px solid ${c.border}`,
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {journal.map(trade => (
+                <JournalRow key={trade.id} trade={trade} removeTrade={removeTrade}
+                  c={c} dark={dark} lang={lang}
+                />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Live-price sync: invisible hooks that update totals when prices stream in */}
+      <PriceSyncHelper journal={journal} onUpdate={setLivePrices} />
+    </div>
+  )
+}
+
+// Helper card for the summary row
+function SummaryCard({ label, value, color, bg, c }) {
+  return (
+    <div style={{
+      background: bg || c.card,
+      border: `1px solid ${c.border}`,
+      borderRadius: 10, padding: '12px 14px',
+    }}>
+      <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: 700, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 17, fontWeight: 800, color: color || c.text }}>{value}</div>
+    </div>
+  )
+}
+
+// Invisible helper that fetches live prices for each ticker in the journal
+// and surfaces them up to the parent for the totals summary. Renders nothing.
+function PriceSyncHelper({ journal, onUpdate }) {
+  return (
+    <div style={{ display: 'none' }}>
+      {journal.map(t => <PriceSyncPoint key={t.id} ticker={t.ticker} onResolve={onUpdate} />)}
+    </div>
+  )
+}
+function PriceSyncPoint({ ticker, onResolve }) {
+  const data = usePriceHistory(ticker)
+  const closes = data?.closes || []
+  const current = closes.length ? closes[closes.length - 1] : null
+  useEffect(() => {
+    if (current != null) onResolve(prev => ({ ...prev, [ticker]: current }))
+  }, [current, ticker])
+  return null
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -2006,38 +2275,6 @@ function TheTrend({ trend, c, dark, lang }) {
 }
 
 
-function WatchlistTab({ watchlist, removeFromWatchlist, c, dark, lang }) {
-  const headers = lang === 'he'
-    ? ['מנייה', 'שם', 'מחיר כניסה', 'מחיר נוכחי', 'P&L %', 'תאריך', '']
-    : ['Ticker', 'Name', 'Entry $', 'Current $', 'P&L %', 'Added', '']
-  return (
-    <div style={{ background: c.card, borderRadius: 12, border: `1px solid ${c.border}`, overflow: 'hidden' }}>
-      <div style={{ padding: '16px 20px', borderBottom: `1px solid ${c.border}`, background: dark ? '#12122a' : '#1a1a2e' }}>
-        <div style={{ fontSize: 18, fontWeight: 800, color: 'white' }}>📌 {lang === 'he' ? 'רשימת מעקב' : 'Watchlist'}</div>
-        <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>{lang === 'he' ? `${watchlist.length} מניות במעקב` : `${watchlist.length} stocks tracked`}</div>
-      </div>
-      {watchlist.length === 0 ? (
-        <div style={{ padding: 48, textAlign: 'center', color: c.muted, fontSize: 14 }}>
-          {lang === 'he' ? 'הרשימה ריקה — לחץ ☆ על כל מנייה כדי להוסיף' : 'Empty — click ☆ on any stock to add it'}
-        </div>
-      ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ background: c.thead }}>
-              {headers.map((h, i) => (
-                <th key={i} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: c.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', borderBottom: `1px solid ${c.border}` }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {watchlist.map(item => <WatchlistRow key={item.ticker} item={item} removeFromWatchlist={removeFromWatchlist} c={c} dark={dark} lang={lang} />)}
-          </tbody>
-        </table>
-      )}
-    </div>
-  )
-}
-
 function Chip({ label, bg, color }) {
   return <span style={{ background: bg, color, padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{label}</span>
 }
@@ -2048,7 +2285,7 @@ function formatMcap(market_cap) {
   return `$${Math.round(market_cap / 1_000_000)}M`
 }
 
-function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans, watchlistProps }) {
+function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, totalScans }) {
   const buzz = stock.buzz || {}
 
   const count = appearanceCount || 1
@@ -2106,12 +2343,9 @@ function StockRow({ stock, rank, isOpen, onClick, c, t, dark, appearanceCount, t
         <span style={{ background: trendBadge.bg, color: trendBadge.color, padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600 }}>{trendBadge.text}</span>
       </td>
       <td style={{ padding: '11px 14px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
-          {watchlistProps && <StarButton stock={stock} {...watchlistProps} c={c} />}
-          <button onClick={e => { e.stopPropagation(); onClick() }} style={{ fontSize: 11, color: '#097c3e', background: 'none', border: '1px solid #097c3e', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}>
-            {isOpen ? t.close : t.details}
-          </button>
-        </div>
+        <button onClick={e => { e.stopPropagation(); onClick() }} style={{ fontSize: 11, color: '#097c3e', background: 'none', border: '1px solid #097c3e', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          {isOpen ? t.close : t.details}
+        </button>
       </td>
     </tr>
   )
