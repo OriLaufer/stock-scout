@@ -1895,8 +1895,13 @@ function TheTrend({ trend, c, dark, lang }) {
                             {history.map((h, hi) => {
                               const positive = h.change_pct >= 0
                               const abs = Math.abs(h.change_pct)
-                              // Per-stock scaling — visible differences between small weeks within ONE stock
-                              const barH = Math.max(8, (abs / stockMaxAbs) * HALF)
+                              // SQRT scaling — gives meaningful visual distinction between small
+                              // weeks (+6 vs +10 vs +19) without losing the magnitude of huge
+                              // weeks (+229 still dominates, but small ones aren't all flat 4px).
+                              // This is how pro trading platforms (Bloomberg/TradingView) handle
+                              // wide-range bar charts: linear scaling crushes small values.
+                              const ratio = Math.sqrt(abs / stockMaxAbs)
+                              const barH = Math.max(5, ratio * HALF)
                               // ALL bars get the vivid color treatment — bold and prominent regardless of scan presence
                               const fill = positive ? greens : reds
                               const borderColor = positive ? greensDim : redsDim
