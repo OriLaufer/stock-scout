@@ -1861,13 +1861,37 @@ def compute_multibagger_radar(top_n=10, candidate_pool=30):
 # multi-bagger candidate this week — with the thesis, catalyst (web-searched),
 # conviction, and risk. If nothing is compelling, it says so honestly.
 
-VERDICT_MODEL_CANDIDATES = [
-    os.environ.get("AI_MODEL"),
-    "claude-opus-4-20250514",
-    "claude-sonnet-4-20250514",
-    "claude-3-5-sonnet-latest",
-]
-VERDICT_MODEL_CANDIDATES = [m for m in VERDICT_MODEL_CANDIDATES if m]
+_DISCOVERED_MODEL = None
+
+
+def _discover_best_model(api_key):
+    """Ask the Anthropic API which models the account has, pick the newest
+    Opus (else newest Sonnet). Avoids guessing model names that change."""
+    global _DISCOVERED_MODEL
+    if os.environ.get("AI_MODEL"):
+        return os.environ["AI_MODEL"]
+    if _DISCOVERED_MODEL:
+        return _DISCOVERED_MODEL
+    try:
+        r = requests.get(
+            "https://api.anthropic.com/v1/models?limit=100",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            timeout=30,
+        )
+        if r.status_code == 200:
+            models = r.json().get("data", [])
+            models.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+            opus = next((m for m in models if "opus" in m.get("id", "").lower()), None)
+            sonnet = next((m for m in models if "sonnet" in m.get("id", "").lower()), None)
+            best = opus or sonnet or (models[0] if models else None)
+            if best:
+                _DISCOVERED_MODEL = best["id"]
+                print(f"  Verdict: using model {_DISCOVERED_MODEL}")
+                return _DISCOVERED_MODEL
+    except Exception as e:
+        print(f"  Verdict: model discovery failed ({type(e).__name__})")
+    _DISCOVERED_MODEL = "claude-sonnet-4-20250514"
+    return _DISCOVERED_MODEL
 
 VERDICT_SYSTEM = """You are the head analyst of "Stock Scout". Once a week you write THE VERDICT — a sharp research note for the boss.
 
@@ -1952,45 +1976,46 @@ def generate_ai_verdict(top_picks, trend, radar, rising_stars):
         + context
     )
 
-    for model in VERDICT_MODEL_CANDIDATES:
-        try:
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 2500,
-                    "system": VERDICT_SYSTEM,
-                    "messages": [{"role": "user", "content": user_msg}],
-                    "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 6}],
-                },
-                timeout=180,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                text = "\n".join(
-                    b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
-                ).strip()
-                if text:
-                    print(f"  Verdict: generated with {model} ({len(text)} chars)")
-                    return {
-                        "text": text,
-                        "model": model,
-                        "generated_at": datetime.now().isoformat(),
-                    }
-            else:
-                err = r.text[:200]
-                print(f"  Verdict: {model} failed HTTP {r.status_code}: {err}")
-                # fall through to next model only on model/tool issues
-                if not (r.status_code == 404 or "model" in err.lower() or "tool" in err.lower()):
-                    break
-        except Exception as e:
-            print(f"  Verdict: error with {model}: {type(e).__name__}: {e}")
-            continue
+    model = _discover_best_model(api_key)
+
+    def _call(with_tools):
+        body = {
+            "model": model,
+            "max_tokens": 2500,
+            "system": VERDICT_SYSTEM,
+            "messages": [{"role": "user", "content": user_msg}],
+        }
+        if with_tools:
+            body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 6}]
+        return requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=body,
+            timeout=180,
+        )
+
+    try:
+        r = _call(True)
+        if r.status_code != 200 and ("tool" in r.text.lower() or "web_search" in r.text.lower()):
+            print("  Verdict: web search unsupported, retrying without it")
+            r = _call(False)
+        if r.status_code == 200:
+            data = r.json()
+            text = "\n".join(
+                b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
+            ).strip()
+            if text:
+                print(f"  Verdict: generated with {model} ({len(text)} chars)")
+                return {"text": text, "model": model, "generated_at": datetime.now().isoformat()}
+            print("  Verdict: empty response")
+        else:
+            print(f"  Verdict: {model} failed HTTP {r.status_code}: {r.text[:200]}")
+    except Exception as e:
+        print(f"  Verdict: error: {type(e).__name__}: {e}")
     return None
 
 

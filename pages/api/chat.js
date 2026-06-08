@@ -11,16 +11,32 @@ const supabase = createClient(
 // Key must be set in Vercel env vars (Settings → Environment Variables).
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 
-// Smartest-first model chain. We try the most capable model available and
-// automatically fall back if a given name isn't available on the account.
-// Override the top choice with the AI_MODEL env var if you want a specific one.
-const MODEL_CANDIDATES = [
-  process.env.AI_MODEL,           // optional explicit override
-  'claude-opus-4-20250514',       // most capable
-  'claude-sonnet-4-20250514',     // strong + fast
-  'claude-3-5-sonnet-latest',     // reliable fallback
-  'claude-3-5-haiku-latest',      // last resort
-].filter(Boolean)
+// Instead of guessing model names (they change over time), DISCOVER the
+// available models from the account and pick the best one (newest Opus,
+// else newest Sonnet). Cached for the life of the serverless instance.
+let _cachedModel = null
+async function pickBestModel(apiKey) {
+  if (process.env.AI_MODEL) return process.env.AI_MODEL
+  if (_cachedModel) return _cachedModel
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/models?limit=100', {
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    })
+    if (r.ok) {
+      const { data } = await r.json()
+      const sorted = (data || []).slice().sort(
+        (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+      )
+      const opus   = sorted.find(m => /opus/i.test(m.id))
+      const sonnet = sorted.find(m => /sonnet/i.test(m.id))
+      const best = opus || sonnet || sorted[0]
+      if (best) { _cachedModel = best.id; return _cachedModel }
+    }
+  } catch {}
+  // Last-resort guesses if discovery fails
+  _cachedModel = 'claude-sonnet-4-20250514'
+  return _cachedModel
+}
 
 function parseWeekEnd(label) {
   const m = (label || '').match(/(\d{2})\.(\d{2})\.(\d{4})$/)
@@ -253,11 +269,10 @@ export default async function handler(req, res) {
       content: String(m.content || ''),
     }))
 
-    // Try models smartest-first; fall through only when a model name is unavailable.
-    let lastErr = ''
-    for (let i = 0; i < MODEL_CANDIDATES.length; i++) {
-      const model = MODEL_CANDIDATES[i]
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
+    const model = await pickBestModel(ANTHROPIC_API_KEY)
+
+    async function callModel(withTools) {
+      return fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
           'x-api-key': ANTHROPIC_API_KEY,
@@ -266,39 +281,38 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 3500,   // room for thorough, structured analysis
+          max_tokens: 3500,
           system,
           messages: trimmed,
-          // Native web search — Claude pulls current news/catalysts on demand.
-          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6 }],
+          ...(withTools ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6 }] } : {}),
         }),
       })
+    }
 
-      if (r.ok) {
-        const data = await r.json()
-        // Collect all text blocks (final answer). Web-search runs produce
-        // intermediate tool blocks too — we keep only the text.
-        const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text)
-        const reply = textBlocks.join('\n').trim()
-        // Did it actually search? (for transparency in the UI)
-        const searched = (data.content || []).some(b => b.type === 'server_tool_use' || b.type === 'web_search_tool_result')
-        return res.status(200).json({ reply: reply || '(no response)', model, searched })
-      }
-
+    // Try with web search; if the tool isn't supported, retry without it.
+    let r = await callModel(true)
+    if (!r.ok) {
       const errText = await r.text()
-      lastErr = `HTTP ${r.status}: ${errText.slice(0, 200)}`
-      console.error(`Anthropic error (${model}):`, lastErr)
-      // Only fall through if this model name is the problem; otherwise stop.
-      const isModelIssue = r.status === 404 || /model|tool|web_search/i.test(errText)
-      const hasNext = i < MODEL_CANDIDATES.length - 1
-      if (!(isModelIssue && hasNext)) {
+      if (/tool|web_search/i.test(errText)) {
+        r = await callModel(false)
+      } else {
+        console.error(`Anthropic error (${model}):`, r.status, errText.slice(0, 200))
         return res.status(200).json({
-          reply: `שגיאה מה-AI. בדוק שהמפתח תקין ב-Vercel. פרטים: ${lastErr}`,
+          reply: `שגיאה מה-AI (${model}). פרטים: HTTP ${r.status}: ${errText.slice(0, 160)}`,
           error: true,
         })
       }
     }
-    return res.status(200).json({ reply: `שגיאה: לא נמצא מודל זמין. ${lastErr}`, error: true })
+
+    if (r.ok) {
+      const data = await r.json()
+      const reply = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
+      const searched = (data.content || []).some(b => b.type === 'server_tool_use' || b.type === 'web_search_tool_result')
+      return res.status(200).json({ reply: reply || '(no response)', model, searched })
+    }
+
+    const finalErr = await r.text()
+    return res.status(200).json({ reply: `שגיאה מה-AI: HTTP ${r.status}: ${finalErr.slice(0, 160)}`, error: true })
   } catch (e) {
     console.error('chat handler error:', e)
     return res.status(200).json({ reply: `שגיאה: ${e.message}`, error: true })
