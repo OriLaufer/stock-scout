@@ -171,17 +171,22 @@ def get_ticker_universe():
 
 # ============== PRICE DATA (BATCH) ==============
 def fetch_weekly_changes(tickers, reference_date=None):
-    """For each ticker: get last 2 weeks of daily closes, compute % change
-    from PREVIOUS Friday close to THIS Friday close.
-    Uses exact Friday dates (not '5 days back')."""
+    """For each ticker: pull ~6 months of daily closes. Compute the weekly %
+    change (PREVIOUS Friday → THIS Friday) AND relative-strength metrics
+    (1/3/6-month returns, trend steadiness, above moving averages).
+
+    The 6-month window is the key upgrade: it lets us find QUIET base-builders
+    (the early-SanDisk pattern — steady climbers that never top the weekly
+    gainers list) via compute_rising_stars(), not just this week's spikes."""
     prev_friday, this_friday = get_two_fridays(reference_date)
     print(f"Weekly window: {prev_friday.strftime('%d.%m.%Y')} (Fri close) → {this_friday.strftime('%d.%m.%Y')} (Fri close)")
-    print(f"Fetching prices for {len(tickers)} tickers (batched)...")
+    print(f"Fetching 6mo prices for {len(tickers)} tickers (batched)...")
 
     # yfinance can handle ~200 tickers per call efficiently
     BATCH = 200
-    # Pull a buffer: 3 days before prev_friday → 1 day after this_friday
-    start = prev_friday - timedelta(days=3)
+    # Pull ~6.5 months of history → enough for 6-month relative strength,
+    # while the last two Fridays still give us the weekly change.
+    start = this_friday - timedelta(days=200)
     end = this_friday + timedelta(days=1)
 
     def find_close_on_or_before(closes_series, target_date):
@@ -193,6 +198,16 @@ def fetch_weekly_changes(tickers, reference_date=None):
         if len(valid) == 0:
             return None
         return float(valid.iloc[-1])
+
+    def ret_n_days_back(closes_series, n):
+        """% return from the close n trading days ago to the latest close."""
+        if len(closes_series) <= n:
+            return None
+        last = float(closes_series.iloc[-1])
+        past = float(closes_series.iloc[-1 - n])
+        if past <= 0:
+            return None
+        return round((last - past) / past * 100, 1)
 
     all_data = {}
     for i in range(0, len(tickers), BATCH):
@@ -253,13 +268,40 @@ def fetch_weekly_changes(tickers, reference_date=None):
                     else:
                         weekly_vol = 0
 
-                    all_data[t] = {
+                    rec = {
                         "ticker": t,
                         "price": round(this_close, 2),
                         "prev_price": round(prev_close, 2),
                         "change_pct": round(pct, 2),
                         "volume": weekly_vol,
                     }
+
+                    # --- Relative-strength / trend metrics (from the 6mo series) ---
+                    if len(closes) >= 25:
+                        rec["ret_1mo"] = ret_n_days_back(closes, 21)
+                        rec["ret_3mo"] = ret_n_days_back(closes, 63)
+                        rec["ret_6mo"] = ret_n_days_back(closes, 126)
+                        # Above moving averages = confirmed uptrend
+                        if len(closes) >= 50:
+                            ma50 = float(closes.iloc[-50:].mean())
+                            rec["above_50dma"] = bool(this_close > ma50)
+                        if len(closes) >= 120:
+                            ma200 = float(closes.iloc[-200:].mean()) if len(closes) >= 200 else float(closes.mean())
+                            rec["above_200dma"] = bool(this_close > ma200)
+                        # Steadiness: weekly returns over the window. A quiet
+                        # base-builder has many positive weeks and is NOT driven
+                        # by a single explosive week (that's a spike/pump).
+                        try:
+                            weekly = closes.resample("W-FRI").last().dropna()
+                            wk_returns = weekly.pct_change().dropna() * 100
+                            if len(wk_returns) >= 4:
+                                pos = int((wk_returns > 0).sum())
+                                rec["positive_weeks_pct"] = round(pos / len(wk_returns) * 100)
+                                rec["max_week_pct"] = round(float(wk_returns.max()), 1)
+                        except Exception:
+                            pass
+
+                    all_data[t] = rec
                 except Exception:
                     continue
         except Exception as e:
@@ -397,6 +439,119 @@ def find_top_picks_by_marketcap(price_data, names_dict, target=TOP_PICKS_TARGET)
 
     print(f"Found {len(top_picks)} stocks from top-{len(candidates)} gainers passing market cap filter")
     return top_picks
+
+
+# ============== RISING STARS — QUIET BASE-BUILDERS (THE EARLY-SANDISK SCAN) ==============
+RISING_STARS_MAX_MCAP = 20_000_000_000   # cap at $20B — we want room to multiply
+
+
+def _rising_star_score(d, spy_6mo):
+    """Score a stock on 'quiet base-builder' DNA from its 6-month metrics.
+    High score = sustained outperformance, steady (not a one-week spike),
+    confirmed uptrend, still rising. Returns (score 0-100, breakdown)."""
+    r6 = d.get("ret_6mo")
+    if r6 is None:
+        return 0, {}
+    parts = {}
+
+    # Sustained relative strength vs market (0-40)
+    excess = r6 - spy_6mo
+    parts["rs_6mo"] = round(min(40, max(0, excess / 5)), 1)   # +200% excess = full
+
+    # Consistency — % of weeks that were positive (0-25)
+    pw = d.get("positive_weeks_pct")
+    parts["consistency"] = round(min(25, (pw or 0) / 4), 1) if pw is not None else 0
+
+    # Trend confirmation — above moving averages (0-20)
+    trend = (10 if d.get("above_50dma") else 0) + (10 if d.get("above_200dma") else 0)
+    parts["trend"] = trend
+
+    # Still rising — recent month positive (0-15)
+    r1 = d.get("ret_1mo")
+    parts["still_rising"] = round(min(15, max(0, (r1 or 0) / 2)), 1)
+
+    # Spike penalty — if a single week dominates the 6mo gain, it's a spike not a build
+    mw = d.get("max_week_pct")
+    penalty = 0
+    if mw is not None and r6 > 0 and mw / r6 > 0.55:
+        penalty = -15
+    parts["spike_penalty"] = penalty
+
+    total = round(min(100, max(0, sum(parts.values()))), 1)
+    return total, parts
+
+
+def compute_rising_stars(price_data, names_dict, target=20):
+    """Find QUIET BASE-BUILDERS across the whole market — stocks with strong
+    sustained 6-month relative strength that may NOT be this week's top gainers.
+    This is the scan that catches the early SanDisk before the parabolic run."""
+    spy_3mo, spy_6mo = _spy_baseline()
+    print(f"\nRising Stars: SPY 6mo baseline {spy_6mo:+.1f}%")
+
+    # Score every stock that has 6-month data
+    scored = []
+    for d in price_data.values():
+        if d.get("ret_6mo") is None:
+            continue
+        score, parts = _rising_star_score(d, spy_6mo)
+        if score <= 0:
+            continue
+        scored.append((score, parts, d))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Take the top ~120 by score, then market-cap filter to small/mid with room
+    candidates = scored[:120]
+    print(f"Rising Stars: market-cap filtering top {len(candidates)} candidates...")
+    time.sleep(2)
+
+    stars = []
+    for score, parts, d in candidates:
+        if len(stars) >= target:
+            break
+        t = d["ticker"]
+        try:
+            time.sleep(0.4)
+            fi = yf.Ticker(t).fast_info
+            mc = getattr(fi, "market_cap", None) or 0
+        except Exception:
+            mc = 0
+        if not mc or mc < MIN_MARKET_CAP or mc > RISING_STARS_MAX_MCAP:
+            continue
+
+        # Fetch sector/name/short for the final list
+        sector, name = "", names_dict.get(t, t)
+        try:
+            time.sleep(0.6)
+            info = yf.Ticker(t).info
+            name = info.get("longName") or info.get("shortName") or name
+            sector = info.get("sector") or ""
+        except Exception:
+            pass
+        if len(name) > 60:
+            name = name[:57] + "..."
+
+        stars.append({
+            "ticker": t,
+            "name": name,
+            "sector": sector,
+            "price": d["price"],
+            "market_cap": int(mc),
+            "rs_score": score,
+            "rs_breakdown": parts,
+            "ret_1mo": d.get("ret_1mo"),
+            "ret_3mo": d.get("ret_3mo"),
+            "ret_6mo": d.get("ret_6mo"),
+            "positive_weeks_pct": d.get("positive_weeks_pct"),
+            "max_week_pct": d.get("max_week_pct"),
+            "above_50dma": d.get("above_50dma"),
+            "above_200dma": d.get("above_200dma"),
+            "this_week_pct": d.get("change_pct"),
+        })
+        print(f"  [{len(stars)}/{target}] {t}: score {score} | 6mo {d.get('ret_6mo')}% | "
+              f"${mc/1e9:.2f}B | {sector}")
+
+    print(f"Rising Stars: found {len(stars)} quiet base-builders")
+    return stars
 
 
 # ============== BUZZ - APIFY (PAID, RELIABLE) ==============
@@ -2245,18 +2400,25 @@ def main():
     print("\nComputing Multi-Bagger Radar (top 10 by DNA score)...")
     radar = compute_multibagger_radar(top_n=10)
 
-    # Save trend + radar into the just-saved row
-    if trend or radar:
+    # 9. Compute "Rising Stars" — quiet base-builders across the WHOLE market
+    #    (the early-SanDisk scan: strong 6mo relative strength, not just this
+    #    week's gainers). This is the piece that catches multi-baggers early.
+    print("\nComputing Rising Stars (quiet base-builders, full-market RS)...")
+    rising_stars = compute_rising_stars(price_data, names, target=20)
+
+    # Save trend + radar + rising_stars into the just-saved row
+    if trend or radar or rising_stars:
         try:
             r = supabase.table("weekly_scans").select("stocks_json").eq("week_label", week_label).execute()
             if r.data:
                 pl = json.loads(r.data[0]["stocks_json"])
                 if trend: pl["trend"] = trend
                 if radar: pl["radar"] = radar
+                if rising_stars: pl["rising_stars"] = rising_stars
                 supabase.table("weekly_scans").update({"stocks_json": json.dumps(pl)}).eq("week_label", week_label).execute()
-                print(f"  Saved: trend={len(trend or [])} stocks, radar={len(radar or [])} stocks.")
+                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}.")
         except Exception as e:
-            print(f"  Trend/Radar save error: {e}")
+            print(f"  Trend/Radar/Stars save error: {e}")
 
     # 9. Send email with track record
     send_email(top_picks, [], week_label, backtest=backtest)

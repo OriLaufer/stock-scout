@@ -190,8 +190,8 @@ export async function getServerSideProps() {
   const processed = (scans || []).map(scan => {
     try {
       const parsed = JSON.parse(scan.stocks_json)
-      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null, trend: parsed.trend || null, radar: parsed.radar || null }
-    } catch { return { ...scan, stocks: [], bonus: [], backtest: null, trend: null, radar: null } }
+      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null, trend: parsed.trend || null, radar: parsed.radar || null, rising_stars: parsed.rising_stars || null }
+    } catch { return { ...scan, stocks: [], bonus: [], backtest: null, trend: null, radar: null, rising_stars: null } }
   })
 
   const unique = []
@@ -347,14 +347,15 @@ export async function getServerSideProps() {
     backtest = { pending: true, totalScans: unique.length }
   }
 
-  // Pick The Trend + Radar from the LATEST scan that has them
+  // Pick The Trend + Radar + Rising Stars from the LATEST scan that has them
   const trend = (unique.find(s => s.trend)?.trend) || null
   const radar = (unique.find(s => s.radar)?.radar) || null
+  const risingStars = (unique.find(s => s.rising_stars)?.rising_stars) || null
 
-  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar } }
+  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -483,6 +484,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[
             ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
+            ['stars',     `⭐ ${lang === 'he' ? 'כוכבים עולים' : 'Rising Stars'}`],
             ['radar',     `🎯 ${lang === 'he' ? 'ראדאר' : 'Radar'}`],
             ['trend',     `📈 ${lang === 'he' ? 'המגמה' : 'The Trend'}`],
             ['hof',       '🏆 Hall of Fame'],
@@ -499,6 +501,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             {backtest && <BacktestCard backtest={backtest} c={c} dark={dark} lang={lang} />}
             <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} winRateByTicker={winRateByTicker} />
           </>
+        )}
+
+        {tab === 'stars' && (
+          <RisingStars stars={risingStars} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'radar' && (
@@ -1895,6 +1901,197 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
         </div>
       )}
     </>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Rising Stars — quiet base-builders across the WHOLE market.
+// Strong sustained 6-month relative strength, NOT just this week's gainers.
+// This is the scan that catches the early SanDisk before the parabolic run.
+// ──────────────────────────────────────────────────────────────────
+function RisingStars({ stars, c, dark, lang }) {
+  const he = lang === 'he'
+  const [openTicker, setOpenTicker] = useState(null)
+
+  if (!stars || stars.length === 0) {
+    return (
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 40, textAlign: 'center', color: c.muted }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>⭐</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
+          {he ? 'אין נתוני כוכבים עולים עדיין' : 'No rising stars data yet'}
+        </div>
+        <div style={{ fontSize: 13 }}>
+          {he ? 'הרץ את "Fix Rising Stars" ב-Actions כדי לחשב.' : 'Run "Fix Rising Stars" in Actions to compute.'}
+        </div>
+      </div>
+    )
+  }
+
+  const scoreColor = (s) => s >= 70 ? '#00c853' : s >= 50 ? '#7cb342' : s >= 35 ? '#cc8800' : '#888'
+  const medals = ['🥇', '🥈', '🥉']
+  const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
+  const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
+
+  const COMPONENTS = [
+    { key: 'rs_6mo',        max: 40, label: he ? 'חוזק יחסי (6ח׳)' : 'Relative Strength (6mo)', icon: '💪' },
+    { key: 'consistency',   max: 25, label: he ? 'עקביות שבועית' : 'Weekly Consistency', icon: '📊' },
+    { key: 'trend',         max: 20, label: he ? 'אישור מגמה (מעל ממוצעים)' : 'Trend (above MAs)', icon: '📈' },
+    { key: 'still_rising',  max: 15, label: he ? 'עדיין עולה (חודש אחרון)' : 'Still Rising (1mo)', icon: '🚀' },
+  ]
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#0d2818' : '#0a3520'} 0%, ${dark ? '#155030' : '#16683f'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 32 }}>⭐</span>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+              {he ? 'כוכבים עולים — בנאים שקטים' : 'Rising Stars — Quiet Base-Builders'}
+            </div>
+            <div style={{ fontSize: 13, color: '#a8ddc0', marginTop: 4 }}>
+              {he
+                ? 'סריקת חוזק יחסי על כל השוק — מניות שמטפסות בעקביות חודשים, גם אם לא קפצו השבוע. כאן נמצא את סנדיסק הבאה לפני הריצה.'
+                : 'Full-market relative-strength scan — stocks climbing steadily for months, even if they didn\'t spike this week. This is where the next SanDisk hides before the run.'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Rows */}
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
+        {stars.map((stock, i) => {
+          const isTop3 = i < 3
+          const isOpen = openTicker === stock.ticker
+          const score = stock.rs_score || 0
+          const sc = scoreColor(score)
+          const b = stock.rs_breakdown || {}
+          const quiet = (stock.this_week_pct || 0) < 15  // didn't spike this week
+
+          return (
+            <div key={stock.ticker}>
+              <div
+                onClick={() => setOpenTicker(isOpen ? null : stock.ticker)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '16px 22px',
+                  borderBottom: isOpen ? 'none' : `1px solid ${c.border}`,
+                  background: isOpen ? (dark ? '#0d1f14' : '#f4fbf6') :
+                              isTop3 ? medalBg[i] : (i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa')),
+                  borderLeft: isTop3 ? `4px solid ${medalBorder[i]}` : '4px solid transparent',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ width: 42, textAlign: 'center', flexShrink: 0 }}>
+                  {isTop3 ? <span style={{ fontSize: 26 }}>{medals[i]}</span>
+                          : <span style={{ fontSize: 15, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
+                </div>
+
+                <div style={{ width: 200, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 17, fontWeight: 800, color: c.text }}>{stock.ticker}</span>
+                    {stock.sector && (
+                      <span style={{ fontSize: 9, fontWeight: 600, background: dark ? '#1a2a3a' : '#e8f0fa', color: dark ? '#7daaff' : '#1a4d8f', padding: '2px 7px', borderRadius: 8 }}>{stock.sector}</span>
+                    )}
+                    {quiet && (
+                      <span title={he ? 'לא קפצה השבוע — בנייה שקטה' : 'Didn\'t spike this week — quiet build'} style={{ fontSize: 9, fontWeight: 700, background: dark ? '#0d2818' : '#e3f5ea', color: '#097c3e', padding: '2px 7px', borderRadius: 8 }}>
+                        🤫 {he ? 'שקט' : 'quiet'}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 195 }}>{stock.name}</div>
+                </div>
+
+                {/* 6-month return — the headline number */}
+                <div style={{ flex: 1, minWidth: 100, textAlign: 'center' }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: stock.ret_6mo >= 0 ? '#097c3e' : '#c0392b' }}>
+                    {stock.ret_6mo >= 0 ? '+' : ''}{stock.ret_6mo}%
+                  </div>
+                  <div style={{ fontSize: 10, color: c.muted }}>{he ? '6 חודשים' : '6-month return'}</div>
+                </div>
+
+                {/* Score gauge */}
+                <div style={{ minWidth: 130, maxWidth: 200, flex: 1 }}>
+                  <div style={{ position: 'relative', height: 9, background: dark ? '#0a1520' : '#e8e8ee', borderRadius: 5, overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.min(100, score)}%`, background: `linear-gradient(90deg, ${sc}aa, ${sc})`, borderRadius: 5 }} />
+                  </div>
+                  <div style={{ fontSize: 9, color: c.muted, marginTop: 3, textAlign: 'center' }}>{he ? 'ציון בנייה' : 'base-builder score'}</div>
+                </div>
+
+                <div style={{ textAlign: 'right', minWidth: 56 }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: sc, lineHeight: 1 }}>{Math.round(score)}</div>
+                  <div style={{ fontSize: 9, color: c.muted, marginTop: 2 }}>/ 100</div>
+                </div>
+
+                <span style={{ fontSize: 14, color: c.muted, marginLeft: 4 }}>{isOpen ? '▲' : '▼'}</span>
+              </div>
+
+              {/* Expanded */}
+              {isOpen && (
+                <div style={{ background: dark ? '#091509' : '#f4fbf6', padding: '22px 28px', borderBottom: `1px solid ${c.border}`, borderLeft: `4px solid ${isTop3 ? medalBorder[i] : sc}` }}>
+                  {/* Returns strip */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 18 }}>
+                    <MetricBox label={he ? 'מחיר' : 'Price'} value={stock.price ? `$${stock.price}` : '—'} c={c} />
+                    <MetricBox label={he ? 'שווי שוק' : 'Market Cap'} value={_formatMcapShort(stock.market_cap)} c={c} />
+                    <MetricBox label={he ? 'חודש' : '1-Month'} value={stock.ret_1mo != null ? `${stock.ret_1mo >= 0 ? '+' : ''}${stock.ret_1mo}%` : '—'} color={stock.ret_1mo >= 0 ? '#097c3e' : '#c0392b'} c={c} />
+                    <MetricBox label={he ? '3 חודשים' : '3-Month'} value={stock.ret_3mo != null ? `${stock.ret_3mo >= 0 ? '+' : ''}${stock.ret_3mo}%` : '—'} color={stock.ret_3mo >= 0 ? '#097c3e' : '#c0392b'} c={c} />
+                    <MetricBox label={he ? '6 חודשים' : '6-Month'} value={stock.ret_6mo != null ? `${stock.ret_6mo >= 0 ? '+' : ''}${stock.ret_6mo}%` : '—'} color={stock.ret_6mo >= 0 ? '#097c3e' : '#c0392b'} c={c} />
+                    <MetricBox label={he ? 'שבועות חיוביים' : 'Positive Weeks'} value={stock.positive_weeks_pct != null ? `${stock.positive_weeks_pct}%` : '—'} c={c} />
+                  </div>
+
+                  {/* Trend confirmations */}
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, padding: '6px 12px', borderRadius: 8, background: stock.above_50dma ? (dark ? '#0d2818' : '#e3f5ea') : (dark ? '#2a1a1a' : '#fcebeb'), color: stock.above_50dma ? '#097c3e' : '#c0392b' }}>
+                      {stock.above_50dma ? '✓' : '✗'} {he ? 'מעל ממוצע 50 יום' : 'Above 50-day MA'}
+                    </span>
+                    <span style={{ fontSize: 12, fontWeight: 600, padding: '6px 12px', borderRadius: 8, background: stock.above_200dma ? (dark ? '#0d2818' : '#e3f5ea') : (dark ? '#2a1a1a' : '#fcebeb'), color: stock.above_200dma ? '#097c3e' : '#c0392b' }}>
+                      {stock.above_200dma ? '✓' : '✗'} {he ? 'מעל ממוצע 200 יום' : 'Above 200-day MA'}
+                    </span>
+                    {b.spike_penalty < 0 && (
+                      <span style={{ fontSize: 12, fontWeight: 600, padding: '6px 12px', borderRadius: 8, background: dark ? '#3a2a0a' : '#FAEEDA', color: '#cc8800' }}>
+                        ⚠️ {he ? 'חלק גדול מהעלייה משבוע אחד' : 'Much of the gain from one week'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Score breakdown */}
+                  <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '16px 20px' }}>
+                    <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 14 }}>
+                      ⭐ {he ? 'פירוט ציון הבנייה' : 'Base-Builder Score Breakdown'}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      {COMPONENTS.map(comp => {
+                        const val = b[comp.key] || 0
+                        const pct = comp.max > 0 ? (val / comp.max) * 100 : 0
+                        const barColor = pct >= 70 ? '#00c853' : pct >= 40 ? '#7cb342' : pct >= 15 ? '#cc8800' : c.muted
+                        return (
+                          <div key={comp.key}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                              <span style={{ fontSize: 12, color: c.text, fontWeight: 600 }}>{comp.icon} {comp.label}</span>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: barColor }}>{val.toFixed(1)} <span style={{ color: c.muted, fontWeight: 400 }}>/ {comp.max}</span></span>
+                            </div>
+                            <div style={{ position: 'relative', height: 7, background: dark ? '#0a1520' : '#e8e8ee', borderRadius: 4, overflow: 'hidden' }}>
+                              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${Math.min(100, pct)}%`, background: barColor, borderRadius: 4 }} />
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div style={{ fontSize: 11, color: c.muted, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${c.border}`, lineHeight: 1.5 }}>
+                      {he
+                        ? '⭐ ציון גבוה = מנייה שטיפסה בעקביות חודשים והכתה את השוק, גם אם לא בלטה בסריקה השבועית. בדוק אותה בעוזר החכם כדי להבין למה.'
+                        : '⭐ A high score = a stock that climbed steadily for months and beat the market, even if it never stood out in the weekly scan. Ask the AI Analyst why.'}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 

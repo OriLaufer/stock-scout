@@ -46,6 +46,7 @@ async function buildContext() {
         stocks: p.stocks || p,
         trend: p.trend || null,
         radar: p.radar || null,
+        rising_stars: p.rising_stars || null,
         backtest: p.backtest || null,
       }
     } catch { return null }
@@ -62,6 +63,7 @@ async function buildContext() {
   const latest = unique[0]
   const trend = unique.find(u => u.trend)?.trend || null
   const radar = unique.find(u => u.radar)?.radar || null
+  const risingStars = unique.find(u => u.rising_stars)?.rising_stars || null
 
   // Per-ticker FULL history across all scans — every week it appeared, with the
   // exact date and the move. This is the raw material the analyst investigates:
@@ -116,6 +118,20 @@ async function buildContext() {
         `revenue growth ${r.revenue_growth_pct != null ? r.revenue_growth_pct + '% YoY' : 'N/A'} | ` +
         `${r.appearances} scan appearances | mcap ${r.market_cap ? '$' + (r.market_cap / 1e9).toFixed(2) + 'B' : '?'} | sector ${r.sector || '?'} | ` +
         `[RS ${b.relative_strength}/35, rev ${b.revenue_growth}/20, persist ${b.persistence}/15, accel ${b.acceleration}/15, room ${b.smallcap_room}/10, sector ${b.sector_heat}/5]\n`
+    }
+  }
+
+  // Rising Stars (quiet base-builders — full-market relative strength)
+  if (risingStars) {
+    text += `\n=== RISING STARS — quiet base-builders (full-market 6mo relative-strength scan, NOT just weekly gainers) ===\n`
+    text += `These climbed steadily for months and beat the market — the early-SanDisk pattern. May not appear in the weekly scan at all.\n`
+    for (const s of risingStars) {
+      text += `${s.ticker} (${s.name || ''}) | base-builder score ${s.rs_score}/100 | ` +
+        `6mo ${s.ret_6mo}% / 3mo ${s.ret_3mo}% / 1mo ${s.ret_1mo}% | ` +
+        `${s.positive_weeks_pct}% positive weeks | ` +
+        `${s.above_50dma ? 'above' : 'below'} 50dma, ${s.above_200dma ? 'above' : 'below'} 200dma | ` +
+        `mcap ${s.market_cap ? '$' + (s.market_cap / 1e9).toFixed(2) + 'B' : '?'} | sector ${s.sector || '?'} | ` +
+        `this week ${s.this_week_pct >= 0 ? '+' : ''}${s.this_week_pct}%\n`
     }
   }
 
