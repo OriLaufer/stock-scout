@@ -482,7 +482,6 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         {/* Tab switcher */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[
-            ['brain',     `🧠 ${lang === 'he' ? 'העוזר' : 'AI Analyst'}`],
             ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
             ['radar',     `🎯 ${lang === 'he' ? 'ראדאר' : 'Radar'}`],
             ['trend',     `📈 ${lang === 'he' ? 'המגמה' : 'The Trend'}`],
@@ -500,10 +499,6 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             {backtest && <BacktestCard backtest={backtest} c={c} dark={dark} lang={lang} />}
             <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} winRateByTicker={winRateByTicker} />
           </>
-        )}
-
-        {tab === 'brain' && (
-          <AIAnalyst journal={journal} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'radar' && (
@@ -598,6 +593,9 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
         </>)}
       </div>
+
+      {/* Floating AI Analyst — available on every tab */}
+      <FloatingAnalyst journal={journal} c={c} dark={dark} lang={lang} />
     </div>
   )
 }
@@ -1720,12 +1718,13 @@ function PriceSyncPoint({ ticker, onResolve }) {
 // ──────────────────────────────────────────────────────────────────
 
 // ──────────────────────────────────────────────────────────────────
-// AI Analyst — "the brain". A chat that reads ALL our data (weekly scan,
-// The Trend, the Radar, track record, recurring stocks) and helps the
-// user/boss find the next multi-bagger early. Backed by /api/chat.
+// Floating AI Analyst — "the brain". A chat bubble (bottom-right) on every
+// tab. Reads ALL our data (weekly scan, The Trend, the Radar, track record,
+// recurring stocks) and helps find the next multi-bagger early. /api/chat.
 // ──────────────────────────────────────────────────────────────────
-function AIAnalyst({ journal, c, dark, lang }) {
+function FloatingAnalyst({ journal, c, dark, lang }) {
   const he = lang === 'he'
+  const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -1734,18 +1733,16 @@ function AIAnalyst({ journal, c, dark, lang }) {
   const suggestions = he ? [
     'מה המניה הכי מבטיחה לטווח ארוך כרגע ולמה?',
     'איזו מניה נראית כמו סנדיסק בהתחלה — מומנטום אמיתי ולא פאמפ?',
-    'מאיזו מניה במגמה הכי כדאי להיזהר?',
     'תן לי 3 מועמדות ל-multi-bagger והסבר את ה-DNA של כל אחת',
   ] : [
-    'Which stock is the most promising long-term right now, and why?',
+    'Which stock is most promising long-term right now, and why?',
     'Which stock looks like an early SanDisk — real momentum, not a pump?',
-    'Which trending stock should I be most cautious about?',
     'Give me 3 multi-bagger candidates and explain each one\'s DNA',
   ]
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-  }, [messages, loading])
+  }, [messages, loading, open])
 
   async function send(text) {
     const content = (text ?? input).trim()
@@ -1769,118 +1766,130 @@ function AIAnalyst({ journal, c, dark, lang }) {
     }
   }
 
-  return (
-    <div style={{ marginBottom: 24 }}>
-      {/* Header */}
-      <div style={{
-        background: `linear-gradient(135deg, ${dark ? '#0d2030' : '#0a2540'} 0%, ${dark ? '#10384a' : '#16486b'} 100%)`,
-        borderRadius: '14px 14px 0 0', padding: '22px 28px',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span style={{ fontSize: 30 }}>🧠</span>
-          <div>
-            <div style={{ fontSize: 21, fontWeight: 800, color: 'white' }}>
-              {he ? 'העוזר החכם' : 'AI Analyst'}
-            </div>
-            <div style={{ fontSize: 13, color: '#a8c5dd', marginTop: 3 }}>
-              {he
-                ? 'קרא את כל הנתונים שלנו — סריקות, מגמה, ראדאר. שאל אותו מה לקנות, ממה להיזהר, ומי ה-multi-bagger הבא.'
-                : 'Reads all our data — scans, trend, radar. Ask what to buy, what to avoid, who\'s the next multi-bagger.'}
-            </div>
-          </div>
-        </div>
-      </div>
+  const ACCENT = '#16486b'
+  const sideStyle = he ? { left: 24 } : { right: 24 }
 
-      {/* Chat area */}
-      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderTop: 'none', borderRadius: '0 0 14px 14px', display: 'flex', flexDirection: 'column', height: 560 }}>
-        {/* Messages */}
-        <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '20px 22px' }}>
-          {messages.length === 0 ? (
-            <div style={{ textAlign: 'center', paddingTop: 30 }}>
-              <div style={{ fontSize: 44, marginBottom: 12 }}>💬</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
-                {he ? 'שאל אותי כל דבר על המניות שלנו' : 'Ask me anything about our stocks'}
-              </div>
-              <div style={{ fontSize: 13, color: c.muted, marginBottom: 24 }}>
-                {he ? 'אני מכיר את כל הנתונים — בחר שאלה או כתוב משלך' : 'I know all the data — pick a question or write your own'}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 520, margin: '0 auto' }}>
-                {suggestions.map((s, i) => (
-                  <button key={i} onClick={() => send(s)} style={{
-                    textAlign: he ? 'right' : 'left', padding: '12px 16px',
-                    borderRadius: 10, border: `1px solid ${c.border}`,
-                    background: dark ? '#12122a' : '#f7f9fc', color: c.text,
-                    fontSize: 13.5, cursor: 'pointer', fontWeight: 500, lineHeight: 1.4,
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor = '#16486b'}
-                  onMouseLeave={e => e.currentTarget.style.borderColor = c.border}>
-                    💡 {s}
-                  </button>
-                ))}
+  return (
+    <>
+      {/* Bubble button */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={he ? 'העוזר החכם' : 'AI Analyst'}
+        style={{
+          position: 'fixed', bottom: 24, ...sideStyle, zIndex: 1000,
+          width: 62, height: 62, borderRadius: '50%', border: 'none',
+          background: `linear-gradient(135deg, ${ACCENT}, #1f6ea0)`,
+          color: 'white', fontSize: 28, cursor: 'pointer',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
+          display: open ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+        🧠
+      </button>
+
+      {/* Chat panel */}
+      {open && (
+        <div style={{
+          position: 'fixed', bottom: 24, ...sideStyle, zIndex: 1001,
+          width: 'min(420px, calc(100vw - 32px))',
+          height: 'min(620px, calc(100vh - 48px))',
+          background: c.card, borderRadius: 16,
+          border: `1px solid ${c.border}`,
+          boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        }}>
+          {/* Header */}
+          <div style={{
+            background: `linear-gradient(135deg, ${dark ? '#0d2030' : '#0a2540'} 0%, ${dark ? '#10384a' : '#16486b'} 100%)`,
+            padding: '16px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 24 }}>🧠</span>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: 'white' }}>{he ? 'העוזר החכם' : 'AI Analyst'}</div>
+                <div style={{ fontSize: 11, color: '#a8c5dd' }}>{he ? 'מכיר את כל הנתונים שלנו' : 'Knows all our data'}</div>
               </div>
             </div>
-          ) : (
-            messages.map((m, i) => (
-              <div key={i} style={{
-                display: 'flex',
-                justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
-                marginBottom: 14,
-              }}>
-                <div style={{
-                  maxWidth: '82%',
-                  background: m.role === 'user' ? '#16486b' : (dark ? '#12122a' : '#f3f5f9'),
-                  color: m.role === 'user' ? 'white' : c.text,
-                  padding: '12px 16px', borderRadius: 14,
-                  fontSize: 14, lineHeight: 1.6, whiteSpace: 'pre-wrap',
-                  border: m.role === 'assistant' ? `1px solid ${c.border}` : 'none',
-                }}>
-                  {m.role === 'assistant' && <div style={{ fontSize: 11, fontWeight: 700, color: '#16a0c5', marginBottom: 4 }}>🧠 {he ? 'העוזר' : 'Analyst'}</div>}
-                  {m.content}
+            <button onClick={() => setOpen(false)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 16 }}>✕</button>
+          </div>
+
+          {/* Messages */}
+          <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 16px' }}>
+            {messages.length === 0 ? (
+              <div style={{ textAlign: 'center', paddingTop: 16 }}>
+                <div style={{ fontSize: 36, marginBottom: 10 }}>💬</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: c.text, marginBottom: 4 }}>
+                  {he ? 'שאל אותי כל דבר על המניות' : 'Ask me anything about the stocks'}
+                </div>
+                <div style={{ fontSize: 12, color: c.muted, marginBottom: 18 }}>
+                  {he ? 'בחר שאלה או כתוב משלך' : 'Pick a question or write your own'}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {suggestions.map((s, i) => (
+                    <button key={i} onClick={() => send(s)} style={{
+                      textAlign: he ? 'right' : 'left', padding: '10px 13px',
+                      borderRadius: 10, border: `1px solid ${c.border}`,
+                      background: dark ? '#12122a' : '#f7f9fc', color: c.text,
+                      fontSize: 12.5, cursor: 'pointer', fontWeight: 500, lineHeight: 1.4,
+                    }}>💡 {s}</button>
+                  ))}
                 </div>
               </div>
-            ))
-          )}
-          {loading && (
-            <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 14 }}>
-              <div style={{ background: dark ? '#12122a' : '#f3f5f9', color: c.muted, padding: '12px 16px', borderRadius: 14, fontSize: 14, border: `1px solid ${c.border}` }}>
-                🧠 {he ? 'חושב...' : 'Thinking...'}
+            ) : (
+              messages.map((m, i) => (
+                <div key={i} style={{
+                  display: 'flex',
+                  justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start',
+                  marginBottom: 12,
+                }}>
+                  <div style={{
+                    maxWidth: '88%',
+                    background: m.role === 'user' ? ACCENT : (dark ? '#12122a' : '#f3f5f9'),
+                    color: m.role === 'user' ? 'white' : c.text,
+                    padding: '10px 13px', borderRadius: 12,
+                    fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap',
+                    border: m.role === 'assistant' ? `1px solid ${c.border}` : 'none',
+                  }}>
+                    {m.role === 'assistant' && <div style={{ fontSize: 10, fontWeight: 700, color: '#16a0c5', marginBottom: 3 }}>🧠 {he ? 'העוזר' : 'Analyst'}</div>}
+                    {m.content}
+                  </div>
+                </div>
+              ))
+            )}
+            {loading && (
+              <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
+                <div style={{ background: dark ? '#12122a' : '#f3f5f9', color: c.muted, padding: '10px 13px', borderRadius: 12, fontSize: 13.5, border: `1px solid ${c.border}` }}>
+                  🧠 {he ? 'חושב...' : 'Thinking...'}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        {/* Input */}
-        <div style={{ borderTop: `1px solid ${c.border}`, padding: '14px 18px', display: 'flex', gap: 10 }}>
-          <input
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-            placeholder={he ? 'כתוב שאלה...' : 'Type a question...'}
-            disabled={loading}
-            style={{
-              flex: 1, padding: '12px 16px', borderRadius: 10,
-              border: `1px solid ${c.border}`, background: dark ? '#0f0f1a' : '#fff',
-              color: c.text, fontSize: 14, outline: 'none',
-            }}
-          />
-          <button onClick={() => send()} disabled={loading || !input.trim()} style={{
-            padding: '0 22px', borderRadius: 10, border: 'none',
-            background: loading || !input.trim() ? c.muted : '#16486b',
-            color: 'white', fontWeight: 800, fontSize: 14,
-            cursor: loading || !input.trim() ? 'default' : 'pointer',
-          }}>
-            {he ? 'שלח' : 'Send'}
-          </button>
+          {/* Input */}
+          <div style={{ borderTop: `1px solid ${c.border}`, padding: '12px 14px', display: 'flex', gap: 8 }}>
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+              placeholder={he ? 'כתוב שאלה...' : 'Type a question...'}
+              disabled={loading}
+              style={{
+                flex: 1, padding: '10px 13px', borderRadius: 9,
+                border: `1px solid ${c.border}`, background: dark ? '#0f0f1a' : '#fff',
+                color: c.text, fontSize: 13.5, outline: 'none',
+              }}
+            />
+            <button onClick={() => send()} disabled={loading || !input.trim()} style={{
+              padding: '0 18px', borderRadius: 9, border: 'none',
+              background: loading || !input.trim() ? c.muted : ACCENT,
+              color: 'white', fontWeight: 800, fontSize: 13.5,
+              cursor: loading || !input.trim() ? 'default' : 'pointer',
+            }}>
+              {he ? 'שלח' : 'Send'}
+            </button>
+          </div>
         </div>
-      </div>
-
-      {/* Disclaimer */}
-      <div style={{ fontSize: 11, color: c.muted, marginTop: 10, textAlign: 'center', lineHeight: 1.5 }}>
-        {he
-          ? '⚠️ העוזר מנתח את הנתונים שלנו ועוזר בקבלת החלטות — אך אינו ייעוץ השקעות. ההחלטה תמיד שלך.'
-          : '⚠️ The analyst interprets our data to support decisions — not investment advice. The decision is always yours.'}
-      </div>
-    </div>
+      )}
+    </>
   )
 }
 

@@ -5,9 +5,19 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_KEY
 )
 
-// Model + key. Key must be set in Vercel env vars (Settings → Environment Variables).
+// Key must be set in Vercel env vars (Settings → Environment Variables).
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
-const MODEL = process.env.AI_MODEL || 'claude-3-5-haiku-latest'
+
+// Smartest-first model chain. We try the most capable model available and
+// automatically fall back if a given name isn't available on the account.
+// Override the top choice with the AI_MODEL env var if you want a specific one.
+const MODEL_CANDIDATES = [
+  process.env.AI_MODEL,           // optional explicit override
+  'claude-opus-4-20250514',       // most capable
+  'claude-sonnet-4-20250514',     // strong + fast
+  'claude-3-5-sonnet-latest',     // reliable fallback
+  'claude-3-5-haiku-latest',      // last resort
+].filter(Boolean)
 
 function parseWeekEnd(label) {
   const m = (label || '').match(/(\d{2})\.(\d{2})\.(\d{4})$/)
@@ -139,12 +149,17 @@ HOW TO THINK (like a real momentum/growth analyst — O'Neil, Minervini school):
 - Be CRITICAL and honest. If something looks like a pump, say so. If the data is thin (e.g. no analyst coverage, micro-cap), flag the risk.
 - Always cite specific tickers and the actual numbers from the data.
 
-STYLE:
-- Answer in the user's language (they write in Hebrew — answer in Hebrew).
-- Be sharp and concise. Lead with the answer, then the reasoning.
-- When recommending what to look at, rank and explain WHY using the data.
-- Never invent data you weren't given. If you don't have it, say so.
-- You are a decision-support brain, not a fortune teller. Be honest about uncertainty — but still be decisive and useful.`
+HOW TO ANSWER (be the sharpest analyst they've ever worked with):
+- Answer in the user's language (they write in Hebrew — answer in Hebrew, fluent and professional).
+- Lead with a clear bottom-line answer, THEN the reasoning. Don't bury the conclusion.
+- When ranking opportunities, give each a clear verdict and a CONVICTION LEVEL (high/medium/low) with the data behind it.
+- Structure longer answers with short headers or numbered points so they're scannable.
+- Always ground claims in the actual numbers from the data (RS %, revenue growth, DNA score, appearances, weekly gains). Quote them.
+- Proactively connect dots across the datasets: e.g. "X is #1 on the Radar AND appeared 6 weeks running AND its sector has 3 peers in our scans — that's a strong confluence."
+- Think in terms of the mission: which of these could be the +1000% story, and what would confirm or kill that thesis next.
+- Flag risks honestly: thin float, no analyst coverage, single-week spike, overextension, fading volume.
+- Never invent data you weren't given. If you don't have it, say so and say what you'd want to check.
+- You are a decision-support brain, not a fortune teller. Be honest about uncertainty — but always be decisive and genuinely useful. The boss is paying for sharp judgment, not hedging.`
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
@@ -182,33 +197,45 @@ export default async function handler(req, res) {
       content: String(m.content || ''),
     }))
 
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 1500,
-        system,
-        messages: trimmed,
-      }),
-    })
-
-    if (!r.ok) {
-      const errText = await r.text()
-      console.error('Anthropic error:', r.status, errText.slice(0, 300))
-      return res.status(200).json({
-        reply: `שגיאה מה-AI (HTTP ${r.status}). בדוק שהמפתח תקין וב-Vercel. פרטים: ${errText.slice(0, 150)}`,
-        error: true,
+    // Try models smartest-first; fall through only when a model name is unavailable.
+    let lastErr = ''
+    for (let i = 0; i < MODEL_CANDIDATES.length; i++) {
+      const model = MODEL_CANDIDATES[i]
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 3500,   // room for thorough, structured analysis
+          system,
+          messages: trimmed,
+        }),
       })
-    }
 
-    const data = await r.json()
-    const reply = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
-    return res.status(200).json({ reply: reply || '(no response)' })
+      if (r.ok) {
+        const data = await r.json()
+        const reply = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
+        return res.status(200).json({ reply: reply || '(no response)', model })
+      }
+
+      const errText = await r.text()
+      lastErr = `HTTP ${r.status}: ${errText.slice(0, 200)}`
+      console.error(`Anthropic error (${model}):`, lastErr)
+      // Only fall through if this model name is the problem; otherwise stop.
+      const isModelIssue = r.status === 404 || /model/i.test(errText)
+      const hasNext = i < MODEL_CANDIDATES.length - 1
+      if (!(isModelIssue && hasNext)) {
+        return res.status(200).json({
+          reply: `שגיאה מה-AI. בדוק שהמפתח תקין ב-Vercel. פרטים: ${lastErr}`,
+          error: true,
+        })
+      }
+    }
+    return res.status(200).json({ reply: `שגיאה: לא נמצא מודל זמין. ${lastErr}`, error: true })
   } catch (e) {
     console.error('chat handler error:', e)
     return res.status(200).json({ reply: `שגיאה: ${e.message}`, error: true })
