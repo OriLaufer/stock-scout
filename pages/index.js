@@ -1758,7 +1758,7 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
         body: JSON.stringify({ messages: newMessages, journal }),
       })
       const data = await res.json()
-      setMessages([...newMessages, { role: 'assistant', content: data.reply || '(no response)' }])
+      setMessages([...newMessages, { role: 'assistant', content: data.reply || '(no response)', searched: data.searched }])
     } catch (e) {
       setMessages([...newMessages, { role: 'assistant', content: `שגיאה: ${e.message}` }])
     } finally {
@@ -1806,7 +1806,7 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
               <span style={{ fontSize: 24 }}>🧠</span>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: 'white' }}>{he ? 'העוזר החכם' : 'AI Analyst'}</div>
-                <div style={{ fontSize: 11, color: '#a8c5dd' }}>{he ? 'מכיר את כל הנתונים שלנו' : 'Knows all our data'}</div>
+                <div style={{ fontSize: 11, color: '#a8c5dd' }}>{he ? 'כל הנתונים + חיפוש חדשות חי' : 'All our data + live news search'}</div>
               </div>
             </div>
             <button onClick={() => setOpen(false)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 16 }}>✕</button>
@@ -1849,7 +1849,12 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
                     fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap',
                     border: m.role === 'assistant' ? `1px solid ${c.border}` : 'none',
                   }}>
-                    {m.role === 'assistant' && <div style={{ fontSize: 10, fontWeight: 700, color: '#16a0c5', marginBottom: 3 }}>🧠 {he ? 'העוזר' : 'Analyst'}</div>}
+                    {m.role === 'assistant' && (
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#16a0c5', marginBottom: 3, display: 'flex', gap: 6, alignItems: 'center' }}>
+                        🧠 {he ? 'העוזר' : 'Analyst'}
+                        {m.searched && <span style={{ color: c.muted, fontWeight: 600 }}>· 🔎 {he ? 'חיפש באינטרנט' : 'searched the web'}</span>}
+                      </div>
+                    )}
                     {m.content}
                   </div>
                 </div>

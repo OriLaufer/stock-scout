@@ -1,5 +1,8 @@
 import { createClient } from '@supabase/supabase-js'
 
+// Web search + Opus can take 20-40s — extend the serverless timeout.
+export const config = { maxDuration: 60 }
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_KEY
@@ -142,6 +145,14 @@ The user and their boss want to be PART of the stocks that appear in year-end "b
 YOUR DATA:
 You're given the system's full dataset each turn: the latest weekly scan (top gainers), The Trend (top 10 by compound return — what already performed), the Multi-Bagger Radar (top 10 by DNA score — forward-looking potential), the system's track record, and recurring stocks.
 
+YOUR WEB SEARCH TOOL:
+You have a live web_search tool. USE IT PROACTIVELY whenever current, real-world context would sharpen the answer — especially:
+- WHY a stock is running (recent news, earnings, FDA, contracts, M&A, sector catalysts)
+- Whether momentum has a real story behind it or is just a pump
+- Recent analyst actions, upcoming catalysts, sector trends (AI, nuclear, etc.)
+- Anything the user asks about that needs up-to-date info beyond our stored data
+Combine what you find on the web with OUR data — that's your edge. When you cite news, mention it briefly. Don't search for things you already have in the data.
+
 HOW TO THINK (like a real momentum/growth analyst — O'Neil, Minervini school):
 - The biggest winners show SUSTAINED relative strength, ACCELERATING revenue, and they PERSIST (keep showing up) — they're not one-week spikes.
 - Distinguish real momentum from pumps: a stock up huge one week then fading is a pump; a stock grinding higher week after week with a real business and growing revenue is the real thing.
@@ -213,20 +224,27 @@ export default async function handler(req, res) {
           max_tokens: 3500,   // room for thorough, structured analysis
           system,
           messages: trimmed,
+          // Native web search — Claude pulls current news/catalysts on demand.
+          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6 }],
         }),
       })
 
       if (r.ok) {
         const data = await r.json()
-        const reply = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim()
-        return res.status(200).json({ reply: reply || '(no response)', model })
+        // Collect all text blocks (final answer). Web-search runs produce
+        // intermediate tool blocks too — we keep only the text.
+        const textBlocks = (data.content || []).filter(b => b.type === 'text').map(b => b.text)
+        const reply = textBlocks.join('\n').trim()
+        // Did it actually search? (for transparency in the UI)
+        const searched = (data.content || []).some(b => b.type === 'server_tool_use' || b.type === 'web_search_tool_result')
+        return res.status(200).json({ reply: reply || '(no response)', model, searched })
       }
 
       const errText = await r.text()
       lastErr = `HTTP ${r.status}: ${errText.slice(0, 200)}`
       console.error(`Anthropic error (${model}):`, lastErr)
       // Only fall through if this model name is the problem; otherwise stop.
-      const isModelIssue = r.status === 404 || /model/i.test(errText)
+      const isModelIssue = r.status === 404 || /model|tool|web_search/i.test(errText)
       const hasNext = i < MODEL_CANDIDATES.length - 1
       if (!(isModelIssue && hasNext)) {
         return res.status(200).json({
