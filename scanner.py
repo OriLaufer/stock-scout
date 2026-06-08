@@ -1468,6 +1468,238 @@ def compute_the_trend(top_n=10, min_appearances=2, candidate_pool=20):
     return trend_data
 
 
+# ============== MULTI-BAGGER RADAR ==============
+# Goal: catch the stocks that 5x-50x over a year BEFORE the parabolic move.
+# Ranks our scan universe by "multi-bagger DNA" — the traits the legendary
+# investors (O'Neil, Minervini) look for in early-stage big winners:
+#   - Relative Strength (sustained outperformance vs the market)
+#   - Revenue growth (the real fuel — NVDA/SMCI had explosive revenue)
+#   - Persistence (keeps showing up in our scans, not a one-week spike)
+#   - Acceleration (the move is speeding up, not fading)
+#   - Small-cap room (space to multiply)
+#   - Sector tailwind (riding a megatrend)
+
+def _spy_baseline():
+    """SPY 3-month and 6-month % returns — the market benchmark for RS."""
+    try:
+        time.sleep(0.3)
+        h = yf.Ticker("SPY").history(period="6mo", interval="1d")
+        if h.index.tz is not None:
+            h.index = h.index.tz_localize(None)
+        closes = h["Close"].dropna()
+        if len(closes) < 30:
+            return 0.0, 0.0
+        now = float(closes.iloc[-1])
+        i3 = max(0, len(closes) - 63)
+        p3 = float(closes.iloc[i3])
+        p6 = float(closes.iloc[0])
+        r3 = (now - p3) / p3 * 100 if p3 > 0 else 0.0
+        r6 = (now - p6) / p6 * 100 if p6 > 0 else 0.0
+        return round(r3, 1), round(r6, 1)
+    except Exception:
+        return 0.0, 0.0
+
+
+def _radar_metrics(ticker, spy_3mo, spy_6mo):
+    """Fetch 6-month price history + fundamentals for one candidate."""
+    out = {}
+    try:
+        obj = yf.Ticker(ticker)
+        time.sleep(0.4)
+        hist = obj.history(period="6mo", interval="1d")
+        if hist.index.tz is not None:
+            hist.index = hist.index.tz_localize(None)
+        closes = hist["Close"].dropna()
+        if len(closes) >= 30:
+            price_now = float(closes.iloc[-1])
+            i3 = max(0, len(closes) - 63)
+            p3 = float(closes.iloc[i3])
+            p6 = float(closes.iloc[0])
+            ret_3mo = (price_now - p3) / p3 * 100 if p3 > 0 else 0.0
+            ret_6mo = (price_now - p6) / p6 * 100 if p6 > 0 else 0.0
+            out["ret_3mo"] = round(ret_3mo, 1)
+            out["ret_6mo"] = round(ret_6mo, 1)
+            out["rs_3mo"]  = round(ret_3mo - spy_3mo, 1)
+            out["rs_6mo"]  = round(ret_6mo - spy_6mo, 1)
+            out["price"]   = round(price_now, 2)
+
+        # Fundamentals from info (Yahoo pre-computes these — reliable enough)
+        info = obj.info
+        out["name"]   = info.get("longName") or info.get("shortName") or ticker
+        out["sector"] = info.get("sector") or ""
+        mc = info.get("marketCap")
+        if mc:
+            out["market_cap"] = int(mc)
+        rg = info.get("revenueGrowth")
+        if rg is not None:
+            out["revenue_growth_pct"] = round(float(rg) * 100, 1)
+        eg = info.get("earningsGrowth")
+        if eg is None:
+            eg = info.get("earningsQuarterlyGrowth")
+        if eg is not None:
+            out["earnings_growth_pct"] = round(float(eg) * 100, 1)
+    except Exception as e:
+        print(f"    {ticker}: radar metric error — {type(e).__name__}")
+    return out
+
+
+def _dna_score(m, appearances, accel, sector_peers):
+    """Compute a 0-100 'multi-bagger DNA' score from the metrics.
+    Returns (total, breakdown_dict)."""
+    parts = {}
+
+    # Relative Strength (0-35) — the #1 trait. 6mo weighted heavier than 3mo.
+    rs6 = m.get("rs_6mo", 0) or 0
+    rs3 = m.get("rs_3mo", 0) or 0
+    rs_pts = min(20, max(0, rs6 / 10)) + min(15, max(0, rs3 / 8))  # +200%/6mo & +120%/3mo excess = full
+    parts["relative_strength"] = round(rs_pts, 1)
+
+    # Revenue growth (0-20) — the fuel. 100% YoY = full.
+    rev_pts = 0
+    rg = m.get("revenue_growth_pct")
+    if rg is not None:
+        rev_pts = min(20, max(0, rg / 5))
+    parts["revenue_growth"] = round(rev_pts, 1)
+
+    # Persistence (0-15) — keeps appearing in our scans
+    pers_pts = min(15, appearances * 3)
+    parts["persistence"] = pers_pts
+
+    # Acceleration (0-15) — the move is speeding up
+    acc_pts = min(15, max(0, accel))
+    parts["acceleration"] = round(acc_pts, 1)
+
+    # Small-cap room (0-10) — space to multiply
+    mc = m.get("market_cap", 0)
+    if mc:
+        room = 10 if mc < 2e9 else 7 if mc < 10e9 else 4 if mc < 50e9 else 1
+    else:
+        room = 5
+    parts["smallcap_room"] = room
+
+    # Sector tailwind (0-5)
+    heat = min(5, sector_peers * 2)
+    parts["sector_heat"] = heat
+
+    total = round(min(100, sum(parts.values())), 1)
+    return total, parts
+
+
+def compute_multibagger_radar(top_n=10, candidate_pool=30):
+    """Rank our scan universe by multi-bagger DNA. Runs every scan, fully
+    dynamic. Returns top_n stocks with their DNA score + component breakdown."""
+    try:
+        r = supabase.table("weekly_scans").select("*").order("created_at", desc=True).limit(100).execute()
+        scans = r.data or []
+    except Exception as e:
+        print(f"Radar: fetch error: {e}")
+        return []
+
+    # Build per-ticker scan history
+    ticker_history = {}   # ticker -> {week_label: change_pct}
+    sector_lookup  = {}
+    seen_labels    = set()
+    for scan in scans:
+        try:
+            label = scan["week_label"]
+            seen_labels.add(label)
+            payload = json.loads(scan["stocks_json"])
+            stocks = payload.get("stocks", payload) if isinstance(payload, dict) else payload
+            if not isinstance(stocks, list):
+                continue
+            for s in stocks:
+                if not isinstance(s, dict):
+                    continue
+                tk = s.get("ticker")
+                if not tk:
+                    continue
+                ticker_history.setdefault(tk, {})[label] = s.get("change_pct", 0)
+                if s.get("sector"):
+                    sector_lookup[tk] = s["sector"]
+        except Exception:
+            continue
+
+    if not ticker_history:
+        print("Radar: no ticker history")
+        return []
+
+    def lbl_friday(lbl):
+        mm = re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", lbl)
+        return datetime(int(mm.group(3)), int(mm.group(2)), int(mm.group(1))) if mm else datetime(2000, 1, 1)
+
+    # Cheap proxy ranking to pick candidate pool: appearances * avg gain
+    proxies = {}
+    for tk, hist in ticker_history.items():
+        if len(hist) < 2:
+            continue
+        avg_gain = sum(hist.values()) / len(hist)
+        proxies[tk] = len(hist) * max(avg_gain, 0)
+    candidates = sorted(proxies.items(), key=lambda x: x[1], reverse=True)[:candidate_pool]
+    if not candidates:
+        print("Radar: no candidates with >=2 appearances")
+        return []
+
+    # Sector peer counts across the candidate set
+    sector_counts = {}
+    for tk, _ in candidates:
+        sec = sector_lookup.get(tk, "")
+        if sec:
+            sector_counts[sec] = sector_counts.get(sec, 0) + 1
+
+    print(f"Radar: scoring {len(candidates)} candidates...")
+    spy_3mo, spy_6mo = _spy_baseline()
+    print(f"  SPY baseline: 3mo {spy_3mo:+.1f}% / 6mo {spy_6mo:+.1f}%")
+
+    radar = []
+    for tk, _ in candidates:
+        m = _radar_metrics(tk, spy_3mo, spy_6mo)
+        if not m:
+            continue
+        hist = ticker_history.get(tk, {})
+        appearances = len(hist)
+
+        # Acceleration: recent half of our weekly gains vs earlier half
+        ordered = [hist[k] for k in sorted(hist.keys(), key=lbl_friday)]
+        accel = 0
+        if len(ordered) >= 4:
+            mid = len(ordered) // 2
+            early = sum(ordered[:mid]) / mid
+            late  = sum(ordered[mid:]) / (len(ordered) - mid)
+            accel = late - early
+
+        sec = m.get("sector") or sector_lookup.get(tk, "")
+        sector_peers = max(0, sector_counts.get(sec, 0) - 1)
+
+        score, parts = _dna_score(m, appearances, accel, sector_peers)
+        radar.append({
+            "ticker": tk,
+            "name": m.get("name", tk),
+            "dna_score": score,
+            "dna_breakdown": parts,
+            "sector": sec,
+            "market_cap": m.get("market_cap"),
+            "price": m.get("price"),
+            "ret_3mo": m.get("ret_3mo"),
+            "ret_6mo": m.get("ret_6mo"),
+            "rs_3mo": m.get("rs_3mo"),
+            "rs_6mo": m.get("rs_6mo"),
+            "revenue_growth_pct": m.get("revenue_growth_pct"),
+            "earnings_growth_pct": m.get("earnings_growth_pct"),
+            "appearances": appearances,
+            "acceleration": round(accel, 1),
+        })
+
+    radar.sort(key=lambda x: x["dna_score"], reverse=True)
+    radar = radar[:top_n]
+    if radar:
+        print(f"  Radar top {len(radar)} by DNA score:")
+        for i, x in enumerate(radar, 1):
+            print(f"    #{i:2} {x['ticker']:7} DNA {x['dna_score']:5.1f} | "
+                  f"RS6 {x.get('rs_6mo', 0):+.0f}% | rev {x.get('revenue_growth_pct', '—')} | "
+                  f"{x['appearances']} apps")
+    return radar
+
+
 # ============== EMAIL ==============
 def send_email(stocks, bonus, week_label, backtest=None):
     returning = sum(1 for s in stocks if s.get("streak", 1) >= 2)
@@ -2008,19 +2240,25 @@ def main():
     # 7. Compute "The Trend" — top 10 by compound return across ALL scans
     print("\nComputing The Trend (top 10 by compound return)...")
     trend = compute_the_trend(top_n=10)
-    if trend:
-        # Update the just-saved row with the trend data (re-save with trend embedded)
+
+    # 8. Compute "Multi-Bagger Radar" — top 10 by DNA score (forward-looking)
+    print("\nComputing Multi-Bagger Radar (top 10 by DNA score)...")
+    radar = compute_multibagger_radar(top_n=10)
+
+    # Save trend + radar into the just-saved row
+    if trend or radar:
         try:
             r = supabase.table("weekly_scans").select("stocks_json").eq("week_label", week_label).execute()
             if r.data:
                 pl = json.loads(r.data[0]["stocks_json"])
-                pl["trend"] = trend
+                if trend: pl["trend"] = trend
+                if radar: pl["radar"] = radar
                 supabase.table("weekly_scans").update({"stocks_json": json.dumps(pl)}).eq("week_label", week_label).execute()
-                print(f"  Trend saved with {len(trend)} stocks.")
+                print(f"  Saved: trend={len(trend or [])} stocks, radar={len(radar or [])} stocks.")
         except Exception as e:
-            print(f"  Trend save error: {e}")
+            print(f"  Trend/Radar save error: {e}")
 
-    # 8. Send email with track record
+    # 9. Send email with track record
     send_email(top_picks, [], week_label, backtest=backtest)
     print(f"\n=== DONE in {int(time.time()-t_start)}s ===")
 

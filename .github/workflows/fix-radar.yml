@@ -1,0 +1,21 @@
+name: Fix Radar (one-time)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install supabase yfinance pandas requests
+      - name: Compute Multi-Bagger Radar and save
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+        run: python fix_radar.py

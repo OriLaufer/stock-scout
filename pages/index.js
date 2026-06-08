@@ -190,8 +190,8 @@ export async function getServerSideProps() {
   const processed = (scans || []).map(scan => {
     try {
       const parsed = JSON.parse(scan.stocks_json)
-      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null, trend: parsed.trend || null }
-    } catch { return { ...scan, stocks: [], bonus: [], backtest: null, trend: null } }
+      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null, trend: parsed.trend || null, radar: parsed.radar || null }
+    } catch { return { ...scan, stocks: [], bonus: [], backtest: null, trend: null, radar: null } }
   })
 
   const unique = []
@@ -347,13 +347,14 @@ export async function getServerSideProps() {
     backtest = { pending: true, totalScans: unique.length }
   }
 
-  // Pick The Trend from the LATEST scan (newest scan's trend field carries the snapshot)
-  const trend = (unique.length > 0 && unique[0].trend) ? unique[0].trend : null
+  // Pick The Trend + Radar from the LATEST scan that has them
+  const trend = (unique.find(s => s.trend)?.trend) || null
+  const radar = (unique.find(s => s.radar)?.radar) || null
 
-  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend } }
+  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -482,6 +483,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[
             ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
+            ['radar',     `🎯 ${lang === 'he' ? 'ראדאר' : 'Radar'}`],
             ['trend',     `📈 ${lang === 'he' ? 'המגמה' : 'The Trend'}`],
             ['hof',       '🏆 Hall of Fame'],
             ['watchlist', `📓 ${lang === 'he' ? 'יומן מסחר' : 'Journal'}`],
@@ -497,6 +499,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             {backtest && <BacktestCard backtest={backtest} c={c} dark={dark} lang={lang} />}
             <HallOfFame hallOfFame={hallOfFame} totalScans={totalScans} weekLabels={weekLabelsOldestFirst} c={c} dark={dark} lang={lang} buzzByTicker={buzzByTicker} winRateByTicker={winRateByTicker} />
           </>
+        )}
+
+        {tab === 'radar' && (
+          <MultiBaggerRadar radar={radar} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'trend' && (
@@ -1707,6 +1713,241 @@ function PriceSyncPoint({ ticker, onResolve }) {
 // trend visualization). Built to be the most professional tab — this
 // is where the boss decides what to look at deeply.
 // ──────────────────────────────────────────────────────────────────
+
+// ──────────────────────────────────────────────────────────────────
+// Multi-Bagger Radar — the forward-looking engine.
+// Ranks stocks by 'DNA score': the traits of stocks that 5x-50x over a
+// year BEFORE the parabolic move (relative strength, revenue growth,
+// persistence, acceleration, small-cap room, sector tailwind).
+// ──────────────────────────────────────────────────────────────────
+function MultiBaggerRadar({ radar, c, dark, lang }) {
+  const he = lang === 'he'
+  const [openTicker, setOpenTicker] = useState(null)
+
+  if (!radar || radar.length === 0) {
+    return (
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 40, textAlign: 'center', color: c.muted }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>🎯</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
+          {he ? 'אין נתוני ראדאר עדיין' : 'No radar data yet'}
+        </div>
+        <div style={{ fontSize: 13 }}>
+          {he ? 'הרץ את "Fix Radar" ב-Actions כדי לחשב.' : 'Run "Fix Radar" in Actions to compute.'}
+        </div>
+      </div>
+    )
+  }
+
+  // DNA score → color tier
+  const dnaColor = (s) => s >= 70 ? '#00c853' : s >= 50 ? '#7cb342' : s >= 35 ? '#cc8800' : '#888'
+  const dnaLabel = (s) => s >= 70 ? (he ? 'DNA חזק מאוד' : 'Strong DNA')
+                        : s >= 50 ? (he ? 'DNA טוב' : 'Good DNA')
+                        : s >= 35 ? (he ? 'DNA בינוני' : 'Moderate DNA')
+                        : (he ? 'DNA חלש' : 'Weak DNA')
+
+  // Component metadata for the breakdown bars
+  const COMPONENTS = [
+    { key: 'relative_strength', max: 35, label: he ? 'חוזק יחסי' : 'Relative Strength', hint: he ? 'ביצוע מול השוק' : 'vs the market', icon: '💪' },
+    { key: 'revenue_growth',    max: 20, label: he ? 'צמיחת הכנסות' : 'Revenue Growth', hint: he ? 'הדלק האמיתי' : 'the real fuel', icon: '📈' },
+    { key: 'persistence',       max: 15, label: he ? 'התמדה' : 'Persistence', hint: he ? 'חוזרת בסריקות' : 'recurs in scans', icon: '🔁' },
+    { key: 'acceleration',      max: 15, label: he ? 'האצה' : 'Acceleration', hint: he ? 'המהלך מתגבר' : 'move speeding up', icon: '🚀' },
+    { key: 'smallcap_room',     max: 10, label: he ? 'מקום לגדול' : 'Room to Grow', hint: he ? 'שווי שוק קטן' : 'small cap', icon: '🌱' },
+    { key: 'sector_heat',       max: 5,  label: he ? 'סקטור חם' : 'Sector Tailwind', hint: he ? 'רוח גבית' : 'megatrend', icon: '🔥' },
+  ]
+
+  const medals = ['🥇', '🥈', '🥉']
+  const medalBg = dark ? ['#2a2400', '#1e1e1e', '#1e1200'] : ['#fffdf0', '#f8f8f8', '#fff8f0']
+  const medalBorder = ['#FFD700', '#C0C0C0', '#CD7F32']
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#1a0d30' : '#2d1a4e'} 0%, ${dark ? '#2a1555' : '#3d2570'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 32 }}>🎯</span>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+              {he ? 'ראדאר Multi-Bagger' : 'Multi-Bagger Radar'}
+            </div>
+            <div style={{ fontSize: 13, color: '#c9b8e8', marginTop: 4 }}>
+              {he
+                ? 'לתפוס את המניות שיעשו פי 5-50 — לפני הריצה הגדולה. דירוג לפי "DNA" של מנצחות גדולות: חוזק יחסי, צמיחה, התמדה והאצה.'
+                : 'Catch the stocks that 5x-50x — before the run. Ranked by the DNA of big winners: relative strength, growth, persistence, acceleration.'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Rows */}
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
+        {radar.map((stock, i) => {
+          const isTop3 = i < 3
+          const isOpen = openTicker === stock.ticker
+          const score = stock.dna_score || 0
+          const scoreColor = dnaColor(score)
+          const breakdown = stock.dna_breakdown || {}
+
+          return (
+            <div key={stock.ticker}>
+              {/* Collapsed row */}
+              <div
+                onClick={() => setOpenTicker(isOpen ? null : stock.ticker)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '16px 22px',
+                  borderBottom: isOpen ? 'none' : `1px solid ${c.border}`,
+                  background: isOpen ? (dark ? '#15102a' : '#f7f4fc') :
+                              isTop3 ? medalBg[i] : (i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa')),
+                  borderLeft: isTop3 ? `4px solid ${medalBorder[i]}` : '4px solid transparent',
+                  cursor: 'pointer', transition: 'all .15s',
+                }}
+              >
+                {/* Rank */}
+                <div style={{ width: 42, textAlign: 'center', flexShrink: 0 }}>
+                  {isTop3
+                    ? <span style={{ fontSize: 26 }}>{medals[i]}</span>
+                    : <span style={{ fontSize: 15, fontWeight: 700, color: c.muted }}>#{i + 1}</span>}
+                </div>
+
+                {/* Ticker + name + sector */}
+                <div style={{ width: 200, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 17, fontWeight: 800, color: c.text }}>{stock.ticker}</span>
+                    {stock.sector && (
+                      <span style={{
+                        fontSize: 9, fontWeight: 600,
+                        background: dark ? '#2a1a3a' : '#f0e8fa',
+                        color: dark ? '#c9a0ff' : '#6a1a9f',
+                        padding: '2px 7px', borderRadius: 8,
+                        border: `1px solid ${dark ? '#3a2a5a' : '#d8c8f0'}`,
+                      }}>{stock.sector}</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 195 }}>
+                    {stock.name}
+                  </div>
+                </div>
+
+                {/* DNA score gauge — the centerpiece */}
+                <div style={{ flex: 1, minWidth: 120, maxWidth: 320 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, color: c.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                      {he ? 'ציון DNA' : 'DNA Score'}
+                    </span>
+                    <span style={{ fontSize: 11, color: scoreColor, fontWeight: 700 }}>{dnaLabel(score)}</span>
+                  </div>
+                  <div style={{ position: 'relative', height: 10, background: dark ? '#0a1520' : '#e8e8ee', borderRadius: 5, overflow: 'hidden' }}>
+                    <div style={{
+                      position: 'absolute', left: 0, top: 0, bottom: 0,
+                      width: `${Math.min(100, score)}%`,
+                      background: `linear-gradient(90deg, ${scoreColor}aa, ${scoreColor})`,
+                      borderRadius: 5,
+                      boxShadow: `0 0 8px ${scoreColor}66`,
+                    }} />
+                  </div>
+                </div>
+
+                {/* Big DNA number */}
+                <div style={{ textAlign: 'right', minWidth: 70 }}>
+                  <div style={{ fontSize: 26, fontWeight: 800, color: scoreColor, lineHeight: 1 }}>
+                    {Math.round(score)}
+                  </div>
+                  <div style={{ fontSize: 9, color: c.muted, marginTop: 2 }}>/ 100</div>
+                </div>
+
+                <span style={{ fontSize: 14, color: c.muted, marginLeft: 4 }}>{isOpen ? '▲' : '▼'}</span>
+              </div>
+
+              {/* Expanded — DNA breakdown + metrics */}
+              {isOpen && (
+                <div style={{
+                  background: dark ? '#0d0a1a' : '#f7f4fc',
+                  padding: '24px 28px',
+                  borderBottom: `1px solid ${c.border}`,
+                  borderLeft: `4px solid ${isTop3 ? medalBorder[i] : scoreColor}`,
+                }}>
+                  {/* Top metrics strip */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 12, marginBottom: 20 }}>
+                    <MetricBox label={he ? 'מחיר' : 'Price'} value={stock.price ? `$${stock.price}` : '—'} c={c} />
+                    <MetricBox label={he ? 'שווי שוק' : 'Market Cap'} value={_formatMcapShort(stock.market_cap)} c={c} />
+                    <MetricBox
+                      label={he ? 'תשואת 6 ח׳' : '6-Month Return'}
+                      value={stock.ret_6mo != null ? `${stock.ret_6mo >= 0 ? '+' : ''}${stock.ret_6mo}%` : '—'}
+                      color={stock.ret_6mo >= 0 ? '#097c3e' : '#c0392b'} c={c} />
+                    <MetricBox
+                      label={he ? 'חוזק מול שוק (6ח׳)' : 'RS vs Market (6mo)'}
+                      value={stock.rs_6mo != null ? `${stock.rs_6mo >= 0 ? '+' : ''}${stock.rs_6mo}%` : '—'}
+                      color={stock.rs_6mo >= 0 ? '#097c3e' : '#c0392b'} c={c}
+                      hint={he ? 'כמה הכתה את S&P' : 'beat S&P by'} />
+                    <MetricBox
+                      label={he ? 'צמיחת הכנסות' : 'Revenue Growth'}
+                      value={stock.revenue_growth_pct != null ? `${stock.revenue_growth_pct >= 0 ? '+' : ''}${stock.revenue_growth_pct}%` : (he ? 'אין נתון' : 'N/A')}
+                      color={stock.revenue_growth_pct > 0 ? '#097c3e' : c.text} c={c}
+                      hint={he ? 'שנה-על-שנה' : 'YoY'} />
+                    <MetricBox
+                      label={he ? 'הופעות בסריקה' : 'Scan Appearances'}
+                      value={stock.appearances} c={c} />
+                  </div>
+
+                  {/* DNA breakdown bars */}
+                  <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '16px 20px' }}>
+                    <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 14 }}>
+                      🧬 {he ? 'פירוט ציון ה-DNA' : 'DNA Score Breakdown'}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      {COMPONENTS.map(comp => {
+                        const val = breakdown[comp.key] || 0
+                        const pct = comp.max > 0 ? (val / comp.max) * 100 : 0
+                        const barColor = pct >= 70 ? '#00c853' : pct >= 40 ? '#7cb342' : pct >= 15 ? '#cc8800' : c.muted
+                        return (
+                          <div key={comp.key}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+                              <span style={{ fontSize: 12, color: c.text, fontWeight: 600 }}>
+                                {comp.icon} {comp.label}
+                                <span style={{ fontSize: 10, color: c.muted, marginLeft: 6 }}>{comp.hint}</span>
+                              </span>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: barColor }}>
+                                {val.toFixed(1)} <span style={{ color: c.muted, fontWeight: 400 }}>/ {comp.max}</span>
+                              </span>
+                            </div>
+                            <div style={{ position: 'relative', height: 7, background: dark ? '#0a1520' : '#e8e8ee', borderRadius: 4, overflow: 'hidden' }}>
+                              <div style={{
+                                position: 'absolute', left: 0, top: 0, bottom: 0,
+                                width: `${Math.min(100, pct)}%`,
+                                background: barColor, borderRadius: 4,
+                              }} />
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div style={{ fontSize: 11, color: c.muted, marginTop: 14, paddingTop: 12, borderTop: `1px solid ${c.border}`, lineHeight: 1.5 }}>
+                      {he
+                        ? '🎯 ציון גבוה = למנייה יש את התכונות של מנצחת גדולה בשלב מוקדם. זה לא הבטחה — זה זיהוי דפוס.'
+                        : '🎯 A high score means the stock has early-stage big-winner traits. Not a promise — pattern recognition.'}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function MetricBox({ label, value, color, hint, c }) {
+  return (
+    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '12px 14px' }}>
+      <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', letterSpacing: '.05em', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 17, fontWeight: 800, color: color || c.text, marginTop: 3 }}>{value}</div>
+      {hint && <div style={{ fontSize: 10, color: c.muted, marginTop: 1 }}>{hint}</div>}
+    </div>
+  )
+}
 
 // Analyst recommendation → label + color
 function _recBadge(rec) {
