@@ -63,12 +63,19 @@ async function buildContext() {
   const trend = unique.find(u => u.trend)?.trend || null
   const radar = unique.find(u => u.radar)?.radar || null
 
-  // Per-ticker appearance history across all scans (the momentum signal)
+  // Per-ticker FULL history across all scans — every week it appeared, with the
+  // exact date and the move. This is the raw material the analyst investigates:
+  // it can pinpoint a single +60% week and search the web for what drove it.
   const history = {}
   for (const sc of unique) {
     for (const st of (sc.stocks || [])) {
       if (!st?.ticker) continue
-      if (!history[st.ticker]) history[st.ticker] = { name: st.name, sector: st.sector, weeks: [] }
+      if (!history[st.ticker]) {
+        history[st.ticker] = {
+          name: st.name, sector: st.sector,
+          market_cap: st.market_cap, weeks: [],
+        }
+      }
       history[st.ticker].weeks.push({ week: sc.week, gain: st.change_pct })
     }
   }
@@ -121,16 +128,27 @@ async function buildContext() {
       `Across ${bts.length} evaluated weeks, the top-5 picks rose the following week ${wins}/${total} times (${total ? Math.round(wins / total * 100) : 0}%).\n`
   }
 
-  // Recurring stocks (appeared 3+ times — the persistence signal)
-  const recurring = Object.entries(history)
-    .filter(([, h]) => h.weeks.length >= 3)
-    .sort((a, b) => b[1].weeks.length - a[1].weeks.length)
-    .slice(0, 20)
-  if (recurring.length) {
-    text += `\n=== RECURRING STOCKS (appeared 3+ times — persistence = potential sustained momentum) ===\n`
-    for (const [tk, h] of recurring) {
-      const gains = h.weeks.map(w => `${w.gain > 0 ? '+' : ''}${w.gain}%`).join(', ')
-      text += `${tk} (${h.name || ''}, ${h.sector || '?'}): ${h.weeks.length} appearances — weekly gains: ${gains}\n`
+  // FULL stock history — EVERY stock that appeared, with its complete
+  // week-by-week timeline (date + move). Sorted by biggest single-week move
+  // first so the most investigable jumps are at the top. This lets the analyst
+  // pick ANY notable move (even a one-time +60%) and web-search what caused it.
+  const allTickers = Object.entries(history).map(([tk, h]) => {
+    const maxMove = Math.max(...h.weeks.map(w => Math.abs(w.gain || 0)))
+    return { tk, h, maxMove }
+  }).sort((a, b) => b.maxMove - a.maxMove).slice(0, 80)
+
+  if (allTickers.length) {
+    text += `\n=== FULL STOCK HISTORY (every stock we've caught, full week-by-week timeline) ===\n`
+    text += `Format: TICKER (name, sector, mcap): week-range → move | week-range → move ...\n`
+    text += `Use this to investigate specific moves. A big one-time move on a date is a lead — search what happened that week.\n`
+    for (const { tk, h } of allTickers) {
+      const mc = h.market_cap ? '$' + (h.market_cap / 1e9).toFixed(2) + 'B' : '?'
+      const timeline = h.weeks
+        .slice()
+        .sort((a, b) => parseWeekEnd(a.week) - parseWeekEnd(b.week))
+        .map(w => `${w.week} → ${w.gain > 0 ? '+' : ''}${w.gain}%`)
+        .join(' | ')
+      text += `${tk} (${h.name || ''}, ${h.sector || '?'}, ${mc}): ${timeline}\n`
     }
   }
 
@@ -152,6 +170,17 @@ You have a live web_search tool. USE IT PROACTIVELY whenever current, real-world
 - Recent analyst actions, upcoming catalysts, sector trends (AI, nuclear, etc.)
 - Anything the user asks about that needs up-to-date info beyond our stored data
 Combine what you find on the web with OUR data — that's your edge. When you cite news, mention it briefly. Don't search for things you already have in the data.
+
+HOW TO INVESTIGATE A STOCK (this is the difference between a robot and an analyst):
+Do NOT just report counts like "appeared 6 times." INVESTIGATE.
+- Look at the stock's FULL HISTORY timeline and find its NOTABLE MOVES — e.g. a single +60% week on a specific date.
+- For each notable move, WEB-SEARCH what actually happened that week: the catalyst, the news, the event. Pinpoint it using the week's date range.
+- Then reason like an investor deciding where to put real money:
+  * What drove the move? Is it a durable catalyst (new product, contract, secular demand) or a one-off (short squeeze, meme, dilution pop)?
+  * Is the story still alive, or already priced in?
+  * What's the setup RIGHT NOW — entry, risk, what would confirm the thesis, what would kill it?
+- A one-time +60% with a real, ongoing catalyst can be a BETTER opportunity than 6 quiet appearances. Judge the STORY, not just the frequency.
+- Your job is to help decide on an actual investment — give a clear thesis, conviction level, and what to watch. Think hard. Be the analyst, not the spreadsheet.
 
 HOW TO THINK (like a real momentum/growth analyst — O'Neil, Minervini school):
 - The biggest winners show SUSTAINED relative strength, ACCELERATING revenue, and they PERSIST (keep showing up) — they're not one-week spikes.
