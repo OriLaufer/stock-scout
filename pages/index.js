@@ -190,8 +190,8 @@ export async function getServerSideProps() {
   const processed = (scans || []).map(scan => {
     try {
       const parsed = JSON.parse(scan.stocks_json)
-      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null, trend: parsed.trend || null, radar: parsed.radar || null, rising_stars: parsed.rising_stars || null }
-    } catch { return { ...scan, stocks: [], bonus: [], backtest: null, trend: null, radar: null, rising_stars: null } }
+      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null, trend: parsed.trend || null, radar: parsed.radar || null, rising_stars: parsed.rising_stars || null, verdict: parsed.verdict || null }
+    } catch { return { ...scan, stocks: [], bonus: [], backtest: null, trend: null, radar: null, rising_stars: null, verdict: null } }
   })
 
   const unique = []
@@ -351,11 +351,12 @@ export async function getServerSideProps() {
   const trend = (unique.find(s => s.trend)?.trend) || null
   const radar = (unique.find(s => s.radar)?.radar) || null
   const risingStars = (unique.find(s => s.rising_stars)?.rising_stars) || null
+  const verdict = (unique.find(s => s.verdict)?.verdict) || null
 
-  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars } }
+  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -521,6 +522,9 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
         {tab === 'weekly' && (<>
 
+        {/* THE VERDICT — the analyst's real written opinion, front and center */}
+        <VerdictCard verdict={verdict} c={c} dark={dark} lang={lang} />
+
         {/* Sector rotation heatmap */}
         {stocks.some(s => s.sector) && (
           <SectorHeatmap stocks={stocks} c={c} dark={dark} sectorFilter={sectorFilter} setSectorFilter={setSectorFilter} lang={lang} />
@@ -602,6 +606,81 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
       {/* Floating AI Analyst — available on every tab */}
       <FloatingAnalyst journal={journal} c={c} dark={dark} lang={lang} />
+    </div>
+  )
+}
+
+// ──────────────────────────────────────────────────────────────────
+// The Verdict — the analyst's real written opinion (not a score).
+// The scores filter the market; this is the brain's judgment, in words.
+// ──────────────────────────────────────────────────────────────────
+function VerdictCard({ verdict, c, dark, lang }) {
+  const he = lang === 'he'
+  const [collapsed, setCollapsed] = useState(false)
+
+  if (!verdict || !verdict.text) {
+    return (
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#0d2030' : '#0a2540'} 0%, ${dark ? '#10384a' : '#16486b'} 100%)`,
+        borderRadius: 14, padding: '20px 24px', marginBottom: 20,
+        display: 'flex', alignItems: 'center', gap: 14,
+      }}>
+        <span style={{ fontSize: 28 }}>📋</span>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: 'white' }}>{he ? 'חוות הדעת השבועית' : 'The Weekly Verdict'}</div>
+          <div style={{ fontSize: 12, color: '#a8c5dd', marginTop: 3 }}>
+            {he ? 'תיווצר בסריקה הבאה (או הרץ "Fix Verdict" ב-Actions). דורש מפתח Anthropic ב-GitHub Secrets.' : 'Generated next scan (or run "Fix Verdict"). Needs Anthropic key in GitHub Secrets.'}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const when = verdict.generated_at ? new Date(verdict.generated_at).toLocaleDateString(he ? 'he-IL' : 'en-US') : ''
+
+  return (
+    <div style={{
+      borderRadius: 14, marginBottom: 20, overflow: 'hidden',
+      border: `2px solid ${dark ? '#1f5a7a' : '#16486b'}`,
+      boxShadow: dark ? 'none' : '0 4px 16px rgba(22,72,107,0.15)',
+    }}>
+      {/* Header */}
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#0d2030' : '#0a2540'} 0%, ${dark ? '#10384a' : '#16486b'} 100%)`,
+        padding: '16px 22px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 26 }}>📋</span>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: 'white' }}>
+              {he ? 'חוות הדעת — ניתוח האנליסט' : 'The Verdict — Analyst\'s Call'}
+            </div>
+            <div style={{ fontSize: 11, color: '#a8c5dd', marginTop: 2 }}>
+              {he ? 'הדעה האמיתית, לא ציון · ' : 'Real opinion, not a score · '}{when}
+            </div>
+          </div>
+        </div>
+        <button onClick={() => setCollapsed(v => !v)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>
+          {collapsed ? (he ? '▼ הצג' : '▼ Show') : (he ? '▲ הסתר' : '▲ Hide')}
+        </button>
+      </div>
+
+      {/* Body */}
+      {!collapsed && (
+        <div style={{ background: c.card, padding: '20px 24px' }}>
+          <div style={{
+            fontSize: 14.5, lineHeight: 1.75, color: c.text, whiteSpace: 'pre-wrap',
+            direction: he ? 'rtl' : 'ltr',
+          }}>
+            {verdict.text}
+          </div>
+          <div style={{ fontSize: 11, color: c.muted, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${c.border}`, lineHeight: 1.5 }}>
+            {he
+              ? '⚠️ ניתוח לתמיכה בהחלטה — לא ייעוץ השקעות. הציונים סיננו את המועמדים; זו דעת האנליסט עליהם. ההחלטה תמיד שלך.'
+              : '⚠️ Decision-support analysis — not investment advice. Scores filtered the candidates; this is the analyst\'s judgment on them. The decision is always yours.'}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

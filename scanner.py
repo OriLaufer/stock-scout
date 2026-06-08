@@ -1855,6 +1855,145 @@ def compute_multibagger_radar(top_n=10, candidate_pool=30):
     return radar
 
 
+# ============== THE VERDICT — AI ANALYST'S REAL OPINION (not a score) ==============
+# Scores are the machine's FILTER (narrow 5000 → finalists). The Verdict is the
+# brain's JUDGMENT: a written professional opinion on whether there's a genuine
+# multi-bagger candidate this week — with the thesis, catalyst (web-searched),
+# conviction, and risk. If nothing is compelling, it says so honestly.
+
+VERDICT_MODEL_CANDIDATES = [
+    os.environ.get("AI_MODEL"),
+    "claude-opus-4-20250514",
+    "claude-sonnet-4-20250514",
+    "claude-3-5-sonnet-latest",
+]
+VERDICT_MODEL_CANDIDATES = [m for m in VERDICT_MODEL_CANDIDATES if m]
+
+VERDICT_SYSTEM = """You are the head analyst of "Stock Scout". Once a week you write THE VERDICT — a sharp research note for the boss.
+
+THE MISSION: be IN the stocks that 5x-50x over a year, caught EARLY, before they hit any year-end "biggest gainers" list. Not read about them after — own them before.
+
+WHAT YOU'RE GIVEN: the machine has already filtered the whole market down to finalists across four lenses:
+- Weekly top gainers (loud movers this week)
+- Rising Stars (quiet base-builders — strong 6-month relative strength, may not have spiked this week — THIS is where early SanDisks hide)
+- Multi-Bagger Radar (forward-looking DNA score)
+- The Trend (what already compounded)
+The scores were just the filter. Your job is JUDGMENT, not ranking by number.
+
+YOUR JOB — write a real opinion:
+1. Is there a genuinely compelling multi-bagger candidate this week? If yes, name the single best one (occasionally two). If NOTHING is compelling, SAY SO honestly — "nothing worth a position this week, here's why" is a valid, valuable verdict. Never force a pick.
+2. For your pick: give the THESIS in plain language — what the company does, why demand is growing, why it could be a big winner. USE WEB SEARCH to find the real catalyst (news, earnings, contracts, sector trend) and cite it.
+3. Distinguish a real durable story from a pump. Be critical.
+4. State a CONVICTION LEVEL (high / medium / low) and WHY.
+5. Give the RISK — what could kill the thesis.
+6. Say what to WATCH next to confirm or abandon it.
+
+STYLE: Write in Hebrew, like a top analyst briefing the boss. Sharp, confident, honest. Lead with the bottom line. Use the data (cite real numbers — 6mo return, revenue growth, etc.) but speak like a human who's deciding where to put real money, not a spreadsheet. Be the judgment the boss is paying for."""
+
+
+def _verdict_context(top_picks, trend, radar, rising_stars):
+    """Build a dense context string from the in-memory scan objects."""
+    lines = []
+    if rising_stars:
+        lines.append("=== RISING STARS (quiet base-builders — full-market 6mo relative strength; the early-SanDisk pattern) ===")
+        for s in rising_stars[:15]:
+            lines.append(
+                f"{s['ticker']} ({s.get('name','')}) | base-builder {s.get('rs_score')}/100 | "
+                f"6mo {s.get('ret_6mo')}% / 3mo {s.get('ret_3mo')}% / 1mo {s.get('ret_1mo')}% | "
+                f"{s.get('positive_weeks_pct')}% positive weeks | "
+                f"{'above' if s.get('above_50dma') else 'below'} 50dma, {'above' if s.get('above_200dma') else 'below'} 200dma | "
+                f"mcap ${ (s.get('market_cap') or 0)/1e9:.2f}B | {s.get('sector','?')} | this wk {s.get('this_week_pct')}%"
+            )
+    if radar:
+        lines.append("\n=== MULTI-BAGGER RADAR (forward-looking DNA score) ===")
+        for r in radar[:10]:
+            lines.append(
+                f"{r['ticker']} ({r.get('name','')}) | DNA {r.get('dna_score')}/100 | "
+                f"6mo {r.get('ret_6mo')}% (RS vs mkt {r.get('rs_6mo')}%) | "
+                f"rev growth {r.get('revenue_growth_pct') if r.get('revenue_growth_pct') is not None else 'N/A'} | "
+                f"{r.get('appearances')} appearances | mcap ${ (r.get('market_cap') or 0)/1e9:.2f}B | {r.get('sector','?')}"
+            )
+    if trend:
+        lines.append("\n=== THE TREND (already compounded) ===")
+        for t in trend[:10]:
+            idn = t.get("identity", {}) or {}
+            lines.append(
+                f"{t['ticker']} ({t.get('name','')}) | compound {t.get('full_compound_pct')}% | "
+                f"{t.get('scan_appearances')}/{t.get('total_weeks')} weeks | "
+                f"{('analyst tgt $'+str(idn.get('target_mean'))+' ('+str(idn.get('target_upside_pct'))+'%)') if idn.get('target_mean') else 'no analyst coverage'} | {idn.get('sector','?')}"
+            )
+    if top_picks:
+        lines.append("\n=== THIS WEEK'S TOP GAINERS (loud movers) ===")
+        for s in top_picks[:15]:
+            sig = s.get("rec_signals", {}) or {}
+            lines.append(
+                f"{s['ticker']} ({s.get('name','')}) | +{s.get('change_pct')}% wk | "
+                f"mcap ${ (s.get('market_cap') or 0)/1e9:.2f}B | {s.get('sector','?')}"
+                + (f" | float {sig.get('float_m')}M" if sig.get('float_m') is not None else "")
+            )
+    return "\n".join(lines)
+
+
+def generate_ai_verdict(top_picks, trend, radar, rising_stars):
+    """Call Claude (with live web search) to write THE VERDICT — the analyst's
+    real opinion on this week's best multi-bagger candidate (or none). Returns
+    a dict {text, model, generated_at} or None if no API key / failure."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("  Verdict: no ANTHROPIC_API_KEY, skipping (add it to GitHub secrets)")
+        return None
+
+    context = _verdict_context(top_picks, trend, radar, rising_stars)
+    user_msg = (
+        "Here are this week's finalists from the machine's filter. Write THE VERDICT: "
+        "is there a genuinely compelling multi-bagger candidate to own early? "
+        "Investigate the best ones (web-search their catalysts), give your real opinion, "
+        "conviction, risk, and what to watch. If nothing is compelling, say so honestly.\n\n"
+        + context
+    )
+
+    for model in VERDICT_MODEL_CANDIDATES:
+        try:
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 2500,
+                    "system": VERDICT_SYSTEM,
+                    "messages": [{"role": "user", "content": user_msg}],
+                    "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 6}],
+                },
+                timeout=180,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                text = "\n".join(
+                    b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
+                ).strip()
+                if text:
+                    print(f"  Verdict: generated with {model} ({len(text)} chars)")
+                    return {
+                        "text": text,
+                        "model": model,
+                        "generated_at": datetime.now().isoformat(),
+                    }
+            else:
+                err = r.text[:200]
+                print(f"  Verdict: {model} failed HTTP {r.status_code}: {err}")
+                # fall through to next model only on model/tool issues
+                if not (r.status_code == 404 or "model" in err.lower() or "tool" in err.lower()):
+                    break
+        except Exception as e:
+            print(f"  Verdict: error with {model}: {type(e).__name__}: {e}")
+            continue
+    return None
+
+
 # ============== EMAIL ==============
 def send_email(stocks, bonus, week_label, backtest=None):
     returning = sum(1 for s in stocks if s.get("streak", 1) >= 2)
@@ -2406,8 +2545,13 @@ def main():
     print("\nComputing Rising Stars (quiet base-builders, full-market RS)...")
     rising_stars = compute_rising_stars(price_data, names, target=20)
 
-    # Save trend + radar + rising_stars into the just-saved row
-    if trend or radar or rising_stars:
+    # 10. THE VERDICT — the analyst's real written opinion (not a score).
+    #     The scores above were the filter; this is the judgment.
+    print("\nGenerating The Verdict (AI analyst's real opinion)...")
+    verdict = generate_ai_verdict(top_picks, trend, radar, rising_stars)
+
+    # Save trend + radar + rising_stars + verdict into the just-saved row
+    if trend or radar or rising_stars or verdict:
         try:
             r = supabase.table("weekly_scans").select("stocks_json").eq("week_label", week_label).execute()
             if r.data:
@@ -2415,10 +2559,11 @@ def main():
                 if trend: pl["trend"] = trend
                 if radar: pl["radar"] = radar
                 if rising_stars: pl["rising_stars"] = rising_stars
+                if verdict: pl["verdict"] = verdict
                 supabase.table("weekly_scans").update({"stocks_json": json.dumps(pl)}).eq("week_label", week_label).execute()
-                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}.")
+                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}, verdict={'yes' if verdict else 'no'}.")
         except Exception as e:
-            print(f"  Trend/Radar/Stars save error: {e}")
+            print(f"  Save error: {e}")
 
     # 9. Send email with track record
     send_email(top_picks, [], week_label, backtest=backtest)
