@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 
-from scanner import send_email, compute_backtest, supabase, BOSS_EMAIL
+from scanner import send_email, build_real_track_record, supabase, BOSS_EMAIL
 
 
 def _parse_week_end(label):
@@ -32,8 +32,8 @@ payload = json.loads(r.data[0]["stocks_json"])
 stocks = payload.get("stocks", payload) if isinstance(payload, dict) else payload
 bonus = payload.get("bonus", []) if isinstance(payload, dict) else []
 
-print("Computing backtest track record...")
-backtest = compute_backtest()
+print("Building real track record...")
+backtest = build_real_track_record()
 
 print("Sending email...")
 send_email(stocks, bonus, TARGET_WEEK, backtest=backtest)

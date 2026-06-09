@@ -2027,8 +2027,60 @@ def generate_ai_verdict(top_picks, trend, radar, rising_stars):
 
 
 # ============== EMAIL ==============
+def build_real_track_record():
+    """Aggregate the REAL per-week backtest entries (yfinance actual_gain,
+    stored in each scan's payload as 'backtest') — the same truthful data the
+    dashboard shows. Replaces compute_backtest() for the email, which used
+    scan-data lookup and wrongly reported 0/5 because top-5 gainers rarely
+    re-appear in the next week's top list."""
+    try:
+        r = supabase.table("weekly_scans").select("*").order("created_at", desc=True).limit(100).execute()
+        scans = r.data or []
+    except Exception:
+        return None
+
+    seen, entries = set(), []
+    for scan in scans:
+        try:
+            payload = json.loads(scan["stocks_json"])
+            bt = payload.get("backtest") if isinstance(payload, dict) else None
+            if not bt:
+                continue
+            wk = bt.get("week")
+            if not wk or wk in seen or not bt.get("total"):
+                continue
+            seen.add(wk)
+            entries.append(bt)
+        except Exception:
+            continue
+
+    if not entries:
+        return None
+
+    def week_end(lbl):
+        m = re.search(r"(\d{2})\.(\d{2})\.(\d{4})$", lbl or "")
+        return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else datetime(2000, 1, 1)
+    entries.sort(key=lambda b: week_end(b.get("week", "")))
+
+    total_wins  = sum(b.get("wins", 0) for b in entries)
+    total_picks = sum(b.get("total", 0) for b in entries)
+    compound = 1.0
+    for b in entries:
+        compound *= (1 + b.get("avg_gain", 0) / 100)
+    weeks = [{"week": b["week"], "wins": b.get("wins", 0), "total": b.get("total", 0),
+              "avg_next": b.get("avg_gain", 0)} for b in entries]
+    return {
+        "total_weeks":  len(entries),
+        "win_rate":     round(total_wins / total_picks * 100) if total_picks else 0,
+        "avg_weekly":   round(sum(b.get("avg_gain", 0) for b in entries) / len(entries), 1),
+        "compound_ret": round((compound - 1) * 100, 1),
+        "weeks":        weeks,
+    }
+
+
 def send_email(stocks, bonus, week_label, backtest=None):
     returning = sum(1 for s in stocks if s.get("streak", 1) >= 2)
+    rec = next((s for s in stocks if s.get("recommended")), None)
     rows = ""
     for i, s in enumerate(stocks, 1):
         streak = s.get("streak", 1)
@@ -2144,16 +2196,53 @@ def send_email(stocks, bonus, week_label, backtest=None):
   <div style="font-size:10px;color:#bbb;margin-top:10px">* Each week: top 5 gainers selected, performance measured the following week. Past performance does not guarantee future results.</div>
 </div>"""
 
-    html = f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f0f2f5;font-family:Arial,sans-serif">
-<div style="max-width:680px;margin:0 auto">
-<div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:28px;border-radius:16px 16px 0 0">
-<h1 style="color:white;margin:0;font-size:22px;font-weight:800">📈 Stock Scout</h1>
-<p style="color:#aaa;margin:6px 0 0;font-size:13px">{week_label} · Weekly Top Gainers</p>
+    # Pick-for-next-week hero (the key takeaway, up top)
+    pick_hero = ""
+    if rec:
+        cats_txt = " · ".join(rec.get("rec_catalysts", [])) or "Top-ranked this week"
+        rmcap = rec.get("market_cap", 0)
+        rmcap_str = f"${rmcap/1e9:.1f}B" if rmcap >= 1e9 else f"${rmcap/1e6:.0f}M"
+        pick_hero = f"""
+<div style="background:linear-gradient(135deg,#fff8e8 0%,#fff0c8 100%);padding:22px 24px;border-bottom:1px solid #f0e0b0">
+  <div style="font-size:11px;font-weight:800;color:#9a6200;letter-spacing:1.5px">🔥 PICK FOR NEXT WEEK</div>
+  <div style="margin-top:8px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+    <span style="font-size:26px;font-weight:800;color:#1a1a2e">{rec['ticker']}</span>
+    <span style="font-size:16px;font-weight:800;color:#097c3e">+{rec['change_pct']}%</span>
+    <span style="font-size:13px;color:#9a6200">{rmcap_str}</span>
+  </div>
+  <div style="font-size:13px;color:#5a4a20;margin-top:3px">{rec.get('name','')}</div>
+  <div style="font-size:12px;color:#7a5a20;margin-top:8px;line-height:1.5">{cats_txt}</div>
+</div>"""
+
+    cta_top = f"""
+<div style="background:white;padding:20px 24px;text-align:center;border-bottom:1px solid #eee">
+  <a href="{DASHBOARD_URL}" style="background:#097c3e;color:white;padding:15px 44px;border-radius:12px;text-decoration:none;font-weight:800;font-size:16px;display:inline-block;box-shadow:0 3px 10px rgba(9,124,62,0.3)">📊 Open Full Dashboard →</a>
+  <div style="font-size:11px;color:#999;margin-top:10px">Rising Stars · Radar · The Trend · Live charts · AI analyst</div>
+</div>"""
+
+    html = f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f0f2f5;font-family:Arial,Helvetica,sans-serif">
+<div style="max-width:680px;margin:0 auto;border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.08)">
+
+<!-- Header -->
+<div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:28px 24px">
+<h1 style="color:white;margin:0;font-size:23px;font-weight:800">📈 Stock Scout</h1>
+<p style="color:#9aa3c2;margin:6px 0 0;font-size:13px">{week_label} · Weekly Intelligence Report</p>
 </div>
+
+<!-- Dashboard CTA — FIRST, up top -->
+{cta_top}
+
+<!-- Pick for next week -->
+{pick_hero}
+
+<!-- Quick stats -->
 <div style="background:#097c3e;padding:12px 24px">
-<span style="color:white;font-size:13px;font-weight:600">{returning} stocks returning · Min cap: ${MIN_MARKET_CAP//1_000_000}M · {len(stocks)} total picks</span>
+<span style="color:white;font-size:13px;font-weight:600">{returning} returning · Min cap ${MIN_MARKET_CAP//1_000_000}M · {len(stocks)} stocks scanned this week</span>
 </div>
+
+<!-- Top gainers table -->
 <div style="background:white">
+<div style="padding:16px 24px 4px;font-size:12px;font-weight:800;color:#1a1a2e;letter-spacing:.5px">📋 THIS WEEK'S TOP GAINERS</div>
 <table style="width:100%;border-collapse:collapse">
 <thead><tr style="background:#f8f9fa;border-bottom:2px solid #eee">
 <th style="padding:10px 14px;text-align:left;font-size:11px;color:#999;font-weight:700">#</th>
@@ -2164,10 +2253,15 @@ def send_email(stocks, bonus, week_label, backtest=None):
 <tbody>{rows}</tbody>
 </table>
 </div>
+
 {backtest_html}
-<div style="background:#1a1a2e;padding:24px;border-radius:0 0 16px 16px;text-align:center">
-<a href="{DASHBOARD_URL}" style="background:#097c3e;color:white;padding:14px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:15px;display:inline-block">Open Full Dashboard</a>
+
+<!-- Footer -->
+<div style="background:#1a1a2e;padding:24px;text-align:center">
+<a href="{DASHBOARD_URL}" style="background:#097c3e;color:white;padding:13px 36px;border-radius:10px;text-decoration:none;font-weight:700;font-size:14px;display:inline-block">📊 Open Full Dashboard</a>
+<div style="color:#777;font-size:10px;margin-top:14px;line-height:1.5">Decision-support analysis · Not investment advice · Past performance does not guarantee future results</div>
 </div>
+
 </div></body></html>"""
 
     try:
@@ -2557,11 +2651,11 @@ def main():
     # 5. Save first so compute_backtest + compute_the_trend can include this week's data
     save_to_supabase(top_picks, [], week_label, backtest_entry=weekly_backtest)
 
-    # 6. Compute backtest from all historical scans (including the one just saved)
-    print("\nComputing backtest track record...")
-    backtest = compute_backtest()
+    # 6. Build the REAL track record (yfinance actual gains) for the email
+    print("\nBuilding real track record...")
+    backtest = build_real_track_record()
     if backtest:
-        print(f"  Backtest: {backtest['total_weeks']} weeks | {backtest['win_rate']}% win rate | {backtest['avg_weekly']}% avg weekly | {backtest['compound_ret']}% compound")
+        print(f"  Track record: {backtest['total_weeks']} weeks | {backtest['win_rate']}% win rate | {backtest['avg_weekly']}% avg weekly | {backtest['compound_ret']}% compound")
 
     # 7. Compute "The Trend" — top 10 by compound return across ALL scans
     print("\nComputing The Trend (top 10 by compound return)...")
