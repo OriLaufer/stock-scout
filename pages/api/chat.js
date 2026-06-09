@@ -11,31 +11,35 @@ const supabase = createClient(
 // Key must be set in Vercel env vars (Settings → Environment Variables).
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
 
-// Instead of guessing model names (they change over time), DISCOVER the
-// available models from the account and pick the best one (newest Opus,
-// else newest Sonnet). Cached for the life of the serverless instance.
-let _cachedModel = null
-async function pickBestModel(apiKey) {
-  if (process.env.AI_MODEL) return process.env.AI_MODEL
-  if (_cachedModel) return _cachedModel
+// Discover available models from the account (names change over time).
+// For the INTERACTIVE chat we prefer the newest SONNET — it's far faster than
+// Opus and must answer within Vercel's 60s function limit. (The weekly Verdict,
+// which runs in GitHub Actions with no timeout, uses Opus for max depth.)
+let _cachedModels = null
+async function listModels(apiKey) {
+  if (_cachedModels) return _cachedModels
   try {
     const r = await fetch('https://api.anthropic.com/v1/models?limit=100', {
       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     })
     if (r.ok) {
       const { data } = await r.json()
-      const sorted = (data || []).slice().sort(
+      _cachedModels = (data || []).slice().sort(
         (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
       )
-      const opus   = sorted.find(m => /opus/i.test(m.id))
-      const sonnet = sorted.find(m => /sonnet/i.test(m.id))
-      const best = opus || sonnet || sorted[0]
-      if (best) { _cachedModel = best.id; return _cachedModel }
+      return _cachedModels
     }
   } catch {}
-  // Last-resort guesses if discovery fails
-  _cachedModel = 'claude-sonnet-4-20250514'
-  return _cachedModel
+  _cachedModels = []
+  return _cachedModels
+}
+async function pickChatModel(apiKey) {
+  if (process.env.CHAT_MODEL) return process.env.CHAT_MODEL
+  if (process.env.AI_MODEL) return process.env.AI_MODEL
+  const models = await listModels(apiKey)
+  const sonnet = models.find(m => /sonnet/i.test(m.id))
+  const opus   = models.find(m => /opus/i.test(m.id))
+  return (sonnet || opus || models[0])?.id || 'claude-sonnet-4-20250514'
 }
 
 function parseWeekEnd(label) {
@@ -167,7 +171,7 @@ async function buildContext() {
   const allTickers = Object.entries(history).map(([tk, h]) => {
     const maxMove = Math.max(...h.weeks.map(w => Math.abs(w.gain || 0)))
     return { tk, h, maxMove }
-  }).sort((a, b) => b.maxMove - a.maxMove).slice(0, 80)
+  }).sort((a, b) => b.maxMove - a.maxMove).slice(0, 40)
 
   if (allTickers.length) {
     text += `\n=== FULL STOCK HISTORY (every stock we've caught, full week-by-week timeline) ===\n`
@@ -269,7 +273,7 @@ export default async function handler(req, res) {
       content: String(m.content || ''),
     }))
 
-    const model = await pickBestModel(ANTHROPIC_API_KEY)
+    const model = await pickChatModel(ANTHROPIC_API_KEY)
 
     async function callModel(withTools) {
       return fetch('https://api.anthropic.com/v1/messages', {
@@ -281,10 +285,11 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 3500,
+          max_tokens: 2200,
           system,
           messages: trimmed,
-          ...(withTools ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 6 }] } : {}),
+          // Cap searches to 3 so the answer fits Vercel's 60s function limit.
+          ...(withTools ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }] } : {}),
         }),
       })
     }
