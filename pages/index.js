@@ -2119,27 +2119,30 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
     'Give me 3 multi-bagger candidates and explain each one\'s DNA',
   ]
 
-  // Load saved conversations on mount
+  // Load SHARED conversations from Supabase (so the whole team sees them)
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('ss_chats')
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        if (Array.isArray(parsed) && parsed.length) {
-          setConversations(parsed)
-          setActiveId(parsed[0].id)
+    fetch('/api/chats')
+      .then(r => r.json())
+      .then(d => {
+        if (d.chats && d.chats.length) {
+          setConversations(d.chats)
+          setActiveId(d.chats[0].id)
         }
-      }
-    } catch {}
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages, loading, open])
 
-  function persist(list) {
-    setConversations(list)
-    try { localStorage.setItem('ss_chats', JSON.stringify(list.slice(0, 50))) } catch {}
+  // Save a single conversation to the shared store (fire-and-forget)
+  function saveChat(conv) {
+    fetch('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat: conv }),
+    }).catch(() => {})
   }
 
   function newChat() {
@@ -2152,8 +2155,9 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
   }
   function deleteChat(id) {
     const list = conversations.filter(cv => cv.id !== id)
-    persist(list)
+    setConversations(list)
     if (activeId === id) setActiveId(list[0]?.id || null)
+    fetch('/api/chats?id=' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {})
   }
 
   async function send(text) {
@@ -2171,8 +2175,8 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
 
     const userMsgs = [...conv.messages, { role: 'user', content }]
     const title = conv.messages.length === 0 ? content.slice(0, 40) : conv.title
-    let updated = list.map(cv => cv.id === conv.id ? { ...cv, messages: userMsgs, title, updatedAt: Date.now() } : cv)
-    persist(updated)
+    const updated = list.map(cv => cv.id === conv.id ? { ...cv, messages: userMsgs, title, updatedAt: Date.now() } : cv)
+    setConversations(updated)
     setInput('')
     setLoading(true)
     try {
@@ -2183,10 +2187,12 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
       })
       const data = await res.json()
       const withReply = [...userMsgs, { role: 'assistant', content: data.reply || '(no response)', searched: data.searched }]
-      persist(updated.map(cv => cv.id === conv.id ? { ...cv, messages: withReply, updatedAt: Date.now() } : cv))
+      const finalConv = { ...conv, messages: withReply, title, updatedAt: Date.now() }
+      setConversations(updated.map(cv => cv.id === conv.id ? finalConv : cv))
+      saveChat(finalConv)   // persist the full exchange to the shared store
     } catch (e) {
       const withErr = [...userMsgs, { role: 'assistant', content: `שגיאה: ${e.message}` }]
-      persist(updated.map(cv => cv.id === conv.id ? { ...cv, messages: withErr } : cv))
+      setConversations(updated.map(cv => cv.id === conv.id ? { ...cv, messages: withErr } : cv))
     } finally {
       setLoading(false)
     }
