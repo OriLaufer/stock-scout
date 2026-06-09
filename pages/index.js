@@ -2028,6 +2028,7 @@ function TradingViewChart({ symbol, dark, height = 440 }) {
             { id: 'MASimple@tv-basicstudies', inputs: { length: 50 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 150 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 200 } },
+            { id: 'PivotPointsHighLow@tv-basicstudies' },   // default 10/10 — works; custom length breaks the free embed
           ],
           overrides: {
             'mainSeriesProperties.candleStyle.upColor': UP,
