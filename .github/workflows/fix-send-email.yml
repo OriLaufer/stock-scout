@@ -1,0 +1,23 @@
+name: Send Last Report Email (one-time)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install supabase yfinance pandas requests
+      - name: Re-send the latest scan report by email
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+          MIN_MARKET_CAP: ${{ secrets.MIN_MARKET_CAP }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: python fix_send_email.py
