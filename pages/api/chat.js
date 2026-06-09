@@ -171,7 +171,7 @@ async function buildContext() {
   const allTickers = Object.entries(history).map(([tk, h]) => {
     const maxMove = Math.max(...h.weeks.map(w => Math.abs(w.gain || 0)))
     return { tk, h, maxMove }
-  }).sort((a, b) => b.maxMove - a.maxMove).slice(0, 40)
+  }).sort((a, b) => b.maxMove - a.maxMove).slice(0, 25)
 
   if (allTickers.length) {
     text += `\n=== FULL STOCK HISTORY (every stock we've caught, full week-by-week timeline) ===\n`
@@ -238,7 +238,9 @@ When you name a stock, don't just cite its scores. EXPLAIN it:
 FORMAT — make it a pleasure to read (engaging, professional, scannable):
 - Use ## headers, **bold** for key terms and tickers, bullet lists, and tables when comparing.
 - Use tasteful emoji as visual anchors (🏢 business, 🔥 catalyst, 🚀 upside, ⚠️ risk, 📊 data, 🎯 verdict) — not excessively.
-- Open with a one-line bottom line, then go deep. End with a clear verdict + conviction.`
+- Open with a one-line bottom line, then go deep. End with a clear verdict + conviction.
+
+BE DEEP BUT FOCUSED: if the user asks about ONE stock, go deep on that ONE — don't survey the whole scan. Only review multiple names when the user actually asks for a survey/ranking. This keeps answers sharp and fast.`
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
