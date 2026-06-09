@@ -2021,13 +2021,14 @@ function TradingViewChart({ symbol, dark, height = 440 }) {
           locale: 'en',
           allow_symbol_change: true,
           hide_side_toolbar: false,
-          // Your personal setup: yellow/red candles + 4 SMAs + pivots
+          // Your personal setup: yellow/red candles + 4 SMAs + pivots + volume pane
           studies: [
+            { id: 'Volume@tv-basicstudies' },   // volume in its OWN pane below
             { id: 'MASimple@tv-basicstudies', inputs: { length: 20 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 50 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 150 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 200 } },
-            { id: 'PivotPointsHighLow@tv-basicstudies' },
+            { id: 'PivotPointsHighLow@tv-basicstudies', inputs: { length: 20 } },
           ],
           overrides: {
             'mainSeriesProperties.candleStyle.upColor': UP,
@@ -2036,10 +2037,13 @@ function TradingViewChart({ symbol, dark, height = 440 }) {
             'mainSeriesProperties.candleStyle.borderDownColor': DOWN,
             'mainSeriesProperties.candleStyle.wickUpColor': UP,
             'mainSeriesProperties.candleStyle.wickDownColor': DOWN,
+            'mainSeriesProperties.showVolume': false,   // hide the overlaid volume so it lives in its own pane
           },
           studies_overrides: {
-            'volume.volume.color.0': DOWN,   // down-volume bars
-            'volume.volume.color.1': UP,     // up-volume bars
+            // Volume colored by candle direction (open→close), like your setup
+            'volume.volume.color.0': DOWN,   // down candle = red volume
+            'volume.volume.color.1': UP,     // up candle = yellow volume
+            'volume.volume.transparency': 30,
           },
           container_id: idRef.current,
         })
