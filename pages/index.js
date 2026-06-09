@@ -2028,7 +2028,7 @@ function TradingViewChart({ symbol, dark, height = 440 }) {
             { id: 'MASimple@tv-basicstudies', inputs: { length: 50 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 150 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 200 } },
-            { id: 'PivotPointsHighLow@tv-basicstudies', inputs: { length: 20 } },
+            { id: 'PivotPointsHighLow@tv-basicstudies' },
           ],
           overrides: {
             'mainSeriesProperties.candleStyle.upColor': UP,
@@ -2040,9 +2040,9 @@ function TradingViewChart({ symbol, dark, height = 440 }) {
             'mainSeriesProperties.showVolume': false,   // hide the overlaid volume so it lives in its own pane
           },
           studies_overrides: {
-            // Volume colored by candle direction (open→close), like your setup
-            'volume.volume.color.0': DOWN,   // down candle = red volume
-            'volume.volume.color.1': UP,     // up candle = yellow volume
+            // color.0 = Growing (up candle), color.1 = Falling (down candle)
+            'volume.volume.color.0': UP,     // up candle = yellow volume
+            'volume.volume.color.1': DOWN,   // down candle = red volume
             'volume.volume.transparency': 30,
           },
           container_id: idRef.current,
