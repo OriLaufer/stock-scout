@@ -668,12 +668,7 @@ function VerdictCard({ verdict, c, dark, lang }) {
       {/* Body */}
       {!collapsed && (
         <div style={{ background: c.card, padding: '20px 24px' }}>
-          <div style={{
-            fontSize: 14.5, lineHeight: 1.75, color: c.text, whiteSpace: 'pre-wrap',
-            direction: he ? 'rtl' : 'ltr',
-          }}>
-            {verdict.text}
-          </div>
+          <Markdown text={verdict.text} c={c} dark={dark} rtl={he} />
           <div style={{ fontSize: 11, color: c.muted, marginTop: 16, paddingTop: 12, borderTop: `1px solid ${c.border}`, lineHeight: 1.5 }}>
             {he
               ? '⚠️ ניתוח לתמיכה בהחלטה — לא ייעוץ השקעות. הציונים סיננו את המועמדים; זו דעת האנליסט עליהם. ההחלטה תמיד שלך.'
@@ -1807,9 +1802,144 @@ function PriceSyncPoint({ ticker, onResolve }) {
 // tab. Reads ALL our data (weekly scan, The Trend, the Radar, track record,
 // recurring stocks) and helps find the next multi-bagger early. /api/chat.
 // ──────────────────────────────────────────────────────────────────
+// ── Lightweight Markdown renderer — turns the AI's markdown into clean,
+// professional formatted output (headers, bold, lists, tables, rules). ──
+function mdInline(s, c) {
+  // **bold**, `code`
+  const out = []
+  let last = 0
+  const re = /(\*\*([^*]+)\*\*|`([^`]+)`)/g
+  let m
+  while ((m = re.exec(s)) !== null) {
+    if (m.index > last) out.push(s.slice(last, m.index))
+    if (m[2] !== undefined) {
+      out.push(<strong key={out.length} style={{ fontWeight: 800 }}>{m[2]}</strong>)
+    } else if (m[3] !== undefined) {
+      out.push(<code key={out.length} style={{ background: c.chipBg, padding: '1px 5px', borderRadius: 4, fontSize: '0.92em' }}>{m[3]}</code>)
+    }
+    last = m.index + m[0].length
+  }
+  if (last < s.length) out.push(s.slice(last))
+  return out
+}
+
+function Markdown({ text, c, dark, rtl }) {
+  if (!text) return null
+  const lines = String(text).replace(/\r/g, '').split('\n')
+  const blocks = []
+  let i = 0
+  const accent = '#16a0c5'
+
+  while (i < lines.length) {
+    let line = lines[i]
+
+    // blank
+    if (!line.trim()) { i++; continue }
+
+    // horizontal rule
+    if (/^\s*---+\s*$/.test(line)) {
+      blocks.push(<div key={blocks.length} style={{ height: 1, background: c.border, margin: '14px 0' }} />)
+      i++; continue
+    }
+
+    // headings
+    const h = line.match(/^(#{1,4})\s+(.*)$/)
+    if (h) {
+      const lvl = h[1].length
+      const sizes = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 }
+      blocks.push(
+        <div key={blocks.length} style={{
+          fontSize: sizes[lvl] || 14, fontWeight: 800, color: c.text,
+          margin: blocks.length ? '16px 0 8px' : '0 0 8px',
+          paddingBottom: lvl <= 2 ? 5 : 0,
+          borderBottom: lvl <= 2 ? `2px solid ${accent}33` : 'none',
+        }}>{mdInline(h[2], c)}</div>
+      )
+      i++; continue
+    }
+
+    // table — consecutive lines starting with |
+    if (/^\s*\|/.test(line)) {
+      const tbl = []
+      while (i < lines.length && /^\s*\|/.test(lines[i])) { tbl.push(lines[i]); i++ }
+      const rows = tbl
+        .map(r => r.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(x => x.trim()))
+        .filter(r => !r.every(cell => /^-+$/.test(cell) || cell === ''))  // drop separator row
+      if (rows.length) {
+        const [head, ...body] = rows
+        blocks.push(
+          <div key={blocks.length} style={{ overflowX: 'auto', margin: '8px 0' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr>{head.map((cell, ci) => (
+                <th key={ci} style={{ textAlign: rtl ? 'right' : 'left', padding: '7px 10px', background: c.thead, color: c.muted, fontWeight: 700, fontSize: 11, borderBottom: `1px solid ${c.border}`, whiteSpace: 'nowrap' }}>{mdInline(cell, c)}</th>
+              ))}</tr></thead>
+              <tbody>{body.map((r, ri) => (
+                <tr key={ri} style={{ borderBottom: `1px solid ${c.border}` }}>
+                  {r.map((cell, ci) => (
+                    <td key={ci} style={{ padding: '7px 10px', color: c.text, verticalAlign: 'top' }}>{mdInline(cell, c)}</td>
+                  ))}
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )
+      }
+      continue
+    }
+
+    // unordered list
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = []
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*[-*]\s+/, '')); i++
+      }
+      blocks.push(
+        <ul key={blocks.length} style={{ margin: '6px 0', paddingInlineStart: 22 }}>
+          {items.map((it, ii) => (
+            <li key={ii} style={{ fontSize: 13.5, lineHeight: 1.6, color: c.text, marginBottom: 3 }}>{mdInline(it, c)}</li>
+          ))}
+        </ul>
+      )
+      continue
+    }
+
+    // ordered list
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items = []
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+\.\s+/, '')); i++
+      }
+      blocks.push(
+        <ol key={blocks.length} style={{ margin: '6px 0', paddingInlineStart: 22 }}>
+          {items.map((it, ii) => (
+            <li key={ii} style={{ fontSize: 13.5, lineHeight: 1.6, color: c.text, marginBottom: 3 }}>{mdInline(it, c)}</li>
+          ))}
+        </ol>
+      )
+      continue
+    }
+
+    // paragraph (gather consecutive plain lines)
+    const para = []
+    while (i < lines.length && lines[i].trim() && !/^\s*(#{1,4}\s|[-*]\s|\d+\.\s|\||---+\s*$)/.test(lines[i])) {
+      para.push(lines[i]); i++
+    }
+    blocks.push(
+      <p key={blocks.length} style={{ fontSize: 13.5, lineHeight: 1.65, color: c.text, margin: '6px 0' }}>
+        {para.map((pl, pi) => (
+          <span key={pi}>{mdInline(pl, c)}{pi < para.length - 1 ? <br /> : null}</span>
+        ))}
+      </p>
+    )
+  }
+
+  return <div style={{ direction: rtl ? 'rtl' : 'ltr', textAlign: rtl ? 'right' : 'left' }}>{blocks}</div>
+}
+
 function FloatingAnalyst({ journal, c, dark, lang }) {
   const he = lang === 'he'
   const [open, setOpen] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -1874,13 +2004,14 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
       {/* Chat panel */}
       {open && (
         <div style={{
-          position: 'fixed', bottom: 24, ...sideStyle, zIndex: 1001,
-          width: 'min(420px, calc(100vw - 32px))',
-          height: 'min(620px, calc(100vh - 48px))',
-          background: c.card, borderRadius: 16,
+          position: 'fixed', zIndex: 1001,
+          background: c.card,
           border: `1px solid ${c.border}`,
           boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          ...(expanded
+            ? { top: '3vh', bottom: '3vh', left: '50%', transform: 'translateX(-50%)', width: 'min(900px, 94vw)', height: '94vh', borderRadius: 16 }
+            : { bottom: 24, ...sideStyle, width: 'min(440px, calc(100vw - 32px))', height: 'min(640px, calc(100vh - 48px))', borderRadius: 16 }),
         }}>
           {/* Header */}
           <div style={{
@@ -1894,7 +2025,10 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
                 <div style={{ fontSize: 11, color: '#a8c5dd' }}>{he ? 'כל הנתונים + חיפוש חדשות חי' : 'All our data + live news search'}</div>
               </div>
             </div>
-            <button onClick={() => setOpen(false)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 16 }}>✕</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => setExpanded(e => !e)} title={expanded ? (he ? 'הקטן' : 'Shrink') : (he ? 'הגדל' : 'Expand')} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 15 }}>{expanded ? '⤡' : '⤢'}</button>
+              <button onClick={() => setOpen(false)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 16 }}>✕</button>
+            </div>
           </div>
 
           {/* Messages */}
@@ -1927,20 +2061,23 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
                   marginBottom: 12,
                 }}>
                   <div style={{
-                    maxWidth: '88%',
+                    maxWidth: m.role === 'user' ? '88%' : '94%',
                     background: m.role === 'user' ? ACCENT : (dark ? '#12122a' : '#f3f5f9'),
                     color: m.role === 'user' ? 'white' : c.text,
-                    padding: '10px 13px', borderRadius: 12,
-                    fontSize: 13.5, lineHeight: 1.55, whiteSpace: 'pre-wrap',
+                    padding: '11px 14px', borderRadius: 12,
+                    fontSize: 13.5, lineHeight: 1.55,
+                    whiteSpace: m.role === 'user' ? 'pre-wrap' : 'normal',
                     border: m.role === 'assistant' ? `1px solid ${c.border}` : 'none',
                   }}>
                     {m.role === 'assistant' && (
-                      <div style={{ fontSize: 10, fontWeight: 700, color: '#16a0c5', marginBottom: 3, display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#16a0c5', marginBottom: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
                         🧠 {he ? 'העוזר' : 'Analyst'}
                         {m.searched && <span style={{ color: c.muted, fontWeight: 600 }}>· 🔎 {he ? 'חיפש באינטרנט' : 'searched the web'}</span>}
                       </div>
                     )}
-                    {m.content}
+                    {m.role === 'assistant'
+                      ? <Markdown text={m.content} c={c} dark={dark} rtl={he} />
+                      : m.content}
                   </div>
                 </div>
               ))
