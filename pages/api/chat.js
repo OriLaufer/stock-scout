@@ -199,24 +199,15 @@ The user and their boss want to be PART of the stocks that appear in year-end "b
 YOUR DATA:
 You're given the system's full dataset each turn: the latest weekly scan (top gainers), The Trend (top 10 by compound return — what already performed), the Multi-Bagger Radar (top 10 by DNA score — forward-looking potential), the system's track record, and recurring stocks.
 
-YOUR WEB SEARCH TOOL:
-You have a live web_search tool. USE IT PROACTIVELY whenever current, real-world context would sharpen the answer — especially:
-- WHY a stock is running (recent news, earnings, FDA, contracts, M&A, sector catalysts)
-- Whether momentum has a real story behind it or is just a pump
-- Recent analyst actions, upcoming catalysts, sector trends (AI, nuclear, etc.)
-- Anything the user asks about that needs up-to-date info beyond our stored data
-Combine what you find on the web with OUR data — that's your edge. When you cite news, mention it briefly. Don't search for things you already have in the data.
-
 HOW TO INVESTIGATE A STOCK (this is the difference between a robot and an analyst):
-Do NOT just report counts like "appeared 6 times." INVESTIGATE.
+Do NOT just report counts like "appeared 6 times." INVESTIGATE the data.
 - Look at the stock's FULL HISTORY timeline and find its NOTABLE MOVES — e.g. a single +60% week on a specific date.
-- For each notable move, WEB-SEARCH what actually happened that week: the catalyst, the news, the event. Pinpoint it using the week's date range.
-- Then reason like an investor deciding where to put real money:
-  * What drove the move? Is it a durable catalyst (new product, contract, secular demand) or a one-off (short squeeze, meme, dilution pop)?
-  * Is the story still alive, or already priced in?
-  * What's the setup RIGHT NOW — entry, risk, what would confirm the thesis, what would kill it?
-- A one-time +60% with a real, ongoing catalyst can be a BETTER opportunity than 6 quiet appearances. Judge the STORY, not just the frequency.
-- Your job is to help decide on an actual investment — give a clear thesis, conviction level, and what to watch. Think hard. Be the analyst, not the spreadsheet.
+- Reason like an investor deciding where to put real money:
+  * Was the move a steady build (many positive weeks, rising) or a single spike (one week dominates)? Steady = real; one-week spike = likely pump.
+  * Sustained relative strength + revenue growth + persistence = the multi-bagger DNA.
+  * Is it small enough to still multiply? What's the setup — and what would kill the thesis?
+- A steady builder can be a BETTER opportunity than a one-week spike. Judge the STORY in the data, not just the frequency.
+- Give a clear thesis, conviction level, and what to watch. Be the analyst, not the spreadsheet.
 
 HOW TO THINK (like a real momentum/growth analyst — O'Neil, Minervini school):
 - The biggest winners show SUSTAINED relative strength, ACCELERATING revenue, and they PERSIST (keep showing up) — they're not one-week spikes.
@@ -256,6 +247,8 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'messages required' })
     }
 
+    const wantWeb = req.body?.useWeb === true
+
     const { text: contextText } = await buildContext()
 
     // Append journal context if the user has open trades
@@ -265,7 +258,13 @@ export default async function handler(req, res) {
         journal.map(t => `${t.ticker}: ${t.quantity} shares @ $${t.entry_price} (entered ${t.entry_date})`).join('\n')
     }
 
-    const system = `${SYSTEM_PROMPT}\n\n--- CURRENT DATA ---\n${contextText}${journalText}`
+    // Critical: tell the model exactly what it can/can't do, so it never
+    // fabricates news or fake tool calls when web search is off.
+    const webBlock = wantWeb
+      ? `\nYOU HAVE A LIVE web_search TOOL. Use it to verify WHY a stock is moving (news, earnings, contracts, catalysts) and cite what you find. Combine it with our data.`
+      : `\nYOU HAVE NO INTERNET ACCESS THIS TURN. Answer ONLY from the data provided below. NEVER fabricate news, prices, catalysts, or tool calls — do not output <tool_call> or invented "search results". If a question truly needs current news you don't have, say so honestly and reason from the data patterns instead (steady build vs spike, relative strength, revenue growth, persistence).`
+
+    const system = `${SYSTEM_PROMPT}${webBlock}\n\n--- CURRENT DATA ---\n${contextText}${journalText}`
 
     // Keep last 12 turns to bound token usage
     const trimmed = messages.slice(-12).map(m => ({
@@ -294,10 +293,9 @@ export default async function handler(req, res) {
       })
     }
 
-    // Web search is OFF by default — the agentic search loop is too slow for
-    // Vercel's 60s limit. The chat answers fast from our rich context. The
-    // client can opt in with useWeb:true for the rare "search the news" ask.
-    const wantWeb = req.body?.useWeb === true
+    // Web search is OFF by default (wantWeb computed above) — the agentic
+    // search loop is too slow for Vercel's 60s limit. The chat answers fast
+    // from our rich context; opt in with useWeb:true for the rare news ask.
     let r = await callModel(wantWeb)
     if (!r.ok && wantWeb) {
       const errText = await r.text()
