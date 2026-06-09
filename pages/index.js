@@ -2009,17 +2009,38 @@ function TradingViewChart({ symbol, dark, height = 440 }) {
       if (!el) return
       el.innerHTML = ''
       try {
+        const UP = '#e3c000'    // yellow up candle
+        const DOWN = '#e02d2d'  // red down candle
         new window.TradingView.widget({
           autosize: true,
           symbol: symbol,
-          interval: 'W',               // weekly candles — matches how we scan
+          interval: 'D',               // daily (matches your chart); switch to W in toolbar anytime
           timezone: 'Etc/UTC',
           theme: dark ? 'dark' : 'light',
           style: '1',                  // candles
           locale: 'en',
           allow_symbol_change: true,
           hide_side_toolbar: false,
-          studies: ['MASimple@tv-basicstudies'],
+          // Your personal setup: yellow/red candles + 4 SMAs + pivots
+          studies: [
+            { id: 'MASimple@tv-basicstudies', inputs: { length: 20 } },
+            { id: 'MASimple@tv-basicstudies', inputs: { length: 50 } },
+            { id: 'MASimple@tv-basicstudies', inputs: { length: 150 } },
+            { id: 'MASimple@tv-basicstudies', inputs: { length: 200 } },
+            { id: 'PivotPointsHighLow@tv-basicstudies' },
+          ],
+          overrides: {
+            'mainSeriesProperties.candleStyle.upColor': UP,
+            'mainSeriesProperties.candleStyle.downColor': DOWN,
+            'mainSeriesProperties.candleStyle.borderUpColor': UP,
+            'mainSeriesProperties.candleStyle.borderDownColor': DOWN,
+            'mainSeriesProperties.candleStyle.wickUpColor': UP,
+            'mainSeriesProperties.candleStyle.wickDownColor': DOWN,
+          },
+          studies_overrides: {
+            'volume.volume.color.0': DOWN,   // down-volume bars
+            'volume.volume.color.1': UP,     // up-volume bars
+          },
           container_id: idRef.current,
         })
       } catch {}
