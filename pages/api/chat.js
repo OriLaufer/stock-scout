@@ -48,6 +48,20 @@ function parseWeekEnd(label) {
   return new Date(`${m[3]}-${m[2]}-${m[1]}`)
 }
 
+// Context cache — the scan data only changes once a week, so there's no reason
+// to re-query Supabase + rebuild the context on every message. Cache for 15 min.
+let _ctxCache = { text: null, latestWeek: null, ts: 0 }
+const CTX_TTL_MS = 15 * 60 * 1000
+
+async function getContext() {
+  if (_ctxCache.text && Date.now() - _ctxCache.ts < CTX_TTL_MS) {
+    return { text: _ctxCache.text, latestWeek: _ctxCache.latestWeek, cached: true }
+  }
+  const built = await buildContext()
+  _ctxCache = { text: built.text, latestWeek: built.latestWeek, ts: Date.now() }
+  return { ...built, cached: false }
+}
+
 // Build a compact, information-dense context from everything we have.
 async function buildContext() {
   const { data: scans } = await supabase
@@ -263,7 +277,7 @@ export default async function handler(req, res) {
 
     const wantWeb = req.body?.useWeb === true
 
-    const { text: contextText } = await buildContext()
+    const { text: contextText } = await getContext()
 
     // Append journal context if the user has open trades
     let journalText = ''

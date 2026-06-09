@@ -2001,10 +2001,15 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
   const he = lang === 'he'
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
-  const [messages, setMessages] = useState([])
+  const [conversations, setConversations] = useState([])  // [{id,title,messages,updatedAt}]
+  const [activeId, setActiveId] = useState(null)
+  const [showHistory, setShowHistory] = useState(false)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const scrollRef = useRef(null)
+
+  const active = conversations.find(cv => cv.id === activeId) || null
+  const messages = active?.messages || []
 
   const suggestions = he ? [
     'מה המניה הכי מבטיחה לטווח ארוך כרגע ולמה?',
@@ -2016,27 +2021,74 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
     'Give me 3 multi-bagger candidates and explain each one\'s DNA',
   ]
 
+  // Load saved conversations on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('ss_chats')
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (Array.isArray(parsed) && parsed.length) {
+          setConversations(parsed)
+          setActiveId(parsed[0].id)
+        }
+      }
+    } catch {}
+  }, [])
+
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [messages, loading, open])
 
+  function persist(list) {
+    setConversations(list)
+    try { localStorage.setItem('ss_chats', JSON.stringify(list.slice(0, 50))) } catch {}
+  }
+
+  function newChat() {
+    setActiveId(null)
+    setShowHistory(false)
+  }
+  function selectChat(id) {
+    setActiveId(id)
+    setShowHistory(false)
+  }
+  function deleteChat(id) {
+    const list = conversations.filter(cv => cv.id !== id)
+    persist(list)
+    if (activeId === id) setActiveId(list[0]?.id || null)
+  }
+
   async function send(text) {
     const content = (text ?? input).trim()
     if (!content || loading) return
-    const newMessages = [...messages, { role: 'user', content }]
-    setMessages(newMessages)
+
+    // Ensure there's an active conversation; create one on first message
+    let conv = active
+    let list = conversations
+    if (!conv) {
+      conv = { id: 'c' + Date.now(), title: content.slice(0, 40), messages: [], updatedAt: Date.now() }
+      list = [conv, ...conversations]
+      setActiveId(conv.id)
+    }
+
+    const userMsgs = [...conv.messages, { role: 'user', content }]
+    const title = conv.messages.length === 0 ? content.slice(0, 40) : conv.title
+    let updated = list.map(cv => cv.id === conv.id ? { ...cv, messages: userMsgs, title, updatedAt: Date.now() } : cv)
+    persist(updated)
     setInput('')
     setLoading(true)
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages, journal }),
+        body: JSON.stringify({ messages: userMsgs, journal }),
       })
       const data = await res.json()
-      setMessages([...newMessages, { role: 'assistant', content: data.reply || '(no response)', searched: data.searched }])
+      const withReply = [...userMsgs, { role: 'assistant', content: data.reply || '(no response)', searched: data.searched }]
+      persist(updated.map(cv => cv.id === conv.id ? { ...cv, messages: withReply, updatedAt: Date.now() } : cv))
     } catch (e) {
-      setMessages([...newMessages, { role: 'assistant', content: `שגיאה: ${e.message}` }])
+      const withErr = [...userMsgs, { role: 'assistant', content: `שגיאה: ${e.message}` }]
+      persist(updated.map(cv => cv.id === conv.id ? { ...cv, messages: withErr } : cv))
     } finally {
       setLoading(false)
     }
@@ -2087,10 +2139,37 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={newChat} title={he ? 'שיחה חדשה' : 'New chat'} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 18 }}>+</button>
+              <button onClick={() => setShowHistory(s => !s)} title={he ? 'היסטוריית שיחות' : 'Chat history'} style={{ background: showHistory ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>🕘</button>
               <button onClick={() => setExpanded(e => !e)} title={expanded ? (he ? 'הקטן' : 'Shrink') : (he ? 'הגדל' : 'Expand')} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 15 }}>{expanded ? '⤡' : '⤢'}</button>
               <button onClick={() => setOpen(false)} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', width: 30, height: 30, borderRadius: 8, cursor: 'pointer', fontSize: 16 }}>✕</button>
             </div>
           </div>
+
+          {/* History panel */}
+          {showHistory && (
+            <div style={{ background: dark ? '#0d0d1a' : '#f7f9fc', borderBottom: `1px solid ${c.border}`, maxHeight: 240, overflowY: 'auto' }}>
+              <div style={{ padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: c.muted, textTransform: 'uppercase', letterSpacing: '.05em' }}>{he ? 'שיחות קודמות' : 'Past chats'}</span>
+                <button onClick={newChat} style={{ background: ACCENT, border: 'none', color: 'white', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>+ {he ? 'חדשה' : 'New'}</button>
+              </div>
+              {conversations.length === 0 ? (
+                <div style={{ padding: '0 16px 12px', fontSize: 12, color: c.muted }}>{he ? 'אין שיחות שמורות' : 'No saved chats'}</div>
+              ) : conversations.map(cv => (
+                <div key={cv.id} onClick={() => selectChat(cv.id)} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px', cursor: 'pointer',
+                  background: cv.id === activeId ? (dark ? '#16283a' : '#e8f0fa') : 'transparent',
+                  borderLeft: cv.id === activeId ? `3px solid ${ACCENT}` : '3px solid transparent',
+                }}>
+                  <span style={{ flex: 1, fontSize: 12.5, color: c.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    💬 {cv.title || (he ? 'שיחה' : 'Chat')}
+                  </span>
+                  <span style={{ fontSize: 10, color: c.muted, flexShrink: 0 }}>{new Date(cv.updatedAt).toLocaleDateString(he ? 'he-IL' : 'en-US')}</span>
+                  <button onClick={e => { e.stopPropagation(); deleteChat(cv.id) }} title={he ? 'מחק' : 'Delete'} style={{ background: 'none', border: 'none', color: c.muted, cursor: 'pointer', fontSize: 13, flexShrink: 0 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Messages */}
           <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '16px 16px' }}>
