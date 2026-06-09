@@ -375,32 +375,13 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   useEffect(() => {
     if (localStorage.getItem('dark') === 'true') setDark(true)
     if (localStorage.getItem('lang')) setLang(localStorage.getItem('lang'))
-    try {
-      // Load from new key first, fall back to old key for migration
-      const stored = localStorage.getItem('ss_journal') || localStorage.getItem('ss_watchlist')
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        // Migrate any old-format entries to the journal shape
-        const migrated = parsed.map((item, i) => ({
-          id:          item.id          || `${item.ticker}-${item.dateAdded || Date.now()}-${i}`,
-          ticker:      item.ticker,
-          name:        item.name || item.ticker,
-          quantity:    item.quantity    || 1,
-          entry_price: item.entry_price || item.entryPrice || 0,
-          entry_date:  item.entry_date  || item.dateAdded  || new Date().toISOString().split('T')[0],
-          notes:       item.notes       || '',
-        })).filter(t => t.entry_price > 0)
-        setJournal(migrated)
-        // Persist in new format
-        localStorage.setItem('ss_journal', JSON.stringify(migrated))
-      }
-    } catch {}
+    // Load the SHARED trading journal from Supabase (whole team sees it)
+    fetch('/api/journal')
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d.trades)) setJournal(d.trades) })
+      .catch(() => {})
   }, [])
 
-  function saveJournal(list) {
-    setJournal(list)
-    localStorage.setItem('ss_journal', JSON.stringify(list))
-  }
   function addTrade({ ticker, name, quantity, entry_price, notes }) {
     const qty = parseFloat(quantity)
     const px  = parseFloat(entry_price)
@@ -414,10 +395,17 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
       entry_date:  new Date().toISOString().split('T')[0],
       notes:       notes || '',
     }
-    saveJournal([entry, ...journal])
+    setJournal([entry, ...journal])
+    fetch('/api/journal', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trade: entry }),
+    }).catch(() => {})
     return true
   }
-  function removeTrade(id) { saveJournal(journal.filter(t => t.id !== id)) }
+  function removeTrade(id) {
+    setJournal(journal.filter(t => t.id !== id))
+    fetch('/api/journal?id=' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {})
+  }
 
   const toggleDark = () => setDark(d => { localStorage.setItem('dark', !d); return !d })
   const toggleLang = () => setLang(l => { const nl = l === 'he' ? 'en' : 'he'; localStorage.setItem('lang', nl); return nl })
@@ -1476,7 +1464,7 @@ function JournalRow({ trade, removeTrade, c, dark, lang }) {
   const he = lang === 'he'
   const data = usePriceHistory(trade.ticker)
   const closes = data?.closes || []
-  const current = closes.length ? closes[closes.length - 1] : null
+  const current = data?.current ?? (closes.length ? closes[closes.length - 1] : null)
 
   const costBasis = trade.quantity * trade.entry_price
   const currentValue = current != null ? trade.quantity * current : null
@@ -1782,7 +1770,7 @@ function PriceSyncHelper({ journal, onUpdate }) {
 function PriceSyncPoint({ ticker, onResolve }) {
   const data = usePriceHistory(ticker)
   const closes = data?.closes || []
-  const current = closes.length ? closes[closes.length - 1] : null
+  const current = data?.current ?? (closes.length ? closes[closes.length - 1] : null)
   useEffect(() => {
     if (current != null) onResolve(prev => ({ ...prev, [ticker]: current }))
   }, [current, ticker])
