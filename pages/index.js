@@ -616,7 +616,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 // ──────────────────────────────────────────────────────────────────
 function VerdictCard({ verdict, c, dark, lang }) {
   const he = lang === 'he'
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(true)  // default hidden — open with the Show button
 
   if (!verdict || !verdict.text) {
     return (
@@ -2028,7 +2028,6 @@ function TradingViewChart({ symbol, dark, height = 440 }) {
             { id: 'MASimple@tv-basicstudies', inputs: { length: 50 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 150 } },
             { id: 'MASimple@tv-basicstudies', inputs: { length: 200 } },
-            { id: 'PivotPointsHighLow@tv-basicstudies' },
           ],
           overrides: {
             'mainSeriesProperties.candleStyle.upColor': UP,
