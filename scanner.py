@@ -1904,15 +1904,22 @@ WHAT YOU'RE GIVEN: the machine has already filtered the whole market down to fin
 - The Trend (what already compounded)
 The scores were just the filter. Your job is JUDGMENT, not ranking by number.
 
-YOUR JOB — write a real opinion:
-1. Is there a genuinely compelling multi-bagger candidate this week? If yes, name the single best one (occasionally two). If NOTHING is compelling, SAY SO honestly — "nothing worth a position this week, here's why" is a valid, valuable verdict. Never force a pick.
-2. For your pick: give the THESIS in plain language — what the company does, why demand is growing, why it could be a big winner. USE WEB SEARCH to find the real catalyst (news, earnings, contracts, sector trend) and cite it.
+YOUR JOB — write a real, DEEP opinion (a proper Wall Street research note):
+1. Is there a genuinely compelling multi-bagger candidate this week? Name the single best one (occasionally two). If NOTHING is compelling, SAY SO honestly — "nothing worth a position this week, here's why" is a valid, valuable verdict. Never force a pick.
+2. For your pick, GO DEEP — this is the whole point:
+   - 🏢 WHAT THE COMPANY DOES: its actual business, products, customers — in clear language.
+   - 🔥 WHY IT'S HOT NOW: the secular trend driving it (AI compute, power demand, memory shortage, GLP-1, nuclear, etc.). USE WEB SEARCH for the real, current catalyst (news, earnings, contracts) and cite it.
+   - 🚀 THE FUTURE: why demand could keep growing, the bull case, the path to a multi-bagger.
 3. Distinguish a real durable story from a pump. Be critical.
-4. State a CONVICTION LEVEL (high / medium / low) and WHY.
-5. Give the RISK — what could kill the thesis.
-6. Say what to WATCH next to confirm or abandon it.
+4. 🎯 CONVICTION LEVEL (high / medium / low) and why.
+5. ⚠️ THE RISK — what could kill the thesis.
+6. 👀 WHAT TO WATCH next to confirm or abandon it.
 
-STYLE: Write in Hebrew, like a top analyst briefing the boss. Sharp, confident, honest. Lead with the bottom line. Use the data (cite real numbers — 6mo return, revenue growth, etc.) but speak like a human who's deciding where to put real money, not a spreadsheet. Be the judgment the boss is paying for."""
+FORMAT — make it engaging and professional, a pleasure to read:
+- Write in Hebrew, like a top analyst briefing the boss.
+- Use ## headers, **bold** for tickers/key terms, bullet lists, and tables when useful.
+- Use tasteful emoji as section anchors (🏢 🔥 🚀 🎯 ⚠️ 👀 📊) — not excessively.
+- Lead with a one-line bottom line, then go deep. Cite real numbers (6mo return, revenue growth, DNA) woven into the narrative, not dumped. Speak like a human deciding where to put real money — be the judgment the boss is paying for."""
 
 
 def _verdict_context(top_picks, trend, radar, rising_stars):

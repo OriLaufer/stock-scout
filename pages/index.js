@@ -1807,19 +1807,40 @@ function PriceSyncPoint({ ticker, onResolve }) {
 function mdInline(s, c) {
   // **bold**, `code`
   const out = []
+  // Auto-color percentages (+12% green, -8% red) inside any text fragment —
+  // the Wall-Street touch that makes numbers pop.
+  const colorPct = (str, keyBase) => {
+    const parts = []
+    const pctRe = /([+\-]?\d[\d,]*\.?\d*\s?%|\$\d[\d,]*\.?\d*[BMK]?)/g
+    let lastP = 0, mm, k = 0
+    while ((mm = pctRe.exec(str)) !== null) {
+      if (mm.index > lastP) parts.push(str.slice(lastP, mm.index))
+      const tok = mm[0]
+      const isNeg = /^-/.test(tok.trim())
+      const isPos = /^\+/.test(tok.trim())
+      const col = isNeg ? '#e5484d' : isPos ? '#1fab54' : null
+      parts.push(col
+        ? <span key={`${keyBase}-${k++}`} style={{ color: col, fontWeight: 700 }}>{tok}</span>
+        : tok)
+      lastP = mm.index + tok.length
+    }
+    if (lastP < str.length) parts.push(str.slice(lastP))
+    return parts
+  }
+
   let last = 0
   const re = /(\*\*([^*]+)\*\*|`([^`]+)`)/g
   let m
   while ((m = re.exec(s)) !== null) {
-    if (m.index > last) out.push(s.slice(last, m.index))
+    if (m.index > last) out.push(...colorPct(s.slice(last, m.index), `t${out.length}`))
     if (m[2] !== undefined) {
-      out.push(<strong key={out.length} style={{ fontWeight: 800 }}>{m[2]}</strong>)
+      out.push(<strong key={out.length} style={{ fontWeight: 800, color: c.text }}>{colorPct(m[2], `b${out.length}`)}</strong>)
     } else if (m[3] !== undefined) {
       out.push(<code key={out.length} style={{ background: c.chipBg, padding: '1px 5px', borderRadius: 4, fontSize: '0.92em' }}>{m[3]}</code>)
     }
     last = m.index + m[0].length
   }
-  if (last < s.length) out.push(s.slice(last))
+  if (last < s.length) out.push(...colorPct(s.slice(last), `e${out.length}`))
   return out
 }
 
@@ -1838,7 +1859,7 @@ function Markdown({ text, c, dark, rtl }) {
 
     // horizontal rule
     if (/^\s*---+\s*$/.test(line)) {
-      blocks.push(<div key={blocks.length} style={{ height: 1, background: c.border, margin: '14px 0' }} />)
+      blocks.push(<div key={blocks.length} style={{ height: 1, background: `linear-gradient(90deg, ${accent}55, transparent)`, margin: '16px 0' }} />)
       i++; continue
     }
 
@@ -1846,16 +1867,53 @@ function Markdown({ text, c, dark, rtl }) {
     const h = line.match(/^(#{1,4})\s+(.*)$/)
     if (h) {
       const lvl = h[1].length
-      const sizes = { 1: 18, 2: 16, 3: 14.5, 4: 13.5 }
+      if (lvl === 1) {
+        blocks.push(
+          <div key={blocks.length} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            fontSize: 19, fontWeight: 800, color: c.text,
+            margin: blocks.length ? '18px 0 10px' : '0 0 10px',
+          }}>
+            <span style={{ width: 4, alignSelf: 'stretch', minHeight: 22, background: `linear-gradient(${accent}, #1f6ea0)`, borderRadius: 3 }} />
+            <span>{mdInline(h[2], c)}</span>
+          </div>
+        )
+      } else if (lvl === 2) {
+        blocks.push(
+          <div key={blocks.length} style={{
+            fontSize: 16, fontWeight: 800, color: accent,
+            margin: blocks.length ? '16px 0 8px' : '0 0 8px',
+            paddingBottom: 5, borderBottom: `2px solid ${accent}33`,
+          }}>{mdInline(h[2], c)}</div>
+        )
+      } else {
+        blocks.push(
+          <div key={blocks.length} style={{
+            fontSize: 14, fontWeight: 800, color: c.text,
+            margin: blocks.length ? '12px 0 5px' : '0 0 5px',
+          }}>{mdInline(h[2], c)}</div>
+        )
+      }
+      i++; continue
+    }
+
+    // blockquote / callout — > text
+    if (/^\s*>\s?/.test(line)) {
+      const quote = []
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*>\s?/, '')); i++
+      }
       blocks.push(
         <div key={blocks.length} style={{
-          fontSize: sizes[lvl] || 14, fontWeight: 800, color: c.text,
-          margin: blocks.length ? '16px 0 8px' : '0 0 8px',
-          paddingBottom: lvl <= 2 ? 5 : 0,
-          borderBottom: lvl <= 2 ? `2px solid ${accent}33` : 'none',
-        }}>{mdInline(h[2], c)}</div>
+          [rtl ? 'borderRight' : 'borderLeft']: `4px solid ${accent}`,
+          background: dark ? '#10283340' : '#eef7fb',
+          padding: '10px 14px', borderRadius: 8, margin: '10px 0',
+          fontSize: 13.5, lineHeight: 1.6, color: c.text,
+        }}>
+          {quote.map((q, qi) => <div key={qi}>{mdInline(q, c)}</div>)}
+        </div>
       )
-      i++; continue
+      continue
     }
 
     // table — consecutive lines starting with |
@@ -1868,15 +1926,15 @@ function Markdown({ text, c, dark, rtl }) {
       if (rows.length) {
         const [head, ...body] = rows
         blocks.push(
-          <div key={blocks.length} style={{ overflowX: 'auto', margin: '8px 0' }}>
+          <div key={blocks.length} style={{ overflowX: 'auto', margin: '10px 0', borderRadius: 10, border: `1px solid ${c.border}` }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead><tr>{head.map((cell, ci) => (
-                <th key={ci} style={{ textAlign: rtl ? 'right' : 'left', padding: '7px 10px', background: c.thead, color: c.muted, fontWeight: 700, fontSize: 11, borderBottom: `1px solid ${c.border}`, whiteSpace: 'nowrap' }}>{mdInline(cell, c)}</th>
+                <th key={ci} style={{ textAlign: rtl ? 'right' : 'left', padding: '9px 12px', background: dark ? '#10283a' : '#eef4fa', color: accent, fontWeight: 800, fontSize: 11.5, whiteSpace: 'nowrap' }}>{mdInline(cell, c)}</th>
               ))}</tr></thead>
               <tbody>{body.map((r, ri) => (
-                <tr key={ri} style={{ borderBottom: `1px solid ${c.border}` }}>
+                <tr key={ri} style={{ background: ri % 2 ? (dark ? '#14142800' : '#fafcff') : (dark ? '#1a1a2e' : '#fff') }}>
                   {r.map((cell, ci) => (
-                    <td key={ci} style={{ padding: '7px 10px', color: c.text, verticalAlign: 'top' }}>{mdInline(cell, c)}</td>
+                    <td key={ci} style={{ padding: '9px 12px', color: c.text, verticalAlign: 'top', borderTop: `1px solid ${c.border}` }}>{mdInline(cell, c)}</td>
                   ))}
                 </tr>
               ))}</tbody>
@@ -1887,18 +1945,21 @@ function Markdown({ text, c, dark, rtl }) {
       continue
     }
 
-    // unordered list
+    // unordered list — custom colored markers
     if (/^\s*[-*]\s+/.test(line)) {
       const items = []
       while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
         items.push(lines[i].replace(/^\s*[-*]\s+/, '')); i++
       }
       blocks.push(
-        <ul key={blocks.length} style={{ margin: '6px 0', paddingInlineStart: 22 }}>
+        <div key={blocks.length} style={{ margin: '8px 0', display: 'flex', flexDirection: 'column', gap: 5 }}>
           {items.map((it, ii) => (
-            <li key={ii} style={{ fontSize: 13.5, lineHeight: 1.6, color: c.text, marginBottom: 3 }}>{mdInline(it, c)}</li>
+            <div key={ii} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13.5, lineHeight: 1.6, color: c.text }}>
+              <span style={{ color: accent, fontWeight: 800, flexShrink: 0, marginTop: 1 }}>{rtl ? '◂' : '▸'}</span>
+              <span>{mdInline(it, c)}</span>
+            </div>
           ))}
-        </ul>
+        </div>
       )
       continue
     }
@@ -1921,7 +1982,7 @@ function Markdown({ text, c, dark, rtl }) {
 
     // paragraph (gather consecutive plain lines)
     const para = []
-    while (i < lines.length && lines[i].trim() && !/^\s*(#{1,4}\s|[-*]\s|\d+\.\s|\||---+\s*$)/.test(lines[i])) {
+    while (i < lines.length && lines[i].trim() && !/^\s*(#{1,4}\s|[-*]\s|\d+\.\s|\||>\s?|---+\s*$)/.test(lines[i])) {
       para.push(lines[i]); i++
     }
     blocks.push(
