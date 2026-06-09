@@ -294,19 +294,22 @@ export default async function handler(req, res) {
       })
     }
 
-    // Try with web search; if the tool isn't supported, retry without it.
-    let r = await callModel(true)
+    // Web search is OFF by default — the agentic search loop is too slow for
+    // Vercel's 60s limit. The chat answers fast from our rich context. The
+    // client can opt in with useWeb:true for the rare "search the news" ask.
+    const wantWeb = req.body?.useWeb === true
+    let r = await callModel(wantWeb)
+    if (!r.ok && wantWeb) {
+      const errText = await r.text()
+      if (/tool|web_search/i.test(errText)) r = await callModel(false)
+    }
     if (!r.ok) {
       const errText = await r.text()
-      if (/tool|web_search/i.test(errText)) {
-        r = await callModel(false)
-      } else {
-        console.error(`Anthropic error (${model}):`, r.status, errText.slice(0, 200))
-        return res.status(200).json({
-          reply: `שגיאה מה-AI (${model}). פרטים: HTTP ${r.status}: ${errText.slice(0, 160)}`,
-          error: true,
-        })
-      }
+      console.error(`Anthropic error (${model}):`, r.status, errText.slice(0, 200))
+      return res.status(200).json({
+        reply: `שגיאה מה-AI (${model}). פרטים: HTTP ${r.status}: ${errText.slice(0, 160)}`,
+        error: true,
+      })
     }
 
     if (r.ok) {
