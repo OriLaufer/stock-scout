@@ -1997,6 +1997,79 @@ function Markdown({ text, c, dark, rtl }) {
   return <div style={{ direction: rtl ? 'rtl' : 'ltr', textAlign: rtl ? 'right' : 'left' }}>{blocks}</div>
 }
 
+// ── Live TradingView chart — embeds the full interactive candlestick chart
+// (with moving averages, volume, drawing tools) right inside the card. ──
+function TradingViewChart({ symbol, dark, height = 440 }) {
+  const idRef = useRef('tv_' + Math.random().toString(36).slice(2, 9))
+  useEffect(() => {
+    let cancelled = false
+    function init() {
+      if (cancelled || !window.TradingView) return
+      const el = document.getElementById(idRef.current)
+      if (!el) return
+      el.innerHTML = ''
+      try {
+        new window.TradingView.widget({
+          autosize: true,
+          symbol: symbol,
+          interval: 'W',               // weekly candles — matches how we scan
+          timezone: 'Etc/UTC',
+          theme: dark ? 'dark' : 'light',
+          style: '1',                  // candles
+          locale: 'en',
+          allow_symbol_change: true,
+          hide_side_toolbar: false,
+          studies: ['MASimple@tv-basicstudies'],
+          container_id: idRef.current,
+        })
+      } catch {}
+    }
+    function ensure() {
+      if (window.TradingView) return init()
+      let s = document.getElementById('tv-js')
+      if (!s) {
+        s = document.createElement('script')
+        s.id = 'tv-js'
+        s.src = 'https://s3.tradingview.com/tv.js'
+        s.async = true
+        document.body.appendChild(s)
+      }
+      s.addEventListener('load', init)
+    }
+    ensure()
+    return () => { cancelled = true }
+  }, [symbol, dark])
+  return <div id={idRef.current} style={{ height, width: '100%' }} />
+}
+
+// A section that shows the TradingView chart + an "open full" link.
+function ChartSection({ ticker, c, dark, he }) {
+  const [show, setShow] = useState(false)
+  return (
+    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '14px 16px', marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: show ? 12 : 0 }}>
+        <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em' }}>
+          📈 {he ? 'גרף חי (TradingView)' : 'Live Chart (TradingView)'}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setShow(s => !s)} style={{
+            background: show ? c.chipBg : '#2962ff', color: show ? c.text : 'white',
+            border: 'none', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+          }}>
+            {show ? (he ? 'הסתר גרף' : 'Hide chart') : (he ? '📊 הצג גרף' : '📊 Show chart')}
+          </button>
+          <a href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}`} target="_blank" rel="noopener noreferrer" style={{
+            background: c.chipBg, color: c.text, borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 700, textDecoration: 'none',
+          }}>
+            🔗 {he ? 'מסך מלא' : 'Full screen'}
+          </a>
+        </div>
+      </div>
+      {show && <TradingViewChart symbol={ticker} dark={dark} />}
+    </div>
+  )
+}
+
 function FloatingAnalyst({ journal, c, dark, lang }) {
   const he = lang === 'he'
   const [open, setOpen] = useState(false)
@@ -2412,6 +2485,11 @@ function RisingStars({ stars, c, dark, lang }) {
                     )}
                   </div>
 
+                  {/* Live TradingView chart */}
+                  <div style={{ marginBottom: 18 }}>
+                    <ChartSection ticker={stock.ticker} c={c} dark={dark} he={he} />
+                  </div>
+
                   {/* Score breakdown */}
                   <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '16px 20px' }}>
                     <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 14 }}>
@@ -2626,6 +2704,11 @@ function MultiBaggerRadar({ radar, c, dark, lang }) {
                     <MetricBox
                       label={he ? 'הופעות בסריקה' : 'Scan Appearances'}
                       value={stock.appearances} c={c} />
+                  </div>
+
+                  {/* Live TradingView chart */}
+                  <div style={{ marginBottom: 18 }}>
+                    <ChartSection ticker={stock.ticker} c={c} dark={dark} he={he} />
                   </div>
 
                   {/* DNA breakdown bars */}
@@ -3090,6 +3173,9 @@ function TheTrend({ trend, c, dark, lang }) {
                       </div>
                     </div>
                   )}
+
+                  {/* Live TradingView chart */}
+                  <ChartSection ticker={stock.ticker} c={c} dark={dark} he={he} />
 
                   {/* Weekly trend visualization — big & beautiful */}
                   <div style={{
