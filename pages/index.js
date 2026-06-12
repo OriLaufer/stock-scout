@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Fragment } from 'react'
 import fs from 'fs'
 import path from 'path'
 
@@ -1460,7 +1460,7 @@ function SectorHeatmap({ stocks, c, dark, sectorFilter, setSectorFilter, lang })
 
 // ── TRADING JOURNAL ──────────────────────────────────────────────
 // Single row in the journal — fetches current price and computes P&L.
-function JournalRow({ trade, removeTrade, c, dark, lang }) {
+function JournalRow({ trade, removeTrade, c, dark, lang, isOpen, onToggle }) {
   const he = lang === 'he'
   const data = usePriceHistory(trade.ticker)
   const closes = data?.closes || []
@@ -1481,12 +1481,16 @@ function JournalRow({ trade, removeTrade, c, dark, lang }) {
   })()
 
   return (
-    <tr style={{ borderBottom: `1px solid ${c.border}`, background: c.card }}
-      onMouseEnter={e => e.currentTarget.style.background = c.rowHover}
-      onMouseLeave={e => e.currentTarget.style.background = c.card}>
+    <tr onClick={onToggle} title={lang === 'he' ? 'לחץ לכרטיס זהות מלא' : 'Click for full identity card'}
+      style={{ borderBottom: `1px solid ${c.border}`, background: isOpen ? c.rowHover : c.card, cursor: 'pointer' }}
+      onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = c.rowHover }}
+      onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = c.card }}>
       {/* Ticker */}
       <td style={{ padding: '12px 14px' }}>
-        <div style={{ fontWeight: 800, fontSize: 15, color: c.text }}>{trade.ticker}</div>
+        <div style={{ fontWeight: 800, fontSize: 15, color: c.text, display: 'flex', alignItems: 'center', gap: 6 }}>
+          {trade.ticker}
+          <span style={{ fontSize: 11, color: c.muted }}>{isOpen ? '▲' : '▼'}</span>
+        </div>
         <div style={{ fontSize: 10, color: c.muted, marginTop: 1, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trade.name}</div>
         <Sparkline ticker={trade.ticker} width={70} height={18} />
       </td>
@@ -1535,7 +1539,8 @@ function JournalRow({ trade, removeTrade, c, dark, lang }) {
       </td>
       {/* Remove */}
       <td style={{ padding: '12px 14px' }}>
-        <button onClick={() => {
+        <button onClick={(e) => {
+          e.stopPropagation()
           if (confirm(he ? `למחוק את העסקה ב-${trade.ticker}?` : `Delete ${trade.ticker} trade?`)) {
             removeTrade(trade.id)
           }
@@ -1571,6 +1576,7 @@ function TradingJournal({ journal, addTrade, removeTrade, c, dark, lang }) {
   const he = lang === 'he'
   const [form, setForm] = useState({ ticker: '', quantity: '', entry_price: '' })
   const [showForm, setShowForm] = useState(false)
+  const [openTrade, setOpenTrade] = useState(null)
 
   // Calculate totals reactively from journal entries + live prices
   // Each row's price comes from usePriceHistory cache; aggregate via a helper component
@@ -1731,9 +1737,20 @@ function TradingJournal({ journal, addTrade, removeTrade, c, dark, lang }) {
             </thead>
             <tbody>
               {journal.map(trade => (
-                <JournalRow key={trade.id} trade={trade} removeTrade={removeTrade}
-                  c={c} dark={dark} lang={lang}
-                />
+                <Fragment key={trade.id}>
+                  <JournalRow trade={trade} removeTrade={removeTrade}
+                    c={c} dark={dark} lang={lang}
+                    isOpen={openTrade === trade.id}
+                    onToggle={() => setOpenTrade(openTrade === trade.id ? null : trade.id)}
+                  />
+                  {openTrade === trade.id && (
+                    <tr>
+                      <td colSpan={10} style={{ padding: 0, borderBottom: `1px solid ${c.border}` }}>
+                        <StockDeepDive ticker={trade.ticker} c={c} dark={dark} lang={lang} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -2081,6 +2098,127 @@ function ChartSection({ ticker, c, dark, he }) {
         </div>
       </div>
       {show && <TradingViewChart symbol={ticker} dark={dark} />}
+    </div>
+  )
+}
+
+// ── Full identity card for ANY ticker (used in the Journal deep-dive). ──
+// Fetches identity on demand and renders the same blocks as The Trend:
+// hero, analyst target, 52W range, share structure, business overview, chart.
+function StockDeepDive({ ticker, c, dark, lang }) {
+  const he = lang === 'he'
+  const [id, setId] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetch('/api/stock-identity?ticker=' + encodeURIComponent(ticker))
+      .then(r => r.json())
+      .then(d => { if (!cancelled) { setId(d || {}); setLoading(false) } })
+      .catch(() => { if (!cancelled) { setId({}); setLoading(false) } })
+    return () => { cancelled = true }
+  }, [ticker])
+
+  const x = id || {}
+  const rec = _recBadge(x.recommendation)
+
+  return (
+    <div style={{ background: dark ? '#0a1422' : '#f3f7fc', padding: '22px 24px', borderTop: `2px solid #16486b` }}>
+      {/* Hero */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 14, marginBottom: 18 }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 26, fontWeight: 800, color: c.text }}>{ticker}</span>
+            {x.market_cap && <span style={{ fontSize: 13, fontWeight: 600, color: c.muted, background: c.card, padding: '3px 9px', borderRadius: 6, border: `1px solid ${c.border}` }}>{_formatMcapShort(x.market_cap)}</span>}
+            {x.price && <span style={{ fontSize: 15, fontWeight: 700, color: c.text }}>${x.price}</span>}
+          </div>
+          {x.name && <div style={{ fontSize: 14, color: c.text, marginTop: 4, fontWeight: 600 }}>{x.name}</div>}
+          <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>
+            {[x.industry || x.sector, x.country].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+      </div>
+
+      {loading && <div style={{ fontSize: 13, color: c.muted, marginBottom: 14 }}>{he ? 'טוען נתונים...' : 'Loading...'}</div>}
+
+      {/* Stats grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12, marginBottom: 16 }}>
+        {/* Analyst target */}
+        {x.target_mean ? (
+          <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '14px 16px', borderTop: '3px solid #1a6bb5' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em' }}>🎯 {he ? 'יעד אנליסטים' : 'Analyst Target'}</div>
+              {rec && <span style={{ background: rec.bg, color: rec.color, padding: '2px 8px', borderRadius: 10, fontSize: 9, fontWeight: 700 }}>{rec.label}</span>}
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: c.text }}>
+              ${x.target_mean}
+              {x.target_upside_pct !== undefined && (
+                <span style={{ fontSize: 13, marginLeft: 8, color: x.target_upside_pct >= 15 ? '#097c3e' : x.target_upside_pct >= 0 ? '#cc8800' : '#c0392b', fontWeight: 700 }}>
+                  {x.target_upside_pct >= 0 ? '+' : ''}{x.target_upside_pct}%
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: c.muted, marginTop: 4 }}>
+              {x.target_low && x.target_high ? `${he ? 'טווח' : 'Range'}: $${x.target_low}–$${x.target_high}` : ''}{x.analyst_count ? ` · ${x.analyst_count} ${he ? 'אנליסטים' : 'analysts'}` : ''}
+            </div>
+          </div>
+        ) : (!loading && (
+          <div style={{ background: dark ? '#1a1623' : '#fafafa', border: `1px dashed ${c.border}`, borderRadius: 10, padding: '14px 16px', borderTop: '3px solid #888' }}>
+            <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, marginBottom: 6 }}>🎯 {he ? 'יעד אנליסטים' : 'Analyst Target'}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: c.muted }}>⚠️ {he ? 'אין כיסוי אנליסטים' : 'No analyst coverage'}</div>
+          </div>
+        ))}
+
+        {/* 52W range */}
+        {x.high_52w !== undefined && x.low_52w !== undefined && (
+          <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '14px 16px', borderTop: '3px solid #cc8800' }}>
+            <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 8 }}>📅 {he ? 'טווח 52 שבועות' : '52-Week Range'}</div>
+            <div style={{ position: 'relative', height: 8, background: dark ? '#0a1520' : '#e6f0fa', borderRadius: 4, marginBottom: 8 }}>
+              {x.pos_in_52w_range_pct !== undefined && (
+                <div style={{ position: 'absolute', left: `${Math.max(0, Math.min(100, x.pos_in_52w_range_pct))}%`, top: -3, width: 14, height: 14, borderRadius: '50%', background: x.pos_in_52w_range_pct >= 80 ? '#097c3e' : x.pos_in_52w_range_pct >= 50 ? '#cc8800' : '#888', transform: 'translateX(-50%)', boxShadow: `0 0 0 2px ${c.card}` }} />
+              )}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: c.muted }}>
+              <span style={{ fontWeight: 700, color: c.text }}>${x.low_52w}</span>
+              {x.pos_in_52w_range_pct !== undefined && <span style={{ fontSize: 10 }}>{x.pos_in_52w_range_pct}%</span>}
+              <span style={{ fontWeight: 700, color: c.text }}>${x.high_52w}</span>
+            </div>
+            {(x.gain_from_52w_low_pct !== undefined || x.gain_to_52w_high_pct !== undefined) && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: c.muted, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${c.border}` }}>
+                <span><span style={{ color: '#097c3e', fontWeight: 700 }}>+{x.gain_from_52w_low_pct}%</span> {he ? 'מהתחתית' : 'from low'}</span>
+                <span><span style={{ color: '#cc8800', fontWeight: 700 }}>+{x.gain_to_52w_high_pct}%</span> {he ? 'לשיא' : 'to high'}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Share structure */}
+        {(x.float_m !== undefined || x.short_pct !== undefined || x.revenue_growth_pct !== undefined) && (
+          <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '14px 16px', borderTop: '3px solid #097c3e' }}>
+            <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 8 }}>📊 {he ? 'נתונים' : 'Fundamentals'}</div>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              {x.float_m !== undefined && <div><div style={{ fontSize: 11, color: c.muted }}>Float</div><div style={{ fontSize: 16, fontWeight: 800, color: x.float_m < 30 ? '#097c3e' : x.float_m > 100 ? '#c0392b' : c.text }}>{x.float_m}M</div></div>}
+              {x.short_pct !== undefined && <div><div style={{ fontSize: 11, color: c.muted }}>{he ? 'שורט' : 'Short'}</div><div style={{ fontSize: 16, fontWeight: 800, color: x.short_pct > 15 ? '#cc8800' : c.text }}>{x.short_pct}%</div></div>}
+              {x.revenue_growth_pct !== undefined && <div><div style={{ fontSize: 11, color: c.muted }}>{he ? 'צמיחת הכנסות' : 'Rev growth'}</div><div style={{ fontSize: 16, fontWeight: 800, color: x.revenue_growth_pct > 0 ? '#097c3e' : c.text }}>{x.revenue_growth_pct >= 0 ? '+' : ''}{x.revenue_growth_pct}%</div></div>}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Business overview */}
+      {x.business_summary && (
+        <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '14px 18px', marginBottom: 16, borderLeft: '4px solid #1a1a2e' }}>
+          <div style={{ fontSize: 10, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+            🏢 {he ? 'תיאור עסקי' : 'Business Overview'}
+            {x.website && <a href={x.website} target="_blank" rel="noopener noreferrer" style={{ color: '#1a6bb5', fontSize: 10, textDecoration: 'none', marginLeft: 'auto' }}>🔗 {he ? 'אתר' : 'Website'}</a>}
+          </div>
+          <div style={{ fontSize: 12.5, color: c.text, lineHeight: 1.6 }}>{x.business_summary}</div>
+        </div>
+      )}
+
+      {/* Live chart */}
+      <ChartSection ticker={ticker} c={c} dark={dark} he={he} />
     </div>
   )
 }
