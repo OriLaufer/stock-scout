@@ -1471,7 +1471,8 @@ function JournalRow({ trade, removeTrade, c, dark, lang }) {
   const pnlDollars  = currentValue != null ? currentValue - costBasis : null
   const pnlPct      = current != null ? (current - trade.entry_price) / trade.entry_price * 100 : null
   const isProfit = (pnlPct ?? 0) >= 0
-  const pnlColor = pnlPct == null ? c.muted : isProfit ? '#097c3e' : '#c0392b'
+  const GREEN = '#00c853', RED = '#ff3b30'   // vivid, bold
+  const pnlColor = pnlPct == null ? c.muted : isProfit ? GREEN : RED
 
   const daysHeld = (() => {
     if (!trade.entry_date) return null
@@ -1508,7 +1509,7 @@ function JournalRow({ trade, removeTrade, c, dark, lang }) {
       {/* $ P&L */}
       <td style={{ padding: '12px 14px' }}>
         {pnlDollars != null ? (
-          <span style={{ fontWeight: 800, fontSize: 14, color: pnlColor }}>
+          <span style={{ fontWeight: 800, fontSize: 15, color: pnlColor }}>
             {pnlDollars >= 0 ? '+' : ''}${pnlDollars.toFixed(2)}
           </span>
         ) : <span style={{ color: c.muted }}>—</span>}
@@ -1517,10 +1518,11 @@ function JournalRow({ trade, removeTrade, c, dark, lang }) {
       <td style={{ padding: '12px 14px' }}>
         {pnlPct != null ? (
           <span style={{
-            background: isProfit ? (dark ? '#1a3a1a' : '#EAF3DE') : (dark ? '#3a1a1a' : '#FCEBEB'),
-            color: pnlColor, padding: '4px 10px', borderRadius: 10,
+            background: isProfit ? GREEN : RED,
+            color: 'white', padding: '5px 12px', borderRadius: 10,
             fontWeight: 800, fontSize: 14,
             display: 'inline-block',
+            boxShadow: `0 0 10px ${isProfit ? GREEN : RED}55`,
           }}>
             {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
           </span>
@@ -1581,8 +1583,8 @@ function TradingJournal({ journal, addTrade, removeTrade, c, dark, lang }) {
   }, 0)
   const totalPnL = totalCurrent - totalCost
   const totalPnLPct = totalCost > 0 ? (totalPnL / totalCost) * 100 : 0
-  const profitColor = totalPnL >= 0 ? '#097c3e' : '#c0392b'
-  const profitBg    = totalPnL >= 0 ? (dark ? '#0d2018' : '#EAF3DE') : (dark ? '#2a0e0e' : '#FCEBEB')
+  const profitColor = totalPnL >= 0 ? '#00c853' : '#ff3b30'
+  const profitBg    = totalPnL >= 0 ? (dark ? '#0d3320' : '#dcf5e6') : (dark ? '#3a1010' : '#ffe0de')
 
   function handleSubmit(e) {
     e.preventDefault()
