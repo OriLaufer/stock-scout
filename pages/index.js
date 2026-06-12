@@ -414,6 +414,25 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
   const stocks = currentScan.stocks || []
   const bonus = currentScan.bonus || []
 
+  // Weekly history per ticker (for the Journal deep-dive bars): prefer the
+  // Trend's continuous timeline; otherwise build from our scan appearances.
+  const weeklyHistoryByTicker = (() => {
+    const map = {}
+    if (trend) trend.forEach(t => { if (t.weekly_history?.length) map[t.ticker] = t.weekly_history })
+    const we = (lbl) => { const m = (lbl || '').match(/(\d{2})\.(\d{2})\.(\d{4})$/); return m ? new Date(`${m[3]}-${m[2]}-${m[1]}`) : new Date(0) }
+    const fromScans = {}
+    ;(scans || []).forEach(scan => {
+      (scan.stocks || []).forEach(s => {
+        if (!s?.ticker) return
+        ;(fromScans[s.ticker] = fromScans[s.ticker] || []).push({ week: scan.week_label, change_pct: s.change_pct, in_scan: true })
+      })
+    })
+    Object.keys(fromScans).forEach(tk => {
+      if (!map[tk]) map[tk] = fromScans[tk].sort((a, b) => we(a.week) - we(b.week))
+    })
+    return map
+  })()
+
   async function saveAndScan() {
     setSaving(true)
     setSaveMsg('')
@@ -505,7 +524,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         )}
 
         {tab === 'watchlist' && (
-          <TradingJournal journal={journal} addTrade={addTrade} removeTrade={removeTrade} c={c} dark={dark} lang={lang} />
+          <TradingJournal journal={journal} addTrade={addTrade} removeTrade={removeTrade} weeklyHistoryByTicker={weeklyHistoryByTicker} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'weekly' && (<>
@@ -1572,7 +1591,7 @@ function useJournalTotals(journal) {
   return { totalCost }
 }
 
-function TradingJournal({ journal, addTrade, removeTrade, c, dark, lang }) {
+function TradingJournal({ journal, addTrade, removeTrade, weeklyHistoryByTicker = {}, c, dark, lang }) {
   const he = lang === 'he'
   const [form, setForm] = useState({ ticker: '', quantity: '', entry_price: '' })
   const [showForm, setShowForm] = useState(false)
@@ -1746,7 +1765,7 @@ function TradingJournal({ journal, addTrade, removeTrade, c, dark, lang }) {
                   {openTrade === trade.id && (
                     <tr>
                       <td colSpan={10} style={{ padding: 0, borderBottom: `1px solid ${c.border}` }}>
-                        <StockDeepDive ticker={trade.ticker} c={c} dark={dark} lang={lang} />
+                        <StockDeepDive ticker={trade.ticker} weeklyHistory={weeklyHistoryByTicker[trade.ticker]} c={c} dark={dark} lang={lang} />
                       </td>
                     </tr>
                   )}
@@ -2102,10 +2121,70 @@ function ChartSection({ ticker, c, dark, he }) {
   )
 }
 
+// ── Weekly returns bars (diverging: green up, red down) — the signature
+// "Weekly Trend" view, reusable for the journal deep-dive. ──
+function WeeklyBars({ history, c, dark, he }) {
+  if (!history || !history.length) return null
+  const HALF = 70, LABEL = 16, MID = HALF + LABEL, TOTAL = HALF * 2 + LABEL * 2
+  const greens = '#00c853', reds = '#ff3b30'
+  const maxAbs = Math.max(5, ...history.map(h => Math.abs(h.change_pct || 0)))
+  return (
+    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '16px 18px', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em' }}>
+          📅 {he ? 'המגמה השבועית — תשואה לכל שבוע' : 'Weekly Trend — Returns by Week'}
+        </div>
+        {history.some(h => h.in_scan) && (
+          <span style={{ fontSize: 10, color: c.muted, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ color: '#FFD700', fontSize: 12 }}>★</span> {he ? 'הופיעה בסריקה' : 'in our scans'}
+          </span>
+        )}
+      </div>
+      <div style={{ position: 'relative', height: TOTAL, marginBottom: 6 }}>
+        <div style={{ position: 'absolute', top: MID, left: 0, right: 0, height: 1, background: dark ? '#2a2a3e' : '#dcdce6' }} />
+        <div style={{ display: 'flex', height: '100%', gap: 4, position: 'relative', zIndex: 2 }}>
+          {history.map((h, i) => {
+            const pos = h.change_pct >= 0
+            const abs = Math.abs(h.change_pct)
+            const barH = Math.max(5, Math.sqrt(abs / maxAbs) * HALF)
+            const fill = pos ? greens : reds
+            return (
+              <div key={i} style={{ flex: 1, position: 'relative', minWidth: 0 }} title={`${h.week}: ${pos ? '+' : ''}${h.change_pct}%`}>
+                {pos ? (
+                  <>
+                    <div style={{ position: 'absolute', top: MID - barH - LABEL, left: '50%', transform: 'translateX(-50%)', fontSize: 10, fontWeight: 800, color: fill, whiteSpace: 'nowrap', display: 'flex', gap: 2, alignItems: 'center' }}>
+                      {h.in_scan && <span style={{ color: '#FFD700', fontSize: 11 }}>★</span>}+{Math.round(h.change_pct)}%
+                    </div>
+                    <div style={{ position: 'absolute', top: MID - barH, left: '50%', transform: 'translateX(-50%)', width: '80%', maxWidth: 30, height: barH, background: fill, borderRadius: '4px 4px 0 0', border: '2px solid #0a5e30', boxShadow: `0 0 8px ${fill}40` }} />
+                  </>
+                ) : (
+                  <>
+                    <div style={{ position: 'absolute', top: MID, left: '50%', transform: 'translateX(-50%)', width: '80%', maxWidth: 30, height: barH, background: fill, borderRadius: '0 0 4px 4px', border: '2px solid #9c2a1f', boxShadow: `0 0 8px ${fill}40` }} />
+                    <div style={{ position: 'absolute', top: MID + barH + 2, left: '50%', transform: 'translateX(-50%)', fontSize: 10, fontWeight: 800, color: fill, whiteSpace: 'nowrap', display: 'flex', gap: 2, alignItems: 'center' }}>
+                      {h.in_scan && <span style={{ color: '#FFD700', fontSize: 11 }}>★</span>}{Math.round(h.change_pct)}%
+                    </div>
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 4, paddingTop: 8, borderTop: `1px solid ${c.border}` }}>
+        {history.map((h, i) => (
+          <div key={i} style={{ flex: 1, textAlign: 'center', minWidth: 0, fontSize: 9, color: c.muted, fontWeight: 600, whiteSpace: 'nowrap' }}>
+            {(h.week.split('-')[1] || h.week).replace(/\.20\d\d$/, '')}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Full identity card for ANY ticker (used in the Journal deep-dive). ──
 // Fetches identity on demand and renders the same blocks as The Trend:
 // hero, analyst target, 52W range, share structure, business overview, chart.
-function StockDeepDive({ ticker, c, dark, lang }) {
+function StockDeepDive({ ticker, weeklyHistory, c, dark, lang }) {
   const he = lang === 'he'
   const [id, setId] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -2215,6 +2294,11 @@ function StockDeepDive({ ticker, c, dark, lang }) {
           </div>
           <div style={{ fontSize: 12.5, color: c.text, lineHeight: 1.6 }}>{x.business_summary}</div>
         </div>
+      )}
+
+      {/* Weekly trend bars — only when this ticker is in our scan history */}
+      {weeklyHistory && weeklyHistory.length > 0 && (
+        <WeeklyBars history={weeklyHistory} c={c} dark={dark} he={he} />
       )}
 
       {/* Live chart */}
