@@ -2651,30 +2651,36 @@ def main():
     # 5. Save first so compute_backtest + compute_the_trend can include this week's data
     save_to_supabase(top_picks, [], week_label, backtest_entry=weekly_backtest)
 
+    # Each enrichment step is wrapped so that ONE failure never blocks the
+    # email or the rest. The core scan (top picks) is already saved above.
+    def _safe(label, fn, default=None):
+        try:
+            return fn()
+        except Exception as e:
+            print(f"  ⚠️ {label} failed (continuing): {type(e).__name__}: {e}")
+            return default
+
     # 6. Build the REAL track record (yfinance actual gains) for the email
     print("\nBuilding real track record...")
-    backtest = build_real_track_record()
+    backtest = _safe("track record", build_real_track_record)
     if backtest:
         print(f"  Track record: {backtest['total_weeks']} weeks | {backtest['win_rate']}% win rate | {backtest['avg_weekly']}% avg weekly | {backtest['compound_ret']}% compound")
 
-    # 7. Compute "The Trend" — top 10 by compound return across ALL scans
+    # 7. The Trend
     print("\nComputing The Trend (top 10 by compound return)...")
-    trend = compute_the_trend(top_n=10)
+    trend = _safe("trend", lambda: compute_the_trend(top_n=10))
 
-    # 8. Compute "Multi-Bagger Radar" — top 10 by DNA score (forward-looking)
+    # 8. Multi-Bagger Radar
     print("\nComputing Multi-Bagger Radar (top 10 by DNA score)...")
-    radar = compute_multibagger_radar(top_n=10)
+    radar = _safe("radar", lambda: compute_multibagger_radar(top_n=10))
 
-    # 9. Compute "Rising Stars" — quiet base-builders across the WHOLE market
-    #    (the early-SanDisk scan: strong 6mo relative strength, not just this
-    #    week's gainers). This is the piece that catches multi-baggers early.
+    # 9. Rising Stars (full-market RS — the early-SanDisk scan)
     print("\nComputing Rising Stars (quiet base-builders, full-market RS)...")
-    rising_stars = compute_rising_stars(price_data, names, target=20)
+    rising_stars = _safe("rising stars", lambda: compute_rising_stars(price_data, names, target=20))
 
-    # 10. THE VERDICT — the analyst's real written opinion (not a score).
-    #     The scores above were the filter; this is the judgment.
+    # 10. THE VERDICT — the analyst's real written opinion
     print("\nGenerating The Verdict (AI analyst's real opinion)...")
-    verdict = generate_ai_verdict(top_picks, trend, radar, rising_stars)
+    verdict = _safe("verdict", lambda: generate_ai_verdict(top_picks, trend, radar, rising_stars))
 
     # Save trend + radar + rising_stars + verdict into the just-saved row
     if trend or radar or rising_stars or verdict:
