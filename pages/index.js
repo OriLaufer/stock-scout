@@ -3035,6 +3035,19 @@ function TheTrend({ trend, c, dark, lang }) {
   const he = lang === 'he'
   const [openTicker, setOpenTicker] = useState(null)
   const [summaryExpanded, setSummaryExpanded] = useState({})
+  const [liveIdentity, setLiveIdentity] = useState({})  // live-fetched identity per ticker
+
+  // When a row opens, fetch fresh identity (analyst target, 52W, business...)
+  // from /api/stock-identity — reliable even when the weekly scan was rate-limited.
+  useEffect(() => {
+    if (!openTicker || liveIdentity[openTicker]) return
+    let cancelled = false
+    fetch('/api/stock-identity?ticker=' + encodeURIComponent(openTicker))
+      .then(r => r.json())
+      .then(d => { if (!cancelled && d) setLiveIdentity(prev => ({ ...prev, [openTicker]: d })) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [openTicker])
 
   if (!trend || trend.length === 0) {
     return (
@@ -3102,7 +3115,9 @@ function TheTrend({ trend, c, dark, lang }) {
           const scanCmp = stock.scan_compound_pct || 0
           const compColor = fullCmp >= 0 ? '#097c3e' : '#c0392b'
           const history = stock.weekly_history || []
-          const identity = stock.identity || {}
+          // Merge scan-stored identity with freshly-fetched live data (live wins,
+          // fills gaps when the weekly scan was rate-limited).
+          const identity = { ...(stock.identity || {}), ...(liveIdentity[stock.ticker] || {}) }
           const rec = _recBadge(identity.recommendation)
           const sector = identity.sector || ''
 
