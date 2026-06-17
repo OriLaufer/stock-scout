@@ -57,12 +57,13 @@ USE WEB SEARCH heavily to find, for THIS stock:
 - 🎯 Analyst views — ratings, price targets, recent upgrades/downgrades
 - 💬 Online buzz / sentiment — what people say on Reddit, StockTwits, forums, blogs; is there hype building?
 
-Then write a research note in HEBREW, markdown, with these sections:
+Be efficient: at most 2 web searches, then write. Keep it tight and scannable.
+Write a research note in HEBREW, markdown, with these sections (a few bullet points each, not long paragraphs):
 ## 📰 חדשות אחרונות
 ## 🎯 אנליסטים
 ## 💬 באז ברשת
 ## 🧠 שורה תחתונה
-In the bottom line: given their entry price and current P&L, is the story still strong and confirmed? Give a clear call — **להחזיק** (hold and keep running), **להוסיף** (winner is confirmed by news/analysts/buzz — worth adding more), or **להיזהר** (momentum/story weakening — watch closely). Explain WHY in plain language, cite what you found, and say what to watch next. Be decisive and honest — never invent news; if you couldn't find something, say so.`
+In the bottom line: given their entry price and current P&L, is the story still strong and confirmed? Give a clear call — **להחזיק** (hold and keep running), **להוסיף** (winner is confirmed by news/analysts/buzz — worth adding more), or **להיזהר** (momentum/story weakening — watch closely). Explain WHY briefly, cite what you found, and say what to watch next. Be decisive and honest — never invent news; if you couldn't find something, say so.`
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
@@ -80,9 +81,10 @@ export default async function handler(req, res) {
 
     const model = await pickModel(ANTHROPIC_API_KEY)
     const body = {
-      model, max_tokens: 2000, system: SYSTEM,
+      model, max_tokens: 1500, system: SYSTEM,
       messages: [{ role: 'user', content: userMsg }],
-      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }],
+      // Cap at 2 searches — must finish within Vercel's 60s function limit.
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }],
     }
     let r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
