@@ -497,6 +497,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             ['trend',     `📈 ${lang === 'he' ? 'המגמה' : 'The Trend'}`],
             ['hof',       '🏆 Hall of Fame'],
             ['watchlist', `📓 ${lang === 'he' ? 'יומן מסחר' : 'Journal'}`],
+            ['portfolio', `🔭 ${lang === 'he' ? 'מעקב תיק' : 'Portfolio Watch'}`],
           ].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ padding: '9px 22px', borderRadius: 22, border: `1px solid ${tab === key ? '#097c3e' : c.border}`, background: tab === key ? '#097c3e' : c.card, color: tab === key ? 'white' : c.muted, fontWeight: 700, cursor: 'pointer', fontSize: 14, transition: 'all 0.15s' }}>
               {label}
@@ -525,6 +526,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
         {tab === 'watchlist' && (
           <TradingJournal journal={journal} addTrade={addTrade} removeTrade={removeTrade} weeklyHistoryByTicker={weeklyHistoryByTicker} c={c} dark={dark} lang={lang} />
+        )}
+
+        {tab === 'portfolio' && (
+          <PortfolioWatch journal={journal} weeklyHistoryByTicker={weeklyHistoryByTicker} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'weekly' && (<>
@@ -2303,6 +2308,126 @@ function StockDeepDive({ ticker, weeklyHistory, c, dark, lang }) {
 
       {/* Live chart */}
       <ChartSection ticker={ticker} c={c} dark={dark} he={he} />
+    </div>
+  )
+}
+
+// ── Portfolio Watch — research & monitor what we OWN. Per holding: live P&L,
+// then a deep AI research note (news + analysts + web buzz + hold/add call)
+// and the full identity card. Built around the boss's exact requests. ──
+function PortfolioWatchRow({ trade, weeklyHistory, c, dark, lang }) {
+  const he = lang === 'he'
+  const [open, setOpen] = useState(false)
+  const [report, setReport] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [searched, setSearched] = useState(false)
+  const data = usePriceHistory(trade.ticker)
+  const closes = data?.closes || []
+  const current = data?.current ?? (closes.length ? closes[closes.length - 1] : null)
+  const cost = trade.quantity * trade.entry_price
+  const value = current != null ? trade.quantity * current : null
+  const pnlPct = current != null ? (current - trade.entry_price) / trade.entry_price * 100 : null
+  const isProfit = (pnlPct ?? 0) >= 0
+  const GREEN = '#00c853', RED = '#ff3b30'
+  const col = pnlPct == null ? c.muted : isProfit ? GREEN : RED
+
+  async function research() {
+    if (loading) return
+    setReport(null); setLoading(true)
+    try {
+      const res = await fetch('/api/position-research', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticker: trade.ticker, name: trade.name, entry_price: trade.entry_price,
+          quantity: trade.quantity, entry_date: trade.entry_date,
+          current_price: current != null ? +current.toFixed(2) : null,
+          pnl_pct: pnlPct != null ? +pnlPct.toFixed(2) : null,
+        }),
+      })
+      const d = await res.json()
+      setReport(d.report || '(no response)'); setSearched(!!d.searched)
+    } catch (e) { setReport('שגיאה: ' + e.message) } finally { setLoading(false) }
+  }
+
+  return (
+    <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, marginBottom: 12, overflow: 'hidden', background: c.card }}>
+      <div onClick={() => setOpen(o => !o)} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '16px 18px', cursor: 'pointer', background: open ? (dark ? '#12122a' : '#f7f9fc') : c.card }}>
+        <div style={{ width: 170, flexShrink: 0 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: c.text }}>{trade.ticker}</div>
+          <div style={{ fontSize: 11, color: c.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 165 }}>{trade.name}</div>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}><Sparkline ticker={trade.ticker} width={90} height={22} /></div>
+        <div style={{ textAlign: 'right', minWidth: 90 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: col }}>
+            {pnlPct != null ? `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%` : '—'}
+          </div>
+          <div style={{ fontSize: 11, color: c.muted }}>{value != null ? `$${value.toFixed(0)}` : ''}</div>
+        </div>
+        <span style={{ fontSize: 14, color: c.muted }}>{open ? '▲' : '▼'}</span>
+      </div>
+
+      {open && (
+        <div style={{ borderTop: `1px solid ${c.border}` }}>
+          {/* Research note */}
+          <div style={{ padding: '16px 18px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: report || loading ? 12 : 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: c.text }}>🔍 {he ? 'מה אומרים על המנייה' : 'What they\'re saying'}</div>
+              <button onClick={research} disabled={loading} style={{
+                background: loading ? c.muted : '#16486b', color: 'white', border: 'none',
+                borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: loading ? 'default' : 'pointer',
+              }}>
+                {loading ? (he ? '🧠 חוקר...' : '🧠 Researching...') : (report ? (he ? '🔄 רענן' : '🔄 Refresh') : (he ? '🔍 חקור עכשיו' : '🔍 Research now'))}
+              </button>
+            </div>
+            {loading && <div style={{ fontSize: 13, color: c.muted }}>{he ? 'חוקר חדשות, אנליסטים, ובאז ברשת... (~30 שניות)' : 'Researching news, analysts, web buzz... (~30s)'}</div>}
+            {report && (
+              <div style={{ background: dark ? '#0d1422' : '#f7f9fc', border: `1px solid ${c.border}`, borderRadius: 10, padding: '14px 16px' }}>
+                {searched && <div style={{ fontSize: 10, color: c.muted, marginBottom: 6 }}>🔎 {he ? 'חיפש ברשת בזמן אמת' : 'searched the web live'}</div>}
+                <Markdown text={report} c={c} dark={dark} rtl={he} />
+              </div>
+            )}
+          </div>
+          {/* Identity card + chart + weekly bars */}
+          <StockDeepDive ticker={trade.ticker} weeklyHistory={weeklyHistory} c={c} dark={dark} lang={lang} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PortfolioWatch({ journal, weeklyHistoryByTicker = {}, c, dark, lang }) {
+  const he = lang === 'he'
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#0d2030' : '#0a2540'} 0%, ${dark ? '#1a3a4a' : '#16486b'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 32 }}>🔭</span>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white' }}>{he ? 'מעקב וחקירת התיק' : 'Portfolio Watch'}</div>
+            <div style={{ fontSize: 13, color: '#a8c5dd', marginTop: 4 }}>
+              {he
+                ? 'לכל החזקה: רווח/הפסד חי + חקירה מלאה — חדשות, אנליסטים, באז ברשת — והמלצה אם להחזיק או להוסיף.'
+                : 'Per holding: live P&L + full research — news, analysts, web buzz — and a hold/add call.'}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{ background: dark ? '#0f0f1a' : '#f5f6fa', border: `1px solid ${c.border}`, borderTop: 'none', borderRadius: '0 0 14px 14px', padding: 16 }}>
+        {(!journal || journal.length === 0) ? (
+          <div style={{ padding: 40, textAlign: 'center', color: c.muted }}>
+            <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.6 }}>📊</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>{he ? 'אין החזקות עדיין' : 'No holdings yet'}</div>
+            <div style={{ fontSize: 13 }}>{he ? 'הוסף עסקאות בטאב "יומן מסחר" כדי לעקוב ולחקור אותן כאן' : 'Add trades in the Journal tab to track & research them here'}</div>
+          </div>
+        ) : (
+          journal.map(t => (
+            <PortfolioWatchRow key={t.id} trade={t} weeklyHistory={weeklyHistoryByTicker[t.ticker]} c={c} dark={dark} lang={lang} />
+          ))
+        )}
+      </div>
     </div>
   )
 }
