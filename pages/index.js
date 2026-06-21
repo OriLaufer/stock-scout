@@ -190,8 +190,24 @@ export async function getServerSideProps() {
   const processed = (scans || []).map(scan => {
     try {
       const parsed = JSON.parse(scan.stocks_json)
-      return { ...scan, stocks: parsed.stocks || parsed, bonus: parsed.bonus || [], backtest: parsed.backtest || null, trend: parsed.trend || null, radar: parsed.radar || null, rising_stars: parsed.rising_stars || null, verdict: parsed.verdict || null }
-    } catch { return { ...scan, stocks: [], bonus: [], backtest: null, trend: null, radar: null, rising_stars: null, verdict: null } }
+      // Keep parsed fields for server-side computation only. We do NOT keep the
+      // raw stocks_json or the heavy enrichments on each object that ships to the
+      // client — that bloated the payload (it grew every week and broke the
+      // latest, biggest scan). Enrichments are taken from the latest scan below.
+      return {
+        week_label: scan.week_label,
+        created_at: scan.created_at,
+        stocks: parsed.stocks || parsed || [],
+        bonus: parsed.bonus || [],
+        backtest: parsed.backtest || null,
+        _trend: parsed.trend || null,
+        _radar: parsed.radar || null,
+        _rising: parsed.rising_stars || null,
+        _verdict: parsed.verdict || null,
+      }
+    } catch {
+      return { week_label: scan.week_label, created_at: scan.created_at, stocks: [], bonus: [], backtest: null, _trend: null, _radar: null, _rising: null, _verdict: null }
+    }
   })
 
   const unique = []
@@ -347,13 +363,19 @@ export async function getServerSideProps() {
     backtest = { pending: true, totalScans: unique.length }
   }
 
-  // Pick The Trend + Radar + Rising Stars from the LATEST scan that has them
-  const trend = (unique.find(s => s.trend)?.trend) || null
-  const radar = (unique.find(s => s.radar)?.radar) || null
-  const risingStars = (unique.find(s => s.rising_stars)?.rising_stars) || null
-  const verdict = (unique.find(s => s.verdict)?.verdict) || null
+  // Enrichments from the LATEST scan (unique[0]); fall back to the most recent
+  // scan that has each, so a single rate-limited week never freezes the view.
+  const trend = (unique.find(s => s._trend)?._trend) || null
+  const radar = (unique.find(s => s._radar)?._radar) || null
+  const risingStars = (unique.find(s => s._rising)?._rising) || null
+  const verdict = (unique.find(s => s._verdict)?._verdict) || null
 
-  return { props: { scans: unique, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict } }
+  // Ship LEAN scans — only what the client renders (week, date, stocks, bonus).
+  // No raw stocks_json, no duplicated enrichments. Keeps the payload small and
+  // scalable as scans accumulate week after week.
+  const scansLean = unique.map(s => ({ week_label: s.week_label, created_at: s.created_at, stocks: s.stocks, bonus: s.bonus }))
+
+  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict } }
 }
 
 export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict }) {
