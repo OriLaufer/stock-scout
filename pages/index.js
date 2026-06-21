@@ -187,9 +187,16 @@ export async function getServerSideProps() {
     .order('created_at', { ascending: false })
     .limit(100)
 
+  // Python's json.dumps writes bare NaN/Infinity (from a div-by-zero in a
+  // metric), which is INVALID JSON and makes JSON.parse throw — silently
+  // dropping that whole week. Sanitize those tokens to null before parsing.
+  const safeParse = (str) => JSON.parse(
+    String(str || '{}').replace(/-?\bInfinity\b/g, 'null').replace(/\bNaN\b/g, 'null')
+  )
+
   const processed = (scans || []).map(scan => {
     try {
-      const parsed = JSON.parse(scan.stocks_json)
+      const parsed = safeParse(scan.stocks_json)
       // Keep parsed fields for server-side computation only. We do NOT keep the
       // raw stocks_json or the heavy enrichments on each object that ships to the
       // client — that bloated the payload (it grew every week and broke the

@@ -28,6 +28,27 @@ DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "https://stock-scout-phi.vercel.
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+def safe_json(payload):
+    """Serialize to STRICT JSON. Python's json.dumps writes bare NaN/Infinity
+    (from a div-by-zero in some metric), which is INVALID JSON — JavaScript's
+    JSON.parse then throws and the whole scan silently disappears on the
+    dashboard. allow_nan=False forces those to be caught; we recursively
+    replace any NaN/Inf with None so the output is always valid JSON."""
+    import math
+
+    def clean(o):
+        if isinstance(o, float):
+            return o if math.isfinite(o) else None
+        if isinstance(o, dict):
+            return {k: clean(v) for k, v in o.items()}
+        if isinstance(o, (list, tuple)):
+            return [clean(v) for v in o]
+        return o
+
+    return json.dumps(clean(payload))
+
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
@@ -1226,7 +1247,7 @@ def save_to_supabase(stocks, bonus, week_label, backtest_entry=None, trend_data=
         supabase.table("weekly_scans").insert(
             {
                 "week_label": week_label,
-                "stocks_json": json.dumps(payload),
+                "stocks_json": safe_json(payload),
                 "created_at": datetime.now().isoformat(),
             }
         ).execute()
@@ -2692,7 +2713,7 @@ def main():
                 if radar: pl["radar"] = radar
                 if rising_stars: pl["rising_stars"] = rising_stars
                 if verdict: pl["verdict"] = verdict
-                supabase.table("weekly_scans").update({"stocks_json": json.dumps(pl)}).eq("week_label", week_label).execute()
+                supabase.table("weekly_scans").update({"stocks_json": safe_json(pl)}).eq("week_label", week_label).execute()
                 print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}, verdict={'yes' if verdict else 'no'}.")
         except Exception as e:
             print(f"  Save error: {e}")
