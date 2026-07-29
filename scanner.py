@@ -2010,7 +2010,12 @@ FORMAT — make it engaging and professional, a pleasure to read:
 - Write in Hebrew, like a top analyst briefing the boss.
 - Use ## headers, **bold** for tickers/key terms, bullet lists, and tables when useful.
 - Use tasteful emoji as section anchors (🏢 🔥 🚀 🎯 ⚠️ 👀 📊) — not excessively.
-- Lead with a one-line bottom line, then go deep. Cite real numbers (6mo return, revenue growth, DNA) woven into the narrative, not dumped. Speak like a human deciding where to put real money — be the judgment the boss is paying for."""
+- Lead with a one-line bottom line, then go deep. Cite real numbers (6mo return, revenue growth, DNA) woven into the narrative, not dumped. Speak like a human deciding where to put real money — be the judgment the boss is paying for.
+
+LENGTH — you have a hard output budget and a note that stops mid-sentence is worthless to the boss:
+- Go deep on ONE pick. If a second name is worth mentioning, give it a short paragraph, not a second full analysis.
+- Aim for roughly 4000-5000 characters of Hebrew.
+- Budget your room as you write and ALWAYS finish with your closing section. Never run out mid-thought."""
 
 
 def _verdict_context(top_picks, trend, radar, rising_stars):
@@ -2080,10 +2085,11 @@ def generate_ai_verdict(top_picks, trend, radar, rising_stars):
         body = {
             "model": model,
             # The budget covers the model's search narration AND the report, not
-            # just the report. At 2500 the note was cut off mid-word after six
-            # searches, leaving 713 characters for the boss to read. This runs in
-            # Actions with no timeout, so there is no reason to be stingy.
-            "max_tokens": 8000,
+            # just the report — and Hebrew burns roughly a token every 2-3
+            # characters. At 2500 the note stopped mid-word at 713 characters; at
+            # 8000 it still ran out at 7972. Pair this headroom with the length
+            # guidance in the system prompt so it finishes on its own terms.
+            "max_tokens": 16000,
             "system": VERDICT_SYSTEM,
             "messages": [{"role": "user", "content": user_msg}],
         }
