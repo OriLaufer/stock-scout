@@ -28,6 +28,7 @@ jobs:
           pip install requests supabase yfinance pandas
 
       - name: Run Stock Scanner
+        id: scan
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
@@ -39,10 +40,23 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python scanner.py
 
+      # Every scan proves itself. The weekly report email is only trustworthy if
+      # the data behind it is — so the same run checks the database, the JSON,
+      # every tab, and the live dashboard, and emails a pass/fail report card.
+      - name: Verify the whole system
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+        run: python verify_system.py
+
       # Never let a scan fail silently again — if it broke, we hear about it
       # the same morning instead of the boss discovering an empty dashboard.
       - name: Alert by email if the scan failed
-        if: failure()
+        if: steps.scan.outcome == 'failure'
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}

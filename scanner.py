@@ -1628,6 +1628,24 @@ def compute_the_trend(top_n=10, min_appearances=2, candidate_pool=20):
             print(f"    skip {ticker}: single-week spike (1 big week, {spike_ratio:.0%} of gains) — not a sustained trend")
             continue
 
+        # ── LIVE FILTER: is this trend still alive TODAY? ──
+        # Compound return since we started scanning is a HISTORY, not a signal.
+        # RXT sat at #10 showing +112% while it had bled -42% over the previous
+        # four weeks — a finished trend dressed up as a winner. This system is a
+        # hunter, so a broken trend leaves the list and the survivors carry a
+        # visible "is it still running" status.
+        recent = [h["change_pct"] for h in history_entries[-4:]]
+        recent_comp = 1.0
+        for ch in recent:
+            recent_comp *= (1 + ch / 100)
+        recent_4w = round((recent_comp - 1) * 100, 1)
+
+        if recent_4w <= -25:
+            print(f"    skip {ticker}: trend is broken ({recent_4w:+.1f}% over the last 4 weeks)")
+            continue
+
+        momentum = "running" if recent_4w >= 10 else ("holding" if recent_4w >= -10 else "cooling")
+
         # Fetch the full identity card data — analyst targets, business summary,
         # 52W range, sector, etc. This is The Trend's centerpiece.
         identity = _fetch_trend_identity(ticker)
@@ -1639,6 +1657,8 @@ def compute_the_trend(top_n=10, min_appearances=2, candidate_pool=20):
             "total_weeks": len(history_entries),
             "scan_compound_pct": round(scan_compound * 100, 1),
             "full_compound_pct": round(full_compound * 100, 1),
+            "recent_4w_pct": recent_4w,
+            "momentum": momentum,
             "weekly_history": history_entries,
             "identity": identity,
         })
@@ -1650,9 +1670,9 @@ def compute_the_trend(top_n=10, min_appearances=2, candidate_pool=20):
     trend_data = candidate_data[:top_n]
 
     if trend_data:
-        print(f"  Trend top 10 (by full compound):")
+        print(f"  Trend top 10 (by full compound, broken trends removed):")
         for i, t in enumerate(trend_data, 1):
-            print(f"    #{i:2} {t['ticker']:7} full {t['full_compound_pct']:+7.1f}% | "
+            print(f"    #{i:2} {t['ticker']:7} [{t['momentum']:7}] 4w {t['recent_4w_pct']:+7.1f}% | full {t['full_compound_pct']:+7.1f}% | "
                   f"scan {t['scan_compound_pct']:+7.1f}% | {t['scan_appearances']}/{t['total_weeks']} weeks")
     return trend_data
 
@@ -1859,6 +1879,16 @@ def compute_multibagger_radar(top_n=10, candidate_pool=30):
         sec = m.get("sector") or sector_lookup.get(tk, "")
         sector_peers = max(0, sector_counts.get(sec, 0) - 1)
 
+        # ── GATE: the Radar hunts EARLY WINNERS, so it must not rank losers ──
+        # Points for small-cap room, sector heat, persistence and acceleration
+        # are all available to a stock that is simply falling, so VELO scored
+        # 51.6/100 while down 45% over six months. Nothing that is losing to the
+        # market on BOTH horizons belongs on a multi-bagger radar.
+        rs6, rs3 = m.get("rs_6mo") or 0, m.get("rs_3mo") or 0
+        if rs6 <= 0 and rs3 <= 0:
+            print(f"    skip {tk}: lagging the market on both horizons (RS 6mo {rs6:+.0f}%, 3mo {rs3:+.0f}%)")
+            continue
+
         score, parts = _dna_score(m, appearances, accel, sector_peers)
         radar.append({
             "ticker": tk,
@@ -2046,9 +2076,21 @@ def generate_ai_verdict(top_picks, trend, radar, rising_stars):
             r = _call(False)
         if r.status_code == 200:
             data = r.json()
-            text = "\n".join(
+            # Citations split a single sentence across several text blocks, so
+            # joining with "\n" shredded sentences mid-clause and produced
+            # bullets like "- \nהחברה נוסדה ב-2011\n — \nנכון ל-15 ביולי".
+            # The fragments are contiguous prose: join them with nothing.
+            text = "".join(
                 b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
             ).strip()
+            # With web search the model narrates its plan in English first
+            # ("I'll investigate the most compelling candidates..."). That is
+            # thinking-out-loud, not the report the boss should read. The report
+            # itself opens with a markdown heading — start there.
+            head = re.search(r"^#{1,3} .+$", text, re.M)
+            if head and head.start() > 0:
+                print(f"  Verdict: trimmed {head.start()} chars of pre-answer narration")
+                text = text[head.start():].strip()
             if text:
                 print(f"  Verdict: generated with {model} ({len(text)} chars)")
                 return {"text": text, "model": model, "generated_at": datetime.now().isoformat()}

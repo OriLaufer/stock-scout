@@ -1,0 +1,14 @@
+# Node / Next.js
+node_modules/
+.next/
+out/
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local env — never commit secrets
+.env
+.env.local
+.env*.local

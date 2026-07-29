@@ -114,9 +114,20 @@ def main():
         items = payload.get(key) or []
         check(len(items) >= minimum, f"{label} populated", f"{len(items)} entries")
 
-    verdict = (payload.get("verdict") or "").strip()
-    check(len(verdict) > 200 if verdict else False, "AI Verdict written",
+    # The verdict is stored as {text, model, generated_at} — not a bare string.
+    # Treating it as one raised AttributeError and killed the whole check run.
+    v = payload.get("verdict")
+    verdict = (v.get("text") if isinstance(v, dict) else v) or ""
+    check(len(verdict) > 200, "AI Verdict written",
           f"{len(verdict)} chars" if verdict else "missing — run the Fix Verdict workflow")
+
+    # The verdict is written in Hebrew for the boss. English at the top means the
+    # model's plan-narration leaked in ahead of the report.
+    if verdict:
+        head = verdict.lstrip()[:120]
+        leaked = head.startswith(("I'll", "I will", "Let me", "I need to", "First,"))
+        check(not leaked, "Verdict starts with the report",
+              "clean" if not leaked else f"pre-answer narration leaked in: {head[:70]}...")
 
     # ---- 6. Is The Trend quality, or is it single-week spikes? ----
     # A stock whose entire compound comes from one explosive week is noise. The
@@ -134,6 +145,19 @@ def main():
     if trend:
         check(not spikes, "The Trend is spike-free",
               "clean" if not spikes else "single-week spikes leaked in: " + ", ".join(spikes))
+
+        # A compound return since February is history, not a signal. RXT once sat
+        # in the list at +112% while down 42% over the previous four weeks. Every
+        # entry must still be a live trend, and must say so.
+        dead = []
+        for t in trend:
+            r4 = t.get("recent_4w_pct")
+            if r4 is None:
+                dead.append(f"{t.get('ticker')} (no momentum data)")
+            elif r4 <= -25:
+                dead.append(f"{t.get('ticker')} ({r4}% in 4 weeks)")
+        check(not dead, "The Trend holds only LIVE trends",
+              "all still running" if not dead else "finished trends still listed: " + ", ".join(dead))
 
     # ---- 7. Does the live dashboard actually render the data? ----
     try:

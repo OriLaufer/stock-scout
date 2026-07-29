@@ -493,7 +493,8 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
     setSaving(false)
   }
 
-  const dir = lang === 'he' ? 'rtl' : 'ltr'
+  const he = lang === 'he'
+  const dir = he ? 'rtl' : 'ltr'
 
   return (
     <div dir={dir} style={{ fontFamily: 'Arial, sans-serif', minHeight: '100vh', background: c.pageBg, color: c.text, transition: 'background 0.2s' }}>
@@ -521,6 +522,41 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             </button>
           </div>
         </div>
+
+        {/* Data freshness. Every tab renders one weekly snapshot, so the single
+            most important fact on screen is WHEN that snapshot was taken. When a
+            scan is missed the numbers still look authoritative while being weeks
+            behind — that is how a collapsing stock kept looking like a winner. */}
+        {scans && scans.length > 0 && (() => {
+          const ageDays = Math.floor((Date.now() - new Date(scans[0].created_at)) / 86400000)
+          const stale = ageDays > 8
+          return (
+            <div style={{
+              background: stale ? (dark ? '#3a2a0a' : '#FFF8E1') : c.card,
+              border: `1px solid ${stale ? '#d9a406' : c.border}`,
+              borderRadius: 12, padding: '12px 18px', marginBottom: 20,
+              display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+            }}>
+              <span style={{ fontSize: 18 }}>{stale ? '⚠️' : '🟢'}</span>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: c.text }}>
+                  {he
+                    ? `הנתונים בכל הטאבים הם מהסריקה של ${scans[0].week_label}`
+                    : `All tabs show the scan of ${scans[0].week_label}`}
+                </div>
+                <div style={{ fontSize: 12, color: stale ? '#8a6d0b' : c.muted, marginTop: 2 }}>
+                  {stale
+                    ? (he
+                        ? `נשמרה לפני ${ageDays} ימים — חסרה סריקה. לחץ "הפעל סריקה" לרענון לפני הצגה.`
+                        : `Saved ${ageDays} days ago — a scan was missed. Click "Run Scan" to refresh before presenting.`)
+                    : (he
+                        ? `נשמרה לפני ${ageDays} ימים — עדכני.`
+                        : `Saved ${ageDays} days ago — current.`)}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Database-down banner. An empty dashboard used to look like "no scans
             yet"; it was actually the Supabase project paused. Say so plainly. */}
@@ -3226,6 +3262,24 @@ function _formatMcapShort(n) {
   return `$${n}`
 }
 
+// Is this trend still ALIVE, or is it a finished move still coasting on an
+// impressive cumulative number? Compound-since-February is history; the last
+// four weeks are the signal. Derived here as well as in the scanner so scans
+// saved before this existed still show a live status.
+function _trendMomentum(stock, he) {
+  let r4 = stock.recent_4w_pct
+  if (r4 == null) {
+    const last4 = (stock.weekly_history || []).slice(-4)
+    if (!last4.length) return null
+    r4 = (last4.reduce((acc, h) => acc * (1 + (h.change_pct || 0) / 100), 1) - 1) * 100
+  }
+  r4 = Math.round(r4 * 10) / 10
+  if (r4 >= 10)  return { r4, label: he ? 'עדיין רצה' : 'running', icon: '🔥', color: '#097c3e', bg: '#EAF3DE' }
+  if (r4 >= -10) return { r4, label: he ? 'מחזיקה'   : 'holding', icon: '➡️', color: '#8a6d0b', bg: '#FCF3D6' }
+  if (r4 > -25)  return { r4, label: he ? 'מתקררת'   : 'cooling', icon: '🌡️', color: '#c0662b', bg: '#FBEADB' }
+  return { r4, label: he ? 'נשברה' : 'broken', icon: '🔻', color: '#c0392b', bg: '#FCEBEB' }
+}
+
 function TheTrend({ trend, c, dark, lang }) {
   const he = lang === 'he'
   const [openTicker, setOpenTicker] = useState(null)
@@ -3282,8 +3336,8 @@ function TheTrend({ trend, c, dark, lang }) {
             </div>
             <div style={{ fontSize: 13, color: '#b0bbd9', marginTop: 4 }}>
               {he
-                ? 'דירוג לפי תשואה מצטברת אמיתית. כל מנייה — כרטיס זהות מלא עם יעדי אנליסטים, טווח 52 שבועות וסקירה עסקית.'
-                : 'Ranked by real compound return. Each stock — full identity card with analyst targets, 52W range, and business overview.'}
+                ? 'דירוג לפי תשואה מצטברת אמיתית — ולצידה הסטטוס העדכני: האם המגמה עדיין רצה ב-4 השבועות האחרונים. מגמה שנשברה יוצאת מהרשימה.'
+                : 'Ranked by real compound return — with a live status: is the trend still running over the last 4 weeks? Broken trends drop out.'}
             </div>
           </div>
           <div style={{
@@ -3315,6 +3369,7 @@ function TheTrend({ trend, c, dark, lang }) {
           const identity = { ...(stock.identity || {}), ...(liveIdentity[stock.ticker] || {}) }
           const rec = _recBadge(identity.recommendation)
           const sector = identity.sector || ''
+          const mom = _trendMomentum(stock, he)
 
           return (
             <div key={stock.ticker}>
@@ -3389,6 +3444,24 @@ function TheTrend({ trend, c, dark, lang }) {
                       opacity: 0.5, padding: '3px 6px',
                     }}>—</span>
                   )}
+                </div>
+
+                {/* Momentum NOW — the answer to "is this still worth anything today?" */}
+                <div style={{ width: 104, flexShrink: 0, textAlign: 'center' }}>
+                  {mom ? (
+                    <>
+                      <span title={he ? 'תשואה ב-4 השבועות האחרונים' : 'return over the last 4 weeks'} style={{
+                        display: 'inline-block', background: dark ? 'transparent' : mom.bg,
+                        color: dark ? mom.color : mom.color,
+                        border: `1px solid ${mom.color}`,
+                        padding: '3px 9px', borderRadius: 12, fontSize: 10, fontWeight: 800,
+                      }}>{mom.icon} {mom.label}</span>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: mom.color, marginTop: 4 }}>
+                        {mom.r4 >= 0 ? '+' : ''}{mom.r4}%
+                      </div>
+                      <div style={{ fontSize: 9, color: c.muted }}>{he ? '4 שבועות' : '4 weeks'}</div>
+                    </>
+                  ) : <span style={{ color: c.muted, fontSize: 10 }}>—</span>}
                 </div>
 
                 {/* Compound return */}
