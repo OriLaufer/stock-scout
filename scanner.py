@@ -1255,11 +1255,28 @@ def save_to_supabase(stocks, bonus, week_label, backtest_entry=None, trend_data=
             "stocks_json": safe_json(payload),
             "created_at": datetime.now().isoformat(),
         }
+        # Never delete the existing week before the replacement is safely in.
+        # Deleting first opened a window where the old enrichments were already
+        # gone and the new ones were not written yet (they land at the end of the
+        # scan), so a crash mid-run would have destroyed the week outright.
+        old_ids = []
         if replace:
-            # Refresh in place instead of stacking a second row for the same week.
-            supabase.table("weekly_scans").delete().eq("week_label", week_label).execute()
+            try:
+                existing = supabase.table("weekly_scans").select("id").eq("week_label", week_label).execute()
+                old_ids = [r["id"] for r in (existing.data or [])]
+            except Exception as e:
+                print(f"  (could not list existing rows for {week_label}: {e})")
+
         supabase.table("weekly_scans").insert(row).execute()
         print(f"Saved: {week_label}")
+
+        for rid in old_ids:
+            try:
+                supabase.table("weekly_scans").delete().eq("id", rid).execute()
+            except Exception as e:
+                print(f"  (could not remove superseded row {rid}: {e})")
+        if old_ids:
+            print(f"  replaced {len(old_ids)} superseded row(s) for {week_label}")
         return True
     except Exception as e:
         print(f"Save error: {e}")
