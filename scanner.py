@@ -2097,14 +2097,30 @@ def generate_ai_verdict(top_picks, trend, radar, rising_stars):
                 "content-type": "application/json",
             },
             json=body,
-            timeout=180,
+            # Six web searches plus an 8000-token note comfortably exceeds three
+            # minutes. The old 180s ceiling turned the bigger token budget into a
+            # timeout, and the week ended up with no verdict at all.
+            timeout=900,
         )
 
+    def _attempt(with_tools):
+        """Never let a transport failure become a silent 'no verdict'."""
+        try:
+            return _call(with_tools)
+        except Exception as e:
+            print(f"  Verdict: request failed ({type(e).__name__}: {e})")
+            return None
+
     try:
-        r = _call(True)
-        if r.status_code != 200 and ("tool" in r.text.lower() or "web_search" in r.text.lower()):
-            print("  Verdict: web search unsupported, retrying without it")
-            r = _call(False)
+        r = _attempt(True)
+        # Retry without search on a transport failure too — a verdict written
+        # from our own data beats no verdict on the boss's screen.
+        if r is None or (r.status_code != 200 and ("tool" in r.text.lower() or "web_search" in r.text.lower())):
+            print("  Verdict: retrying without web search")
+            r = _attempt(False)
+        if r is None:
+            print("  Verdict: both attempts failed")
+            return None
         if r.status_code == 200:
             data = r.json()
             # Citations split a single sentence across several text blocks, so
