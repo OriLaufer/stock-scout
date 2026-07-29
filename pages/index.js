@@ -16,7 +16,9 @@ const T = {
     million: 'מיליון',
     runScan: '▶ הפעל סריקה',
     running: 'סורק...',
-    scanMsg: 'סריקה הופעלה! רענן בעוד 2 דקות.',
+    // The old text said "refresh in 2 minutes" — the scan takes 15-20. People
+    // refreshed, saw nothing, and concluded the button was broken.
+    scanMsg: '✅ הסריקה הופעלה ורצה ברקע (15-20 דקות). יישלח מייל כשתסתיים — אין צורך להשאיר את הדף פתוח.',
     returning: 'תכופות',
     threeWeeks: 'מדי פעם',
     fourPlus: 'חדשות',
@@ -91,7 +93,7 @@ const T = {
     million: 'Million',
     runScan: '▶ Run Scan',
     running: 'Running...',
-    scanMsg: 'Scan triggered! Refresh in 2 minutes.',
+    scanMsg: '✅ Scan started, running in the background (15-20 min). You will get an email when it finishes — no need to keep this page open.',
     returning: 'frequent',
     threeWeeks: 'occasional',
     fourPlus: 'new',
@@ -476,9 +478,18 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
     setSaving(true)
     setSaveMsg('')
     try {
-      await fetch('/api/trigger-scan', { method: 'POST' })
-      setSaveMsg(t.scanMsg)
-    } catch { setSaveMsg(t.scanMsg) }
+      // The catch used to show the SAME success message as the happy path, so a
+      // failed trigger looked identical to a successful one. Report the truth.
+      const r = await fetch('/api/trigger-scan', { method: 'POST' })
+      if (!r.ok) {
+        const body = await r.text().catch(() => '')
+        setSaveMsg((lang === 'he' ? '❌ ההפעלה נכשלה: ' : '❌ Failed to start: ') + `${r.status} ${body.slice(0, 100)}`)
+      } else {
+        setSaveMsg(t.scanMsg)
+      }
+    } catch (e) {
+      setSaveMsg((lang === 'he' ? '❌ שגיאת רשת: ' : '❌ Network error: ') + e.message)
+    }
     setSaving(false)
   }
 
@@ -544,7 +555,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             style={{ padding: '7px 18px', borderRadius: 8, border: 'none', background: saving ? '#888' : '#097c3e', color: 'white', fontSize: 14, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer' }}>
             {saving ? t.running : t.runScan}
           </button>
-          {saveMsg && <span style={{ fontSize: 13, color: '#097c3e' }}>{saveMsg}</span>}
+          {saveMsg && <span style={{ fontSize: 13, fontWeight: 600, color: saveMsg.startsWith('❌') ? '#cc3333' : '#097c3e' }}>{saveMsg}</span>}
         </div>
 
         {/* Tab switcher */}

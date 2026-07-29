@@ -1,0 +1,78 @@
+name: 🚀 Full Run & Verify
+
+# One button that does the whole job: run the weekly scan, then PROVE it worked
+# — database saved, JSON is browser-safe, all tabs populated, The Trend clean,
+# live dashboard actually rendering — and email a pass/fail report card.
+#
+# Use this whenever you want to be sure the system is healthy before showing it
+# to anyone. Set "run_scan" to false to verify without spending 20 minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_scan:
+        description: 'Run a fresh scan first? (uncheck to only verify — takes seconds)'
+        type: boolean
+        default: true
+
+jobs:
+  run-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests supabase yfinance pandas
+
+      # Fail fast with a clear message rather than burning 20 minutes on a scan
+      # that has nowhere to save.
+      - name: Preflight — is the database awake?
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          code=$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' \
+            -H "apikey: $SUPABASE_SECRET_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SECRET_KEY" \
+            "$SUPABASE_URL/rest/v1/weekly_scans?select=week_label&limit=1") || code=000
+          echo "http_code=$code"
+          if [ "$code" != "200" ]; then
+            echo "::error::Database is not answering (HTTP $code). The Supabase project is probably PAUSED — restore it at https://supabase.com/dashboard/projects and run this again."
+            exit 1
+          fi
+          echo "Database is awake."
+
+      - name: Run the scan
+        if: ${{ inputs.run_scan }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+          MIN_MARKET_CAP: ${{ secrets.MIN_MARKET_CAP }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scanner.py
+
+      # Always verify — even if the scan above failed, we want the report card
+      # telling us exactly WHICH part is broken.
+      - name: Verify the whole system
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+        run: python verify_system.py
