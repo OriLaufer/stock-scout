@@ -14,6 +14,10 @@ on:
         description: 'Run a fresh scan first? (uncheck to only verify — takes seconds)'
         type: boolean
         default: true
+      force_rescan:
+        description: 'Recompute this week even if it was already scanned (use after a code fix)'
+        type: boolean
+        default: true
 
 jobs:
   run-and-verify:
@@ -63,6 +67,7 @@ jobs:
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FORCE_RESCAN: ${{ inputs.force_rescan && '1' || '' }}
         run: python scanner.py
 
       # Always verify — even if the scan above failed, we want the report card

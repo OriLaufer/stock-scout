@@ -7,6 +7,7 @@ Stock Scout - Weekly Scanner
 """
 
 import os
+import sys
 import json
 import time
 import random
@@ -1237,23 +1238,32 @@ def week_exists_in_supabase(week_label):
         return False
 
 
-def save_to_supabase(stocks, bonus, week_label, backtest_entry=None, trend_data=None):
+def save_to_supabase(stocks, bonus, week_label, backtest_entry=None, trend_data=None, replace=False):
+    """Save the week's scan. Returns True on success.
+
+    The caller MUST check the result. This used to swallow every exception and
+    return quietly, so a scan that saved nothing — every run while the database
+    was paused — still exited 0 and was reported as a successful scan."""
     try:
         payload = {"stocks": stocks, "bonus": bonus}
         if backtest_entry:
             payload["backtest"] = backtest_entry
         if trend_data:
             payload["trend"] = trend_data
-        supabase.table("weekly_scans").insert(
-            {
-                "week_label": week_label,
-                "stocks_json": safe_json(payload),
-                "created_at": datetime.now().isoformat(),
-            }
-        ).execute()
+        row = {
+            "week_label": week_label,
+            "stocks_json": safe_json(payload),
+            "created_at": datetime.now().isoformat(),
+        }
+        if replace:
+            # Refresh in place instead of stacking a second row for the same week.
+            supabase.table("weekly_scans").delete().eq("week_label", week_label).execute()
+        supabase.table("weekly_scans").insert(row).execute()
         print(f"Saved: {week_label}")
+        return True
     except Exception as e:
         print(f"Save error: {e}")
+        return False
 
 
 # ============== BACKTEST ==============
@@ -2648,10 +2658,18 @@ def main():
     week_label = get_week_label(reference_date)
     print(f"Week: {week_label}\n")
 
-    # Check for duplicates — don't overwrite existing scans
-    if week_exists_in_supabase(week_label):
-        print(f"SKIP: {week_label} already exists in Supabase. Exiting.")
+    # Don't silently overwrite a good scan on the Sunday cron — but DO allow a
+    # deliberate refresh. Without this, a week scanned with buggy code was frozen
+    # until the next Sunday: every re-run exited here in seconds, reported
+    # success, and left the tabs stale while looking like it had worked.
+    force_rescan = str(os.environ.get("FORCE_RESCAN", "")).lower() in ("1", "true", "yes")
+    week_already_saved = week_exists_in_supabase(week_label)
+    if week_already_saved and not force_rescan:
+        print(f"SKIP: {week_label} already exists in Supabase. "
+              f"Set FORCE_RESCAN=1 to recompute and replace it. Exiting.")
         return
+    if week_already_saved:
+        print(f"FORCE_RESCAN: {week_label} exists — recomputing and replacing it.")
 
     # 1. Universe (returns list + names dict)
     universe, names = get_ticker_universe()
@@ -2725,7 +2743,10 @@ def main():
     weekly_backtest = compute_weekly_backtest(prev, price_data, prev_week_label)
 
     # 5. Save first so compute_backtest + compute_the_trend can include this week's data
-    save_to_supabase(top_picks, [], week_label, backtest_entry=weekly_backtest)
+    if not save_to_supabase(top_picks, [], week_label,
+                            backtest_entry=weekly_backtest, replace=week_already_saved):
+        print("FATAL: the scan could not be saved — everything downstream would be stale.")
+        sys.exit(1)
 
     # Each enrichment step is wrapped so that ONE failure never blocks the
     # email or the rest. The core scan (top picks) is already saved above.
