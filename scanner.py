@@ -2062,7 +2062,11 @@ def generate_ai_verdict(top_picks, trend, radar, rising_stars):
     def _call(with_tools):
         body = {
             "model": model,
-            "max_tokens": 2500,
+            # The budget covers the model's search narration AND the report, not
+            # just the report. At 2500 the note was cut off mid-word after six
+            # searches, leaving 713 characters for the boss to read. This runs in
+            # Actions with no timeout, so there is no reason to be stingy.
+            "max_tokens": 8000,
             "system": VERDICT_SYSTEM,
             "messages": [{"role": "user", "content": user_msg}],
         }
@@ -2102,8 +2106,13 @@ def generate_ai_verdict(top_picks, trend, radar, rising_stars):
                 print(f"  Verdict: trimmed {head.start()} chars of pre-answer narration")
                 text = text[head.start():].strip()
             if text:
-                print(f"  Verdict: generated with {model} ({len(text)} chars)")
-                return {"text": text, "model": model, "generated_at": datetime.now().isoformat()}
+                stop = data.get("stop_reason")
+                if stop == "max_tokens":
+                    print(f"  Verdict: WARNING — response hit the token ceiling and is "
+                          f"cut off mid-sentence. Raise max_tokens.")
+                print(f"  Verdict: generated with {model} ({len(text)} chars, stop_reason={stop})")
+                return {"text": text, "model": model, "truncated": stop == "max_tokens",
+                        "generated_at": datetime.now().isoformat()}
             print("  Verdict: empty response")
         else:
             print(f"  Verdict: {model} failed HTTP {r.status_code}: {r.text[:200]}")

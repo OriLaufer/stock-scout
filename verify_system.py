@@ -118,8 +118,16 @@ def main():
     # Treating it as one raised AttributeError and killed the whole check run.
     v = payload.get("verdict")
     verdict = (v.get("text") if isinstance(v, dict) else v) or ""
-    check(len(verdict) > 200, "AI Verdict written",
+    # 200 chars was far too lenient — it passed a note that had been cut off
+    # mid-word at 713 characters. This is the piece the boss actually reads.
+    check(len(verdict) > 1200, "AI Verdict written",
           f"{len(verdict)} chars" if verdict else "missing — run the Fix Verdict workflow")
+
+    if verdict:
+        truncated = (isinstance(v, dict) and v.get("truncated")) or \
+                    not verdict.rstrip().endswith((".", "!", "?", "。", ":", ")", "*", "_"))
+        check(not truncated, "Verdict is complete",
+              "ends cleanly" if not truncated else f"cut off mid-sentence: ...{verdict.rstrip()[-60:]!r}")
 
     # The verdict is written in Hebrew for the boss. English at the top means the
     # model's plan-narration leaked in ahead of the report.
