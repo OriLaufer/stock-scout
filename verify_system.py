@@ -196,10 +196,12 @@ def email(ok):
             f'<div style="color:#888;font-size:12px;direction:ltr;text-align:left">{detail}</div></td></tr>'
         )
 
-    head = ("✅ Stock Scout — הכל עובד" if ok else "❌ Stock Scout — נמצאה תקלה")
-    intro = ("הסריקה רצה והמערכת עברה את כל הבדיקות. הדשבורד מציג נתונים עדכניים."
+    head = ("✅ Stock Scout — המערכת מוכנה להצגה לבוס" if ok
+            else "❌ Stock Scout — לא מוכן להצגה, נמצאה תקלה")
+    intro = ("כל הבדיקות עברו. הנתונים בכל הטאבים עדכניים ומחושבים מחדש, "
+             "המגמות ברשימה עדיין חיות, והדשבורד עולה תקין. אפשר להעביר לבוס."
              if ok else
-             "הבדיקה מצאה בעיה. הפירוט למטה — מה שמסומן באדום הוא מה שצריך טיפול.")
+             "אל תעביר לבוס עדיין. הבדיקה מצאה בעיה — מה שמסומן באדום למטה הוא מה שצריך טיפול.")
 
     html = f"""<div dir="rtl" style="font-family:system-ui,Arial,sans-serif;max-width:600px">
       <h2 style="margin:0 0 10px;color:{'#097c3e' if ok else '#cc3333'}">{head}</h2>
