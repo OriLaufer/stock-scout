@@ -1,0 +1,158 @@
+name: Keep Alive (Supabase + Actions)
+
+# WHY THIS EXISTS
+# Two silent killers took the system down for weeks in July 2026:
+#   1. Supabase free projects PAUSE after ~7 days with no queries. Once paused
+#      the endpoint stops answering entirely — the dashboard showed "no data"
+#      and every weekly scan failed to save.
+#   2. GitHub disables scheduled workflows after 60 days with no repo activity,
+#      which would silently stop the weekly scan too.
+# This job runs daily, touches the database (fixes #1), commits a heartbeat when
+# the repo has gone quiet (fixes #2), and EMAILS US the moment anything is wrong
+# so we hear about it before the boss does.
+
+on:
+  schedule:
+    - cron: '17 5 * * *'   # every day 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Ping Supabase (keeps the project from pausing)
+        id: ping
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          set +e
+          # A tiny read is enough to count as activity and reset the pause clock.
+          body=$(curl -sS --max-time 30 -w '\n%{http_code}' \
+            -H "apikey: $SUPABASE_SECRET_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SECRET_KEY" \
+            "$SUPABASE_URL/rest/v1/weekly_scans?select=week_label,created_at&order=created_at.desc&limit=1")
+          curl_rc=$?
+          code=$(echo "$body" | tail -n1)
+          payload=$(echo "$body" | sed '$d')
+
+          echo "curl_rc=$curl_rc http_code=$code"
+          echo "payload=$payload"
+
+          if [ "$curl_rc" != "0" ] || [ "$code" != "200" ]; then
+            # $GITHUB_OUTPUT is line-based — flatten so a multi-line body can't corrupt it.
+            flat=$(echo "$payload" | tr '\n\r' '  ' | head -c 300)
+            echo "status=down" >> $GITHUB_OUTPUT
+            echo "detail=curl_rc=$curl_rc http=$code $flat" >> $GITHUB_OUTPUT
+            echo "::error::Supabase unreachable (curl_rc=$curl_rc http=$code). Project is probably PAUSED — restore it at https://supabase.com/dashboard/projects"
+            exit 0
+          fi
+
+          # Reachable. Also check the data isn't stale (scan silently failing).
+          latest=$(echo "$payload" | grep -o '"created_at":"[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "latest scan row: $latest"
+          if [ -z "$latest" ]; then
+            echo "status=empty" >> $GITHUB_OUTPUT
+            echo "detail=Supabase is up but weekly_scans is EMPTY." >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          age_days=$(( ( $(date -u +%s) - $(date -u -d "$latest" +%s) ) / 86400 ))
+          echo "latest scan is $age_days days old"
+          if [ "$age_days" -gt 10 ]; then
+            echo "status=stale" >> $GITHUB_OUTPUT
+            echo "detail=Supabase is up, but the newest scan is $age_days days old — the weekly scan is not saving." >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "status=ok" >> $GITHUB_OUTPUT
+          echo "detail=latest scan $age_days days old" >> $GITHUB_OUTPUT
+
+      - name: Heartbeat commit (stops GitHub disabling the weekly cron)
+        run: |
+          # GitHub kills scheduled workflows after 60 days of repo silence.
+          # Only commit when the repo HAS actually gone quiet, so we don't spam
+          # the history with 365 bot commits a year.
+          last=$(git log -1 --format=%ct)
+          quiet_days=$(( ( $(date -u +%s) - last ) / 86400 ))
+          echo "last repo activity: $quiet_days days ago"
+          if [ "$quiet_days" -lt 30 ]; then
+            echo "Repo is active — no heartbeat needed."
+            exit 0
+          fi
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/last-heartbeat
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-heartbeat
+          git commit -m "chore: keep-alive heartbeat (repo quiet ${quiet_days}d)"
+          git push
+
+      - name: Alert by email if anything is wrong
+        if: steps.ping.outputs.status != 'ok'
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+          STATUS: ${{ steps.ping.outputs.status }}
+          DETAIL: ${{ steps.ping.outputs.detail }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          status = os.environ.get("STATUS", "unknown")
+          detail = os.environ.get("DETAIL", "")
+          key    = os.environ.get("RESEND_API_KEY")
+          to     = os.environ.get("BOSS_EMAIL")
+          if not key or not to:
+              print("No RESEND_API_KEY / BOSS_EMAIL — cannot send alert.")
+              raise SystemExit(0)
+
+          fix = {
+            "down":  ("מסד הנתונים לא מגיב — כנראה הפרויקט ב-Supabase הוקפא (Paused).",
+                      'היכנס ל-<a href="https://supabase.com/dashboard/projects">supabase.com/dashboard/projects</a> ולחץ <b>Restore project</b>. לוקח 2-5 דקות, הנתונים חוזרים שלמים.'),
+            "empty": ("מסד הנתונים עובד אבל טבלת הסריקות ריקה.",
+                      "צריך להריץ סריקה: Actions → Stock Scout Weekly Scan → Run workflow."),
+            "stale": ("מסד הנתונים עובד אבל אין סריקה חדשה כבר יותר מ-10 ימים.",
+                      "כנראה הסריקה השבועית נכשלת. בדוק Actions → Stock Scout Weekly Scan."),
+          }.get(status, ("בדיקת התקינות היומית נכשלה.", "בדוק את הלוג ב-GitHub Actions."))
+
+          html = f"""<div dir="rtl" style="font-family:system-ui,Arial,sans-serif;max-width:560px">
+            <h2 style="color:#cc3333;margin:0 0 12px">⚠️ Stock Scout — תקלה</h2>
+            <p style="font-size:16px;margin:0 0 10px"><b>{fix[0]}</b></p>
+            <p style="font-size:15px;margin:0 0 16px">{fix[1]}</p>
+            <pre style="background:#f5f6fa;padding:10px;border-radius:6px;font-size:12px;direction:ltr;text-align:left;white-space:pre-wrap">{detail}</pre>
+            <p style="color:#888;font-size:12px">נשלח אוטומטית מבדיקת התקינות היומית.</p>
+          </div>"""
+
+          req = urllib.request.Request(
+              "https://api.resend.com/emails",
+              data=json.dumps({
+                  "from": "Stock Scout <onboarding@resend.dev>",
+                  "to": [to],
+                  "subject": f"⚠️ Stock Scout — {status.upper()} — צריך טיפול",
+                  "html": html,
+              }).encode(),
+              headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+          )
+          try:
+              print(urllib.request.urlopen(req, timeout=30).read().decode()[:300])
+          except Exception as e:
+              print("alert email failed:", e)
+          PY
+
+      - name: Fail the run so it shows red in Actions
+        if: steps.ping.outputs.status != 'ok'
+        env:
+          STATUS: ${{ steps.ping.outputs.status }}
+          DETAIL: ${{ steps.ping.outputs.detail }}
+        run: |
+          echo "Health check status: $STATUS"
+          echo "$DETAIL"
+          exit 1

@@ -1615,6 +1615,19 @@ def compute_the_trend(top_n=10, min_appearances=2, candidate_pool=20):
                 "in_scan": week_label in scan_weeks,
             })
 
+        # ── QUALITY FILTER: skip single-week spikes ──
+        # The Trend must show SUSTAINED momentum, not one explosive week. If a
+        # stock's entire gain comes from one week (e.g. AIFU +2522% on a single
+        # spike, flat/red otherwise), it's noise — exclude it. A real trend has
+        # MULTIPLE meaningful up-weeks.
+        ups = [h["change_pct"] for h in history_entries if h["change_pct"] > 0]
+        strong_weeks = [g for g in ups if g >= 12]      # meaningful up-weeks
+        spike_ratio = (max(ups) / sum(ups)) if ups else 1.0
+        is_spike = (len(strong_weeks) <= 1) and (spike_ratio >= 0.5)
+        if is_spike:
+            print(f"    skip {ticker}: single-week spike (1 big week, {spike_ratio:.0%} of gains) — not a sustained trend")
+            continue
+
         # Fetch the full identity card data — analyst targets, business summary,
         # 52W range, sector, etc. This is The Trend's centerpiece.
         identity = _fetch_trend_identity(ticker)

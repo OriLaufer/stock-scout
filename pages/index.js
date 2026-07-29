@@ -181,11 +181,21 @@ const COLORS = {
 }
 
 export async function getServerSideProps() {
-  const { data: scans } = await supabase
-    .from('weekly_scans')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(100)
+  // Capture the error too. When the Supabase project is PAUSED the client throws
+  // a network "fetch failed" — which used to look identical to "no scans yet"
+  // and sent us hunting for missing data instead of a sleeping database.
+  let scans = null, dbError = null
+  try {
+    const { data, error } = await supabase
+      .from('weekly_scans')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(100)
+    scans = data
+    if (error) dbError = error.message || String(error)
+  } catch (e) {
+    dbError = e?.message || String(e)
+  }
 
   // Python's json.dumps writes bare NaN/Infinity (from a div-by-zero in a
   // metric), which is INVALID JSON and makes JSON.parse throw — silently
@@ -382,10 +392,10 @@ export async function getServerSideProps() {
   // scalable as scans accumulate week after week.
   const scansLean = unique.map(s => ({ week_label: s.week_label, created_at: s.created_at, stocks: s.stocks, bonus: s.bonus }))
 
-  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict } }
+  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict, dbError } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict, dbError }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -500,6 +510,26 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             </button>
           </div>
         </div>
+
+        {/* Database-down banner. An empty dashboard used to look like "no scans
+            yet"; it was actually the Supabase project paused. Say so plainly. */}
+        {dbError && (
+          <div style={{ background: dark ? '#3a0a0a' : '#FCEBEB', border: '1px solid #cc3333', borderRadius: 12, padding: '16px 20px', marginBottom: 20 }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: '#cc3333', marginBottom: 6 }}>
+              {lang === 'he' ? '⚠️ אין חיבור למסד הנתונים' : '⚠️ Cannot reach the database'}
+            </div>
+            <div style={{ fontSize: 14, color: c.text, lineHeight: 1.6 }}>
+              {lang === 'he'
+                ? 'הנתונים לא נמחקו — השרת פשוט לא מצליח להתחבר. ברוב המקרים פרויקט ה-Supabase הוקפא אחרי תקופה בלי פעילות.'
+                : 'Nothing was deleted — the server simply cannot connect. Usually the Supabase project was paused after a quiet period.'}
+              {' '}
+              <a href="https://supabase.com/dashboard/projects" target="_blank" rel="noreferrer" style={{ color: '#cc3333', fontWeight: 700 }}>
+                {lang === 'he' ? 'פתח את Supabase ולחץ Restore project' : 'Open Supabase and click Restore project'}
+              </a>
+            </div>
+            <div style={{ fontSize: 11, color: c.muted, marginTop: 8, direction: 'ltr', textAlign: 'left' }}>{dbError}</div>
+          </div>
+        )}
 
         {/* Filter bar */}
         <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: '14px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>

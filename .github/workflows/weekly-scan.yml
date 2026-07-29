@@ -38,3 +38,34 @@ jobs:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python scanner.py
+
+      # Never let a scan fail silently again — if it broke, we hear about it
+      # the same morning instead of the boss discovering an empty dashboard.
+      - name: Alert by email if the scan failed
+        if: failure()
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request
+          key, to = os.environ.get("RESEND_API_KEY"), os.environ.get("BOSS_EMAIL")
+          if not key or not to:
+              raise SystemExit(0)
+          html = f"""<div dir="rtl" style="font-family:system-ui,Arial,sans-serif;max-width:560px">
+            <h2 style="color:#cc3333;margin:0 0 12px">⚠️ הסריקה השבועית נכשלה</h2>
+            <p style="font-size:15px">לא נשמרו נתונים חדשים השבוע. הדשבורד עדיין מציג את הסריקה הקודמת.</p>
+            <p><a href="{os.environ.get('RUN_URL','')}">לצפייה בלוג השגיאה ב-GitHub Actions</a></p>
+            <p style="color:#888;font-size:12px">אם הסיבה היא שמסד הנתונים מוקפא — שחזר אותו ב-supabase.com/dashboard/projects והרץ את הסריקה מחדש.</p>
+          </div>"""
+          req = urllib.request.Request(
+              "https://api.resend.com/emails",
+              data=json.dumps({"from": "Stock Scout <onboarding@resend.dev>", "to": [to],
+                               "subject": "⚠️ Stock Scout — הסריקה השבועית נכשלה", "html": html}).encode(),
+              headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+          try:
+              print(urllib.request.urlopen(req, timeout=30).read().decode()[:300])
+          except Exception as e:
+              print("alert email failed:", e)
+          PY
