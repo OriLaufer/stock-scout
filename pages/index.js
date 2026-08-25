@@ -604,6 +604,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
             ['hof',       '🏆 Hall of Fame'],
             ['watchlist', `📓 ${lang === 'he' ? 'יומן מסחר' : 'Journal'}`],
             ['portfolio', `🔭 ${lang === 'he' ? 'מעקב תיק' : 'Portfolio Watch'}`],
+            ['lab',       `🔬 ${lang === 'he' ? 'מעבדה' : 'Analysis Lab'}`],
           ].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ padding: '9px 22px', borderRadius: 22, border: `1px solid ${tab === key ? '#097c3e' : c.border}`, background: tab === key ? '#097c3e' : c.card, color: tab === key ? 'white' : c.muted, fontWeight: 700, cursor: 'pointer', fontSize: 14, transition: 'all 0.15s' }}>
               {label}
@@ -636,6 +637,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
         {tab === 'portfolio' && (
           <PortfolioWatch journal={journal} weeklyHistoryByTicker={weeklyHistoryByTicker} c={c} dark={dark} lang={lang} />
+        )}
+
+        {tab === 'lab' && (
+          <AnalysisLab risingStars={risingStars} radar={radar} trend={trend} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'weekly' && (<>
@@ -3260,6 +3265,245 @@ function _formatMcapShort(n) {
   if (n >= 1e9)  return `$${(n / 1e9).toFixed(2)}B`
   if (n >= 1e6)  return `$${(n / 1e6).toFixed(0)}M`
   return `$${n}`
+}
+
+// ===================== THE ANALYSIS LAB =====================
+// Paste any ticker — a name the boss mentioned, a stock from the news, a
+// candidate off any tab — and get a real research verdict instead of a score.
+// The point of this tab is the entry question: our own 109 forward-tested picks
+// say buying after a +80-150% week compounded to -89.5%, so "is the story good?"
+// is the wrong question. "Where in the move is it, today?" is the right one.
+
+const STAGE_UI = {
+  'trending':      { he: 'בתוך מגמה',    en: 'trending',  color: '#097c3e', icon: '🟢' },
+  'extended':      { he: 'מתוחה',        en: 'extended',  color: '#b8860b', icon: '🟡' },
+  'parabolic':     { he: 'פרבולית',      en: 'parabolic', color: '#c0392b', icon: '🔴' },
+  'basing/broken': { he: 'מתחת לממוצע',  en: 'below MA',  color: '#888',    icon: '⚪' },
+}
+
+function AnalysisLab({ risingStars, radar, trend, c, dark, lang }) {
+  const he = lang === 'he'
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState('')
+  const [results, setResults] = useState([])
+  const [comparison, setComparison] = useState('')
+  const [error, setError] = useState('')
+
+  const parseTickers = (s) => Array.from(new Set(
+    String(s).toUpperCase().split(/[\s,;]+/).map(x => x.replace(/[^A-Z.\-]/g, '')).filter(Boolean)
+  )).slice(0, 5)
+
+  async function run(tickersRaw) {
+    const tickers = parseTickers(tickersRaw)
+    if (!tickers.length) { setError(he ? 'הזן סימבול אחד לפחות' : 'Enter at least one ticker'); return }
+    setError(''); setBusy(true); setResults([]); setComparison('')
+
+    const done = []
+    // One at a time: each analysis does its own web research and must finish
+    // inside the serverless function's 60s ceiling.
+    for (let i = 0; i < tickers.length; i++) {
+      setProgress(he ? `חוקר את ${tickers[i]}… (${i + 1}/${tickers.length})` : `Researching ${tickers[i]}… (${i + 1}/${tickers.length})`)
+      try {
+        const r = await fetch('/api/deep-analysis', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ticker: tickers[i] }),
+        })
+        const d = await r.json()
+        done.push(d)
+      } catch (e) {
+        done.push({ ticker: tickers[i], error: true, report: (he ? 'שגיאת רשת: ' : 'Network error: ') + e.message })
+      }
+      setResults([...done])
+    }
+
+    const ok = done.filter(d => d.report && !d.error)
+    if (ok.length > 1) {
+      setProgress(he ? 'משווה ביניהן…' : 'Comparing…')
+      try {
+        const r = await fetch('/api/deep-analysis', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ compare: ok.map(d => ({ ticker: d.ticker, report: d.report })) }),
+        })
+        const d = await r.json()
+        if (d.report) setComparison(d.report)
+      } catch {}
+    }
+    setProgress(''); setBusy(false)
+  }
+
+  const chip = (label, tickers) => (
+    <button key={label} disabled={busy} onClick={() => { setInput(tickers.join(', ')); run(tickers) }}
+      style={{
+        padding: '6px 12px', borderRadius: 14, fontSize: 12, fontWeight: 700,
+        border: `1px solid ${c.border}`, background: c.chipBg, color: c.text,
+        cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1,
+      }}>{label}</button>
+  )
+
+  const top5Stars = (risingStars || []).slice(0, 5).map(s => s.ticker)
+  const top5Radar = (radar || []).slice(0, 5).map(s => s.ticker)
+  const running = (trend || []).filter(t => t.momentum === 'running').slice(0, 5).map(t => t.ticker)
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {/* Header */}
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#1a0d30' : '#2d1a4e'} 0%, ${dark ? '#2a1855' : '#43306b'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 32 }}>🔬</span>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+              {he ? 'מעבדת ניתוח' : 'Analysis Lab'}
+            </div>
+            <div style={{ fontSize: 13, color: '#c3b5dd', marginTop: 4 }}>
+              {he
+                ? 'הזן כל מנייה — מהחדשות, מהבוס, מכל טאב — וקבל מחקר אמיתי: מה החברה עושה, מה מזיז אותה עכשיו, ובעיקר איפה היא במהלך. עד 5 בבת אחת, עם השוואה ביניהן.'
+                : 'Drop in any ticker and get real research: what the company does, what is moving it now, and above all where in the move it is. Up to 5 at a time, with a head-to-head.'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Evidence banner — why this tab judges the entry, not the story */}
+      <div style={{
+        background: dark ? '#2a1a0a' : '#FFF8E1', borderLeft: '4px solid #d9a406',
+        borderRight: `1px solid ${c.border}`, padding: '12px 20px', fontSize: 12.5, color: c.text, lineHeight: 1.6,
+      }}>
+        {he ? (
+          <>📊 <b>מה שהנתונים שלנו מוכיחים (109 בחירות שנבדקו קדימה):</b> קנייה אחרי שבוע של
+            <b style={{ color: '#097c3e' }}> +20-50% הרוויחה +52.9%</b>, אחרי
+            <b style={{ color: '#c0392b' }}> +80-150% הפסידה 89.5%</b>, ואחרי
+            <b style={{ color: '#c0392b' }}> +150% הצליחה ב-17% מהמקרים בלבד</b>.
+            לכן הטאב הזה שואל <b>איפה המנייה במהלך</b> — לא כמה הסיפור מרגש.</>
+        ) : (
+          <>📊 <b>What our own 109 forward-tested picks show:</b> buying after a
+            <b style={{ color: '#097c3e' }}> +20-50% week compounded +52.9%</b>, after a
+            <b style={{ color: '#c0392b' }}> +80-150% week it compounded -89.5%</b>, and after
+            <b style={{ color: '#c0392b' }}> +150% only 17% won</b>. So this tab judges
+            <b> where in the move</b> a stock is — not how exciting the story sounds.</>
+        )}
+      </div>
+
+      {/* Input */}
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderTop: 'none', padding: '18px 22px' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !busy) run(input) }}
+            placeholder={he ? 'לדוגמה:  ETON, SMJF, TXG, LIFE, PAYS' : 'e.g.  ETON, SMJF, TXG, LIFE, PAYS'}
+            style={{
+              flex: 1, minWidth: 240, padding: '11px 14px', borderRadius: 10, fontSize: 15, fontWeight: 600,
+              border: `1px solid ${c.border}`, background: c.inputBg, color: c.text, letterSpacing: '.5px',
+            }} />
+          <button onClick={() => run(input)} disabled={busy}
+            style={{
+              padding: '11px 26px', borderRadius: 10, border: 'none', fontSize: 15, fontWeight: 700,
+              background: busy ? '#888' : '#6b3fa0', color: 'white', cursor: busy ? 'not-allowed' : 'pointer',
+            }}>
+            {busy ? (he ? 'חוקר…' : 'Researching…') : (he ? '🔬 נתח' : '🔬 Analyse')}
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: c.muted, fontWeight: 600 }}>{he ? 'קיצורים:' : 'Shortcuts:'}</span>
+          {top5Stars.length > 0 && chip(he ? '⭐ 5 הכוכבים המובילים' : '⭐ Top 5 Rising Stars', top5Stars)}
+          {top5Radar.length > 0 && chip(he ? '🎯 5 מהראדאר' : '🎯 Top 5 Radar', top5Radar)}
+          {running.length > 0 && chip(he ? '🔥 מגמות שעדיין רצות' : '🔥 Still-running trends', running)}
+        </div>
+
+        {error && <div style={{ marginTop: 10, fontSize: 13, color: '#c0392b', fontWeight: 600 }}>{error}</div>}
+        {progress && (
+          <div style={{ marginTop: 12, fontSize: 13, color: '#6b3fa0', fontWeight: 700 }}>
+            ⏳ {progress} <span style={{ color: c.muted, fontWeight: 400 }}>
+              {he ? '— כל מנייה לוקחת ~30 שניות (חיפוש רשת אמיתי)' : '— about 30s each (real web research)'}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Head-to-head first: it is the answer to "which of these?" */}
+      {comparison && (
+        <div style={{
+          background: dark ? '#0d1f14' : '#F1F8F2', border: '2px solid #097c3e',
+          borderRadius: 12, padding: '20px 24px', marginTop: 16,
+        }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: '#097c3e', marginBottom: 10 }}>
+            🥇 {he ? 'ההשוואה' : 'Head to head'}
+          </div>
+          <Markdown text={comparison} c={c} dark={dark} rtl={he} />
+        </div>
+      )}
+
+      {/* Per-ticker notes */}
+      {results.map((r, i) => {
+        const t = r.technicals
+        const st = t && STAGE_UI[t.stage]
+        return (
+          <div key={r.ticker + i} style={{
+            background: c.card, border: `1px solid ${c.border}`, borderRadius: 12,
+            padding: '18px 22px', marginTop: 14,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+              <span style={{ fontSize: 20, fontWeight: 800, color: c.text }}>{r.ticker}</span>
+              {st && (
+                <span style={{
+                  fontSize: 11, fontWeight: 800, padding: '4px 11px', borderRadius: 12,
+                  border: `1px solid ${st.color}`, color: st.color,
+                }}>{st.icon} {he ? st.he : st.en}</span>
+              )}
+              {t && t.climb_is_spike_driven && (
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 12, background: dark ? '#3a0a0a' : '#FCEBEB', color: '#c0392b' }}>
+                  ⚡ {he ? 'עלייה מבוססת קפיצות' : 'spike-driven climb'}
+                </span>
+              )}
+              {t && (
+                <span style={{ fontSize: 12, color: c.muted, marginInlineStart: 'auto' }}>
+                  ${t.price} · {he ? 'מעל ממוצע 50' : 'vs 50dma'} {t.pct_above_50dma > 0 ? '+' : ''}{t.pct_above_50dma}%
+                  {' · '}{he ? 'חודש' : '1mo'} {t.ret_1mo > 0 ? '+' : ''}{t.ret_1mo}%
+                  {t.volume_vs_normal ? ` · ${he ? 'מחזור' : 'vol'} ×${t.volume_vs_normal}` : ''}
+                </span>
+              )}
+            </div>
+
+            {/* 10-week path — the shape of the climb at a glance */}
+            {t && t.weekly_path_10w?.length > 0 && (
+              <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end', height: 34, marginBottom: 14 }}>
+                {t.weekly_path_10w.map((w, wi) => {
+                  const max = Math.max(10, ...t.weekly_path_10w.map(Math.abs))
+                  return (
+                    <div key={wi} title={`${w > 0 ? '+' : ''}${w}%`} style={{
+                      width: 12, height: Math.max(2, (Math.abs(w) / max) * 30),
+                      background: w >= 0 ? '#097c3e' : '#c0392b', borderRadius: 2,
+                    }} />
+                  )
+                })}
+                <span style={{ fontSize: 10, color: c.muted, marginInlineStart: 8, alignSelf: 'center' }}>
+                  {he ? '10 שבועות אחרונים' : 'last 10 weeks'}
+                </span>
+              </div>
+            )}
+
+            <Markdown text={r.report} c={c} dark={dark} rtl={he} />
+          </div>
+        )
+      })}
+
+      {!busy && results.length === 0 && (
+        <div style={{
+          background: c.card, border: `1px solid ${c.border}`, borderTop: 'none',
+          borderRadius: '0 0 12px 12px', padding: 30, textAlign: 'center', color: c.muted, fontSize: 13,
+        }}>
+          {he
+            ? 'הזן סימבולים למעלה, או לחץ על אחד הקיצורים כדי לנתח ישר מהמערכת.'
+            : 'Enter tickers above, or use a shortcut to analyse straight from the system.'}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // Is this trend still ALIVE, or is it a finished move still coasting on an
