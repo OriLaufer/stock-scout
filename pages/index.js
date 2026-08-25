@@ -760,6 +760,12 @@ function VerdictCard({ verdict, c, dark, lang }) {
   }
 
   const when = verdict.generated_at ? new Date(verdict.generated_at).toLocaleDateString(he ? 'he-IL' : 'en-US') : ''
+  // When a scan cannot write a verdict (an API failure, exhausted credits), the
+  // dashboard falls back to the newest scan that HAS one — so a month-old note
+  // renders as if it were this week's. Say how old it is.
+  const verdictAgeDays = verdict.generated_at
+    ? Math.floor((Date.now() - new Date(verdict.generated_at)) / 86400000) : null
+  const verdictStale = verdictAgeDays != null && verdictAgeDays > 8
 
   return (
     <div style={{
@@ -778,8 +784,11 @@ function VerdictCard({ verdict, c, dark, lang }) {
             <div style={{ fontSize: 17, fontWeight: 800, color: 'white' }}>
               {he ? 'חוות הדעת — ניתוח האנליסט' : 'The Verdict — Analyst\'s Call'}
             </div>
-            <div style={{ fontSize: 11, color: '#a8c5dd', marginTop: 2 }}>
+            <div style={{ fontSize: 11, color: verdictStale ? '#ffcc55' : '#a8c5dd', marginTop: 2 }}>
               {he ? 'הדעה האמיתית, לא ציון · ' : 'Real opinion, not a score · '}{when}
+              {verdictStale && (he
+                ? ` · ⚠️ בת ${verdictAgeDays} ימים — לא נוצרה חוות דעת חדשה בסריקה האחרונה`
+                : ` · ⚠️ ${verdictAgeDays} days old — the latest scan did not produce a new one`)}
             </div>
           </div>
         </div>

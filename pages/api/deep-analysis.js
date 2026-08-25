@@ -245,8 +245,33 @@ export default async function handler(req, res) {
       'Research the real catalyst and write the note.',
     ].join('\n')
 
-    const { text, truncated } = await callClaude(model, SYSTEM_ONE, userMsg, true, 2200)
-    return res.status(200).json({ ticker: T, report: text, technicals: tech, truncated })
+    try {
+      const { text, truncated } = await callClaude(model, SYSTEM_ONE, userMsg, true, 2200)
+      return res.status(200).json({ ticker: T, report: text, technicals: tech, truncated })
+    } catch (aiErr) {
+      // The technicals are the half that answers "where in the move is it?" and
+      // they cost nothing to produce. Never throw them away because the AI leg
+      // failed — a stage read with no commentary still beats an error box.
+      const billing = /credit balance|Plans & Billing|quota/i.test(aiErr.message)
+      const note = billing
+        ? '⚠️ **נגמרו הקרדיטים ב-Anthropic** — המחקר הכתוב לא זמין עד שתטען קרדיטים ב-console.anthropic.com → Plans & Billing. הנתונים הטכניים למטה מחושבים אצלנו ותקפים.'
+        : '⚠️ המחקר הכתוב נכשל (' + aiErr.message.slice(0, 120) + '). הנתונים הטכניים למטה מחושבים אצלנו ותקפים.'
+      const stageHe = { trending: 'בתוך מגמה', extended: 'מתוחה', parabolic: 'פרבולית', 'basing/broken': 'מתחת לממוצע 50' }[tech.stage] || tech.stage
+      return res.status(200).json({
+        ticker: T, technicals: tech, aiUnavailable: true,
+        report: [
+          note, '',
+          '## 📍 איפה היא במהלך (מחושב, ללא AI)',
+          '- **שלב:** ' + stageHe + ' — ' + tech.stage_why,
+          '- **מעל ממוצע 50 יום:** ' + tech.pct_above_50dma + '%  |  **מעל ממוצע 200:** ' + tech.pct_above_200dma + '%',
+          '- **תשואות:** שבוע ' + tech.ret_1w + '% · חודש ' + tech.ret_1mo + '% · 3 חודשים ' + tech.ret_3mo + '% · 6 חודשים ' + tech.ret_6mo + '%',
+          '- **10 שבועות אחרונים:** ' + tech.weekly_path_10w.join('%, ') + '%',
+          '- **השבוע הגדול ביותר:** ' + tech.biggest_week_10w + '%' + (tech.climb_is_spike_driven ? '  ⚡ העלייה מבוססת קפיצות — הדפוס המסוכן לפי הנתונים שלנו' : '  ✅ טיפוס יחסית חלק'),
+          '- **מחזור מול רגיל:** ×' + tech.volume_vs_normal,
+          '- **מרחק משיא 52 שבועות:** ' + tech.pct_off_52w_high + '%  |  **מהשפל:** +' + tech.gain_from_52w_low + '%',
+        ].join('\n'),
+      })
+    }
   } catch (e) {
     return res.status(200).json({ error: true, report: 'שגיאה: ' + e.message })
   }
