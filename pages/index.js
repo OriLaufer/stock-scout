@@ -222,10 +222,11 @@ export async function getServerSideProps() {
         _trend: parsed.trend || null,
         _radar: parsed.radar || null,
         _rising: parsed.rising_stars || null,
+        _entry: parsed.entry_zone || null,
         _verdict: parsed.verdict || null,
       }
     } catch {
-      return { week_label: scan.week_label, created_at: scan.created_at, stocks: [], bonus: [], backtest: null, _trend: null, _radar: null, _rising: null, _verdict: null }
+      return { week_label: scan.week_label, created_at: scan.created_at, stocks: [], bonus: [], backtest: null, _trend: null, _radar: null, _rising: null, _entry: null, _verdict: null }
     }
   })
 
@@ -387,6 +388,7 @@ export async function getServerSideProps() {
   const trend = (unique.find(s => s._trend)?._trend) || null
   const radar = (unique.find(s => s._radar)?._radar) || null
   const risingStars = (unique.find(s => s._rising)?._rising) || null
+  const entryZone = (unique.find(s => s._entry)?._entry) || null
   const verdict = (unique.find(s => s._verdict)?._verdict) || null
 
   // Ship LEAN scans — only what the client renders (week, date, stocks, bonus).
@@ -394,10 +396,10 @@ export async function getServerSideProps() {
   // scalable as scans accumulate week after week.
   const scansLean = unique.map(s => ({ week_label: s.week_label, created_at: s.created_at, stocks: s.stocks, bonus: s.bonus }))
 
-  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict, dbError } }
+  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, verdict, dbError } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, verdict, dbError }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, verdict, dbError }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -598,6 +600,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[
             ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
+            ['entry',     `🎯 ${lang === 'he' ? 'אזור כניסה' : 'Entry Zone'}`],
             ['stars',     `⭐ ${lang === 'he' ? 'כוכבים עולים' : 'Rising Stars'}`],
             ['radar',     `🎯 ${lang === 'he' ? 'ראדאר' : 'Radar'}`],
             ['trend',     `📈 ${lang === 'he' ? 'המגמה' : 'The Trend'}`],
@@ -637,6 +640,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
         {tab === 'portfolio' && (
           <PortfolioWatch journal={journal} weeklyHistoryByTicker={weeklyHistoryByTicker} c={c} dark={dark} lang={lang} />
+        )}
+
+        {tab === 'entry' && (
+          <EntryZone entryZone={entryZone} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'lab' && (
@@ -3274,6 +3281,143 @@ function _formatMcapShort(n) {
   if (n >= 1e9)  return `$${(n / 1e9).toFixed(2)}B`
   if (n >= 1e6)  return `$${(n / 1e6).toFixed(0)}M`
   return `$${n}`
+}
+
+// ===================== ENTRY ZONE — THE BUY LIST =====================
+// The one tab that answers "which stock do we actually enter?" — and the one
+// that needs no AI at all, so it keeps working when the API balance is empty.
+// Built straight from what our 109 forward-tested picks measured: a confirmed
+// uptrend that has NOT yet stretched away from its 50-day average.
+
+function EntryZone({ entryZone, c, dark, lang }) {
+  const he = lang === 'he'
+  const [open, setOpen] = useState(null)
+
+  if (!entryZone || entryZone.length === 0) {
+    return (
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 40, textAlign: 'center' }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>🎯</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
+          {he ? 'רשימת הקנייה תיווצר בסריקה הבאה' : 'The buy list is built on the next scan'}
+        </div>
+        <div style={{ fontSize: 13, color: c.muted }}>
+          {he ? 'הרץ "Full Run & Verify" ב-Actions כדי לחשב אותה עכשיו. לא דורש AI.'
+              : 'Run "Full Run & Verify" in Actions to compute it now. No AI required.'}
+        </div>
+      </div>
+    )
+  }
+
+  const zoneOf = (ext) => ext <= 20
+    ? { label: he ? 'באזור הכניסה' : 'in the zone', color: '#097c3e', icon: '🟢' }
+    : ext <= 30
+      ? { label: he ? 'מעט מתוחה' : 'slightly extended', color: '#b8860b', icon: '🟡' }
+      : { label: he ? 'בקצה העליון' : 'upper edge', color: '#c0662b', icon: '🟠' }
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#07281a' : '#0b3d26'} 0%, ${dark ? '#0f4a2e' : '#14663f'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 32 }}>🎯</span>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+              {he ? 'אזור הכניסה — רשימת הקנייה' : 'Entry Zone — The Buy List'}
+            </div>
+            <div style={{ fontSize: 13, color: '#a8d5bd', marginTop: 4 }}>
+              {he
+                ? 'מניות במגמה מאושרת שעדיין לא ברחו: מעל ממוצעי 50 ו-200, מובילות את השוק, מטפסות בעקביות — ועדיין קרובות לממוצע. זה הפרופיל היחיד שהרוויח כסף ב-109 הבחירות שנמדדו.'
+                : 'Confirmed uptrends that have not run away yet: above the 50 and 200-day averages, leading the market, climbing steadily — and still close to the average. The only profile that made money across our 109 measured picks.'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        background: dark ? '#0d2018' : '#EAF3DE', borderLeft: '4px solid #097c3e',
+        padding: '10px 20px', fontSize: 12, color: c.text,
+      }}>
+        {he ? '✅ מחושב מנתוני מחיר בלבד — לא דורש AI ולא קרדיטים. מתעדכן בכל סריקה שבועית.'
+            : '✅ Computed from price data alone — no AI, no credits. Refreshes every weekly scan.'}
+      </div>
+
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
+        {entryZone.map((s, i) => {
+          const z = zoneOf(s.pct_above_50dma)
+          const isOpen = open === s.ticker
+          return (
+            <div key={s.ticker}>
+              <div onClick={() => setOpen(isOpen ? null : s.ticker)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '15px 22px',
+                  borderBottom: `1px solid ${c.border}`, cursor: 'pointer',
+                  background: i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa'),
+                }}>
+                <div style={{ width: 34, textAlign: 'center', fontSize: 14, fontWeight: 800, color: c.muted }}>#{i + 1}</div>
+                <div style={{ width: 190, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: c.text }}>{s.ticker}</span>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: z.color, border: `1px solid ${z.color}`, borderRadius: 10, padding: '1px 7px' }}>
+                      {z.icon} {z.label}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 185 }}>{s.name}</div>
+                </div>
+
+                <div style={{ flex: 1, minWidth: 90, textAlign: 'center' }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>
+                    {s.pct_above_50dma > 0 ? '+' : ''}{s.pct_above_50dma}%
+                  </div>
+                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'מעל ממוצע 50' : 'above 50dma'}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 90, textAlign: 'center' }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: '#097c3e' }}>+{s.rs_vs_spy_6mo}%</div>
+                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'מול השוק' : 'vs market'}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80, textAlign: 'center' }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{s.positive_weeks_pct}%</div>
+                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'שבועות ירוקים' : 'green weeks'}</div>
+                </div>
+
+                <div style={{ textAlign: 'right', minWidth: 78 }}>
+                  <div style={{ fontSize: 21, fontWeight: 800, color: '#097c3e', lineHeight: 1 }}>{s.entry_score}</div>
+                  <div style={{ fontSize: 9, color: c.muted, marginTop: 2 }}>{he ? 'ציון כניסה' : 'entry score'}</div>
+                </div>
+                <span style={{ fontSize: 13, color: c.muted }}>{isOpen ? '▲' : '▼'}</span>
+              </div>
+
+              {isOpen && (
+                <div style={{ background: dark ? '#0a1a12' : '#f4faf6', padding: '18px 26px', borderBottom: `1px solid ${c.border}` }}>
+                  <div style={{ fontSize: 13.5, color: c.text, lineHeight: 1.7, marginBottom: 14 }}>{s.why}</div>
+                  <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 12, color: c.muted }}>
+                    <span>{he ? 'מחיר' : 'price'} <b style={{ color: c.text }}>${s.price}</b></span>
+                    <span>{he ? 'שווי' : 'cap'} <b style={{ color: c.text }}>${(s.market_cap / 1e9).toFixed(2)}B</b></span>
+                    <span>{he ? 'חודש' : '1mo'} <b style={{ color: c.text }}>{s.ret_1mo}%</b></span>
+                    <span>{he ? '3 ח׳' : '3mo'} <b style={{ color: c.text }}>{s.ret_3mo}%</b></span>
+                    <span>{he ? '6 ח׳' : '6mo'} <b style={{ color: c.text }}>{s.ret_6mo}%</b></span>
+                    <span>{he ? 'שבוע הכי גדול' : 'biggest week'} <b style={{ color: c.text }}>{s.max_week_pct}%</b></span>
+                    {s.vol_ratio && <span>{he ? 'מחזור' : 'volume'} <b style={{ color: c.text }}>×{s.vol_ratio}</b></span>}
+                    {s.sector && <span>{s.sector}</span>}
+                  </div>
+                  {s.entry_breakdown && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+                      {Object.entries(s.entry_breakdown).map(([k, v]) => (
+                        <span key={k} style={{ fontSize: 10, background: c.chipBg, color: c.muted, padding: '3px 9px', borderRadius: 8 }}>
+                          {k.replace(/_/g, ' ')}: <b style={{ color: c.text }}>{v}</b>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 // ===================== THE ANALYSIS LAB =====================

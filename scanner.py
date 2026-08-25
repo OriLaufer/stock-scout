@@ -307,9 +307,26 @@ def fetch_weekly_changes(tickers, reference_date=None):
                         if len(closes) >= 50:
                             ma50 = float(closes.iloc[-50:].mean())
                             rec["above_50dma"] = bool(this_close > ma50)
+                            # HOW FAR above matters more than whether. Our own 109
+                            # forward-tested picks say the money is made buying a
+                            # stock that is trending but NOT yet stretched; a name
+                            # 60% above its 50-day average is late, not strong.
+                            if ma50 > 0:
+                                rec["pct_above_50dma"] = round((this_close - ma50) / ma50 * 100, 1)
                         if len(closes) >= 120:
                             ma200 = float(closes.iloc[-200:].mean()) if len(closes) >= 200 else float(closes.mean())
                             rec["above_200dma"] = bool(this_close > ma200)
+                            if ma200 > 0:
+                                rec["pct_above_200dma"] = round((this_close - ma200) / ma200 * 100, 1)
+                        # Volume expansion: are buyers actually showing up lately?
+                        try:
+                            if len(volumes) >= 60:
+                                recent_v = float(volumes.iloc[-10:].mean())
+                                base_v = float(volumes.iloc[-60:].mean())
+                                if base_v > 0:
+                                    rec["vol_ratio"] = round(recent_v / base_v, 2)
+                        except Exception:
+                            pass
                         # Steadiness: weekly returns over the window. A quiet
                         # base-builder has many positive weeks and is NOT driven
                         # by a single explosive week (that's a spike/pump).
@@ -501,6 +518,140 @@ def _rising_star_score(d, spy_6mo):
 
     total = round(min(100, max(0, sum(parts.values()))), 1)
     return total, parts
+
+
+def _entry_zone_score(d, spy_6mo):
+    """Score a stock on how good the ENTRY looks right now — not how good the
+    company is. Built directly from what our own 109 forward-tested picks
+    measured: buying after a +20-50% week compounded +52.9%, while +80-150%
+    compounded -89.5%. Extension and steadiness beat excitement."""
+    parts = {}
+
+    # Relative strength vs the market (0-30). Real leadership, not noise.
+    rs6 = (d.get("ret_6mo") or 0) - spy_6mo
+    parts["rel_strength"] = round(min(30, max(0, rs6 / 4)), 1)
+
+    # Extension (0-30) — THE decisive one. The sweet spot is trending but not
+    # stretched: roughly 5-20% above the 50-day average. Being far above it is
+    # exactly the state our losing picks were in when we bought them.
+    ext = d.get("pct_above_50dma")
+    if ext is None:
+        parts["entry_position"] = 0
+    elif ext < 0:      parts["entry_position"] = 5     # below the average: not confirmed
+    elif ext <= 20:    parts["entry_position"] = 30    # the zone
+    elif ext <= 30:    parts["entry_position"] = 22
+    elif ext <= 45:    parts["entry_position"] = 10
+    else:              parts["entry_position"] = 0     # late
+    # Steadiness (0-20): many green weeks = accumulation, not a lottery ticket.
+    pw = d.get("positive_weeks_pct") or 0
+    parts["steadiness"] = round(min(20, max(0, (pw - 40) / 2.0)), 1)
+
+    # Smoothness (0-12): penalise a climb carried by one explosive week.
+    mw = d.get("max_week_pct")
+    if mw is None:     parts["smooth_climb"] = 6
+    elif mw <= 20:     parts["smooth_climb"] = 12
+    elif mw <= 35:     parts["smooth_climb"] = 7
+    elif mw <= 50:     parts["smooth_climb"] = 3
+    else:              parts["smooth_climb"] = 0
+
+    # Volume expansion (0-8): buyers arriving beats a quiet drift up.
+    vr = d.get("vol_ratio")
+    if vr is None:     parts["volume"] = 3
+    elif vr >= 1.5:    parts["volume"] = 8
+    elif vr >= 1.15:   parts["volume"] = 6
+    elif vr >= 0.9:    parts["volume"] = 4
+    else:              parts["volume"] = 1
+
+    return round(min(100, sum(parts.values())), 1), parts
+
+
+def compute_entry_zone(price_data, names_dict, target=15):
+    """THE BUY LIST — stocks that are in a confirmed uptrend but have NOT yet
+    gone parabolic, i.e. the only profile our forward-tested data ever made
+    money on. This is the answer to "which stocks do we actually enter?".
+
+    Everything here is arithmetic on price and volume. No AI, no API keys."""
+    spy_3mo, spy_6mo = _spy_baseline()
+    print(f"\nEntry Zone: SPY 6mo baseline {spy_6mo:+.1f}% — hunting confirmed-but-not-extended")
+
+    scored = []
+    rejected = {"no_data": 0, "downtrend": 0, "too_extended": 0, "spiky": 0, "weak_rs": 0, "just_exploded": 0}
+    for d in price_data.values():
+        if d.get("ret_6mo") is None or d.get("pct_above_50dma") is None:
+            rejected["no_data"] += 1; continue
+        # Confirmed uptrend — must be above BOTH averages.
+        if not (d.get("above_50dma") and d.get("above_200dma")):
+            rejected["downtrend"] += 1; continue
+        # Not already stretched. This single line is the lesson of the -89.5%.
+        if d["pct_above_50dma"] > 45:
+            rejected["too_extended"] += 1; continue
+        # Not carried by one explosive week.
+        if (d.get("max_week_pct") or 0) > 55:
+            rejected["spiky"] += 1; continue
+        # Must actually be leading the market.
+        if (d["ret_6mo"] - spy_6mo) < 25:
+            rejected["weak_rs"] += 1; continue
+        # And must not have just detonated this week — that IS the losing bucket.
+        if (d.get("change_pct") or 0) > 55:
+            rejected["just_exploded"] += 1; continue
+
+        score, parts = _entry_zone_score(d, spy_6mo)
+        scored.append((score, parts, d))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    print(f"  passed the profile: {len(scored)}   rejected: {rejected}")
+
+    picks = []
+    for score, parts, d in scored[:150]:
+        if len(picks) >= target:
+            break
+        t = d["ticker"]
+        try:
+            time.sleep(0.4)
+            mc = getattr(yf.Ticker(t).fast_info, "market_cap", None) or 0
+        except Exception:
+            mc = 0
+        if not mc or mc < MIN_MARKET_CAP or mc > RISING_STARS_MAX_MCAP:
+            continue
+
+        sector, name = "", names_dict.get(t, t)
+        try:
+            time.sleep(0.6)
+            info = yf.Ticker(t).info
+            name = info.get("longName") or info.get("shortName") or name
+            sector = info.get("sector") or ""
+        except Exception:
+            pass
+        if len(name) > 60:
+            name = name[:57] + "..."
+
+        ext = d["pct_above_50dma"]
+        picks.append({
+            "ticker": t, "name": name, "sector": sector,
+            "price": d["price"], "market_cap": int(mc),
+            "entry_score": score, "entry_breakdown": parts,
+            "pct_above_50dma": ext,
+            "pct_above_200dma": d.get("pct_above_200dma"),
+            "ret_1mo": d.get("ret_1mo"), "ret_3mo": d.get("ret_3mo"), "ret_6mo": d.get("ret_6mo"),
+            "rs_vs_spy_6mo": round(d["ret_6mo"] - spy_6mo, 1),
+            "positive_weeks_pct": d.get("positive_weeks_pct"),
+            "max_week_pct": d.get("max_week_pct"),
+            "vol_ratio": d.get("vol_ratio"),
+            "this_week_pct": d.get("change_pct"),
+            # Plain-language reason, so the list explains itself without an AI.
+            "why": (
+                f"במגמה מאושרת (מעל ממוצעי 50 ו-200), "
+                f"{ext:+.0f}% מעל ממוצע 50 — {'בתוך אזור הכניסה' if ext <= 20 else 'מעט מתוחה' if ext <= 30 else 'בקצה העליון של הטווח'}. "
+                f"עוקפת את השוק ב-{d['ret_6mo'] - spy_6mo:+.0f}% בחצי שנה, "
+                f"{d.get('positive_weeks_pct', 0)}% שבועות ירוקים, "
+                f"השבוע הגדול ביותר {d.get('max_week_pct', 0)}%."
+            ),
+        })
+        print(f"  [{len(picks)}/{target}] {t}: entry {score} | {ext:+.0f}% vs 50dma | "
+              f"RS {d['ret_6mo']-spy_6mo:+.0f}% | ${mc/1e9:.2f}B")
+
+    print(f"Entry Zone: {len(picks)} stocks in the buy zone")
+    return picks
 
 
 def compute_rising_stars(price_data, names_dict, target=20):
@@ -2823,12 +2974,17 @@ def main():
     print("\nComputing Rising Stars (quiet base-builders, full-market RS)...")
     rising_stars = _safe("rising stars", lambda: compute_rising_stars(price_data, names, target=20))
 
-    # 10. THE VERDICT — the analyst's real written opinion
+    # 10. ENTRY ZONE - the buy list. Pure arithmetic: no AI, no API key, so
+    # this tab keeps working even when the Anthropic balance is empty.
+    print("\nComputing Entry Zone (confirmed uptrend, not yet extended)...")
+    entry_zone = _safe("entry zone", lambda: compute_entry_zone(price_data, names, target=15))
+
+    # 11. THE VERDICT - the analyst's real written opinion
     print("\nGenerating The Verdict (AI analyst's real opinion)...")
     verdict = _safe("verdict", lambda: generate_ai_verdict(top_picks, trend, radar, rising_stars))
 
     # Save trend + radar + rising_stars + verdict into the just-saved row
-    if trend or radar or rising_stars or verdict:
+    if trend or radar or rising_stars or verdict or entry_zone:
         try:
             r = supabase.table("weekly_scans").select("stocks_json").eq("week_label", week_label).execute()
             if r.data:
@@ -2836,9 +2992,10 @@ def main():
                 if trend: pl["trend"] = trend
                 if radar: pl["radar"] = radar
                 if rising_stars: pl["rising_stars"] = rising_stars
+                if entry_zone: pl["entry_zone"] = entry_zone
                 if verdict: pl["verdict"] = verdict
                 supabase.table("weekly_scans").update({"stocks_json": safe_json(pl)}).eq("week_label", week_label).execute()
-                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}, verdict={'yes' if verdict else 'no'}.")
+                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}, entry_zone={len(entry_zone or [])}, verdict={'yes' if verdict else 'no'}.")
         except Exception as e:
             print(f"  Save error: {e}")
 
