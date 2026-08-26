@@ -223,10 +223,11 @@ export async function getServerSideProps() {
         _radar: parsed.radar || null,
         _rising: parsed.rising_stars || null,
         _entry: parsed.entry_zone || null,
+        _themes: parsed.themes || null,
         _verdict: parsed.verdict || null,
       }
     } catch {
-      return { week_label: scan.week_label, created_at: scan.created_at, stocks: [], bonus: [], backtest: null, _trend: null, _radar: null, _rising: null, _entry: null, _verdict: null }
+      return { week_label: scan.week_label, created_at: scan.created_at, stocks: [], bonus: [], backtest: null, _trend: null, _radar: null, _rising: null, _entry: null, _themes: null, _verdict: null }
     }
   })
 
@@ -389,6 +390,7 @@ export async function getServerSideProps() {
   const radar = (unique.find(s => s._radar)?._radar) || null
   const risingStars = (unique.find(s => s._rising)?._rising) || null
   const entryZone = (unique.find(s => s._entry)?._entry) || null
+  const themes = (unique.find(s => s._themes)?._themes) || null
   const verdict = (unique.find(s => s._verdict)?._verdict) || null
 
   // Ship LEAN scans — only what the client renders (week, date, stocks, bonus).
@@ -396,10 +398,10 @@ export async function getServerSideProps() {
   // scalable as scans accumulate week after week.
   const scansLean = unique.map(s => ({ week_label: s.week_label, created_at: s.created_at, stocks: s.stocks, bonus: s.bonus }))
 
-  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, verdict, dbError } }
+  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, themes, verdict, dbError } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, verdict, dbError }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, themes, verdict, dbError }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
   const [tab, setTab] = useState('weekly')
@@ -600,6 +602,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[
             ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
+            ['themes',    `🧭 ${lang === 'he' ? 'תמות' : 'Themes'}`],
             ['entry',     `🎯 ${lang === 'he' ? 'אזור כניסה' : 'Entry Zone'}`],
             ['stars',     `⭐ ${lang === 'he' ? 'כוכבים עולים' : 'Rising Stars'}`],
             ['radar',     `🎯 ${lang === 'he' ? 'ראדאר' : 'Radar'}`],
@@ -640,6 +643,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
         {tab === 'portfolio' && (
           <PortfolioWatch journal={journal} weeklyHistoryByTicker={weeklyHistoryByTicker} c={c} dark={dark} lang={lang} />
+        )}
+
+        {tab === 'themes' && (
+          <Themes themes={themes} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'entry' && (
@@ -3281,6 +3288,146 @@ function _formatMcapShort(n) {
   if (n >= 1e9)  return `$${(n / 1e9).toFixed(2)}B`
   if (n >= 1e6)  return `$${(n / 1e6).toFixed(0)}M`
   return `$${n}`
+}
+
+// ===================== THEMES — WHAT IS THE MARKET BUYING? =====================
+// A stock does not run hundreds of percent for no reason. SanDisk ran because AI
+// created a memory shortage — and that shortage lifted the whole memory industry,
+// not one ticker. A thesis appears in several companies' prices at once, long
+// before it appears in the news. Every other tab looks at one stock at a time and
+// is therefore blind to exactly that. This one is the answer to "why".
+
+function Themes({ themes, c, dark, lang }) {
+  const he = lang === 'he'
+  const [open, setOpen] = useState(null)
+
+  if (!themes || themes.length === 0) {
+    return (
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 40, textAlign: 'center' }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>🧭</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
+          {he ? 'התמות ייבנו בסריקה הבאה' : 'Themes are built on the next scan'}
+        </div>
+        <div style={{ fontSize: 13, color: c.muted }}>
+          {he ? 'הרץ "Full Run & Verify" ב-Actions. הסריקה הראשונה בונה את מפת התעשיות ולוקחת קצת יותר זמן.'
+              : 'Run "Full Run & Verify" in Actions. The first scan builds the industry map and takes a little longer.'}
+        </div>
+      </div>
+    )
+  }
+
+  const stageUI = {
+    'מוקדם':  { color: '#097c3e', icon: '🌱', en: 'early' },
+    'בעיצומו': { color: '#b8860b', icon: '🔥', en: 'mid-move' },
+    'מתקדם':  { color: '#c0392b', icon: '🌡️', en: 'late' },
+  }
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#2a1206' : '#4a2410'} 0%, ${dark ? '#4a2410' : '#6b3a1a'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 32 }}>🧭</span>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+              {he ? 'תמות — מה השוק באמת קונה' : 'Themes — What the market is buying'}
+            </div>
+            <div style={{ fontSize: 13, color: '#e0c4a8', marginTop: 4 }}>
+              {he
+                ? 'מניה לא עולה מאות אחוזים בלי סיבה. כשהרבה חברות מאותה תעשייה מובילות את השוק יחד — שם קורה משהו אמיתי. זה האות שמופיע במחיר לפני שהוא מופיע בחדשות.'
+                : 'A stock does not run hundreds of percent for no reason. When many companies in one industry lead the market together, something real is happening. This is the signal that shows up in price before the news.'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
+        {themes.map((t, i) => {
+          const st = stageUI[t.stage] || stageUI['בעיצומו']
+          const isOpen = open === t.industry
+          return (
+            <div key={t.industry}>
+              <div onClick={() => setOpen(isOpen ? null : t.industry)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 14, padding: '16px 22px',
+                  borderBottom: `1px solid ${c.border}`, cursor: 'pointer',
+                  background: i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa'),
+                }}>
+                <div style={{ width: 32, textAlign: 'center', fontSize: 14, fontWeight: 800, color: c.muted }}>#{i + 1}</div>
+
+                <div style={{ flex: 1, minWidth: 170 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: c.text }}>{t.industry}</div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>{t.sector}</div>
+                </div>
+
+                <div style={{ width: 96, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: c.text }}>{t.member_count}</div>
+                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'מובילות' : 'leaders'}</div>
+                </div>
+
+                <div style={{ width: 104, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#097c3e' }}>+{t.median_rs_vs_spy}%</div>
+                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'חציון מול השוק' : 'median vs market'}</div>
+                </div>
+
+                <div style={{ width: 100, textAlign: 'center', flexShrink: 0 }}>
+                  <span style={{
+                    fontSize: 10.5, fontWeight: 800, padding: '3px 10px', borderRadius: 12,
+                    border: `1px solid ${st.color}`, color: st.color,
+                  }}>{st.icon} {he ? t.stage : st.en}</span>
+                  <div style={{ fontSize: 9, color: c.muted, marginTop: 4 }}>
+                    {t.buyable_now} {he ? 'בכניסה טובה' : 'at good entry'}
+                  </div>
+                </div>
+
+                <span style={{ fontSize: 13, color: c.muted }}>{isOpen ? '▲' : '▼'}</span>
+              </div>
+
+              {isOpen && (
+                <div style={{ background: dark ? '#1a1206' : '#fffaf3', padding: '18px 26px', borderBottom: `1px solid ${c.border}` }}>
+                  <div style={{ fontSize: 12.5, color: c.text, lineHeight: 1.7, marginBottom: 14 }}>
+                    {he
+                      ? `${t.member_count} חברות מהתעשייה הזו נמצאות בין המובילות בשוק, עם חוזק חציוני של +${t.median_rs_vs_spy}% מול השוק בחצי שנה. החציון נמצא ${t.median_pct_above_50dma}% מעל ממוצע 50 — ${t.stage === 'מוקדם' ? 'כלומר התזה עדיין בתחילתה ויש מקום להיכנס' : t.stage === 'בעיצומו' ? 'כלומר המהלך בעיצומו — עוד לא מאוחר, אבל כבר לא זול' : 'כלומר המהלך כבר מתקדם, וחלק גדול ממנו מאחורינו'}.`
+                      : `${t.member_count} companies from this industry are among the market's leaders, median strength +${t.median_rs_vs_spy}% vs the market over six months. The median sits ${t.median_pct_above_50dma}% above its 50-day average.`}
+                  </div>
+
+                  <div style={{ fontSize: 10.5, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 9 }}>
+                    {he ? 'החברות בתמה' : 'members'}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(215px,1fr))', gap: 8 }}>
+                    {(t.members || []).map(m => (
+                      <div key={m.ticker} style={{
+                        background: c.card, border: `1px solid ${m.at_good_entry ? '#097c3e' : c.border}`,
+                        borderRadius: 8, padding: '10px 13px',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                          <span style={{ fontSize: 14, fontWeight: 800, color: c.text }}>{m.ticker}</span>
+                          {m.at_good_entry && (
+                            <span style={{ fontSize: 9, fontWeight: 800, color: '#097c3e', border: '1px solid #097c3e', borderRadius: 8, padding: '1px 6px' }}>
+                              {he ? 'כניסה טובה' : 'good entry'}
+                            </span>
+                          )}
+                          <span style={{ marginInlineStart: 'auto', fontSize: 12, fontWeight: 700, color: '#097c3e' }}>+{m.rs_vs_spy_6mo}%</span>
+                        </div>
+                        <div style={{ fontSize: 10.5, color: c.muted, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {m.name}
+                        </div>
+                        <div style={{ fontSize: 10.5, color: c.muted, marginTop: 4 }}>
+                          ${m.price} · {he ? 'מעל ממוצע 50' : 'vs 50dma'} {m.pct_above_50dma > 0 ? '+' : ''}{m.pct_above_50dma}%
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 // ===================== ENTRY ZONE — THE BUY LIST =====================

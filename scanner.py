@@ -696,6 +696,126 @@ def _entry_reason(d, parts, ext, rs, scan_appearances):
     return txt
 
 
+def _load_industry_cache():
+    """Carry the ticker->industry map forward between scans.
+
+    Looking an industry up costs a yfinance .info call, so doing it for hundreds
+    of tickers every week would be unaffordable. The map is stored inside the
+    scan payload itself, which means no extra table and no setup: each run reads
+    the newest map, fills in only what is missing, and saves the union."""
+    try:
+        r = supabase.table("weekly_scans").select("stocks_json").order("created_at", desc=True).limit(6).execute()
+        for row in (r.data or []):
+            try:
+                pl = json.loads(row["stocks_json"])
+                m = pl.get("industry_map")
+                if m:
+                    print(f"  industry cache: {len(m)} tickers carried forward")
+                    return dict(m)
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"  industry cache unavailable: {e}")
+    return {}
+
+
+def compute_themes(price_data, names_dict, pool=300, lookup_budget=180):
+    """WHAT IS THE MARKET ACTUALLY BUYING?
+
+    A stock does not go up hundreds of percent for no reason. SanDisk ran because
+    AI created a memory shortage — and that shortage lifted the whole memory
+    industry, not one ticker. A thesis shows up in the price of SEVERAL companies
+    at once, well before it shows up in the news.
+
+    Every other screen in this system looks at one stock at a time, which makes it
+    structurally blind to exactly that signal. This one groups the market's
+    strongest names by industry: when many companies in one industry lead the
+    market together, something real is happening there.
+
+    The output is deliberately two-sided — how strong the theme is, AND how many
+    of its members are still at a sane entry. A theme where everything has already
+    gone parabolic is a theme we found too late."""
+    spy_3mo, spy_6mo = _spy_baseline()
+
+    ranked = sorted(
+        (d for d in price_data.values() if d.get("ret_6mo") is not None),
+        key=lambda d: d["ret_6mo"], reverse=True,
+    )[:pool]
+    if not ranked:
+        print("Themes: no ranked universe")
+        return []
+    print(f"\nThemes: grouping the top {len(ranked)} names in the market by industry")
+
+    cache = _load_industry_cache()
+    missing = [d["ticker"] for d in ranked if d["ticker"] not in cache]
+    print(f"  {len(missing)} of them need an industry lookup (budget {lookup_budget})")
+    for t in missing[:lookup_budget]:
+        try:
+            time.sleep(0.45)
+            info = yf.Ticker(t).info
+            cache[t] = [info.get("industry") or "", info.get("sector") or ""]
+        except Exception:
+            cache[t] = ["", ""]
+
+    groups = {}
+    for d in ranked:
+        ind, sec = (cache.get(d["ticker"]) or ["", ""])[:2]
+        if not ind:
+            continue
+        groups.setdefault(ind, {"industry": ind, "sector": sec, "members": []})["members"].append(d)
+
+    themes = []
+    for ind, g in groups.items():
+        mem = g["members"]
+        if len(mem) < 3:            # one or two names is a story, not a theme
+            continue
+        rs = sorted(d["ret_6mo"] - spy_6mo for d in mem)
+        median_rs = rs[len(rs) // 2]
+        exts = [d.get("pct_above_50dma") for d in mem if d.get("pct_above_50dma") is not None]
+        median_ext = sorted(exts)[len(exts) // 2] if exts else None
+        # Members still buyable: leading, confirmed, and not yet stretched.
+        early = [d for d in mem
+                 if d.get("above_50dma") and d.get("above_200dma")
+                 and (d.get("pct_above_50dma") or 99) <= 30]
+
+        # Breadth x strength. Ten names up 40% is a sector move; three up 400% is
+        # three lucky tickers. Both matter, so neither is allowed to dominate.
+        heat = round(min(100, (len(mem) ** 0.7) * 6 + min(40, median_rs / 6)), 1)
+
+        themes.append({
+            "industry": ind,
+            "sector": g["sector"],
+            "member_count": len(mem),
+            "heat": heat,
+            "median_rs_vs_spy": round(median_rs, 1),
+            "median_pct_above_50dma": round(median_ext, 1) if median_ext is not None else None,
+            "stage": ("מוקדם" if median_ext is not None and median_ext <= 25
+                      else "בעיצומו" if median_ext is not None and median_ext <= 55
+                      else "מתקדם"),
+            "buyable_now": len(early),
+            "members": [{
+                "ticker": d["ticker"],
+                "name": (names_dict.get(d["ticker"]) or d["ticker"])[:44],
+                "rs_vs_spy_6mo": round(d["ret_6mo"] - spy_6mo, 1),
+                "ret_6mo": d.get("ret_6mo"),
+                "pct_above_50dma": d.get("pct_above_50dma"),
+                "price": d.get("price"),
+                "at_good_entry": bool(d.get("above_50dma") and d.get("above_200dma")
+                                      and (d.get("pct_above_50dma") or 99) <= 30),
+            } for d in sorted(mem, key=lambda x: -(x["ret_6mo"]))[:12]],
+        })
+
+    themes.sort(key=lambda t: -t["heat"])
+    themes = themes[:10]
+    if themes:
+        print("  Hottest industries right now:")
+        for t in themes:
+            print(f"    {t['industry'][:38]:40} {t['member_count']:>3} leaders | "
+                  f"median RS {t['median_rs_vs_spy']:+7.0f}% | {t['stage']} | "
+                  f"{t['buyable_now']} still at a good entry")
+    return themes, cache
+
+
 def compute_entry_zone(price_data, names_dict, target=15):
     """THE BUY LIST — stocks that are in a confirmed uptrend but have NOT yet
     gone parabolic, i.e. the only profile our forward-tested data ever made
@@ -3120,6 +3240,13 @@ def main():
     print("\nComputing Rising Stars (quiet base-builders, full-market RS)...")
     rising_stars = _safe("rising stars", lambda: compute_rising_stars(price_data, names, target=20))
 
+    # 9b. THEMES - what is the market actually buying? Groups the strongest
+    # names in the market by industry, because a thesis shows up in several
+    # companies at once long before it shows up in the news.
+    print("\nComputing Themes (industry clusters among the market leaders)...")
+    _themes = _safe("themes", lambda: compute_themes(price_data, names, pool=300))
+    themes, industry_map = (_themes if _themes else ([], {}))
+
     # 10. ENTRY ZONE - the buy list. Pure arithmetic: no AI, no API key, so
     # this tab keeps working even when the Anthropic balance is empty.
     print("\nComputing Entry Zone (confirmed uptrend, not yet extended)...")
@@ -3130,7 +3257,7 @@ def main():
     verdict = _safe("verdict", lambda: generate_ai_verdict(top_picks, trend, radar, rising_stars))
 
     # Save trend + radar + rising_stars + verdict into the just-saved row
-    if trend or radar or rising_stars or verdict or entry_zone:
+    if trend or radar or rising_stars or verdict or entry_zone or themes:
         try:
             r = supabase.table("weekly_scans").select("stocks_json").eq("week_label", week_label).execute()
             if r.data:
@@ -3139,9 +3266,11 @@ def main():
                 if radar: pl["radar"] = radar
                 if rising_stars: pl["rising_stars"] = rising_stars
                 if entry_zone: pl["entry_zone"] = entry_zone
+                if themes: pl["themes"] = themes
+                if industry_map: pl["industry_map"] = industry_map
                 if verdict: pl["verdict"] = verdict
                 supabase.table("weekly_scans").update({"stocks_json": safe_json(pl)}).eq("week_label", week_label).execute()
-                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}, entry_zone={len(entry_zone or [])}, verdict={'yes' if verdict else 'no'}.")
+                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}, entry_zone={len(entry_zone or [])}, themes={len(themes or [])}, verdict={'yes' if verdict else 'no'}.")
         except Exception as e:
             print(f"  Save error: {e}")
 
