@@ -635,6 +635,67 @@ def _trade_plan(d):
     }
 
 
+def _entry_reason(d, parts, ext, rs, scan_appearances):
+    """Say what actually got THIS stock onto the list.
+
+    The first version printed the same sentence for every row with the numbers
+    swapped, which told the reader nothing about why one name beat another. This
+    leads with the trait that scored highest, then adds the flags that genuinely
+    distinguish a candidate — and states the reservations too, because a list
+    that only ever flatters its own picks is not worth reading."""
+    strengths, cautions = [], []
+
+    if ext <= 12:
+        strengths.append(f"צמודה לממוצע 50 ({ext:+.0f}%) — הכניסה כאן זולה יחסית והסטופ קצר")
+    elif ext <= 20:
+        strengths.append(f"{ext:+.0f}% מעל ממוצע 50 — עדיין בתוך אזור הכניסה")
+    elif ext <= 30:
+        cautions.append(f"{ext:+.0f}% מעל ממוצע 50 — כבר מעט מתוחה, הסטופ יוצא רחוק יותר")
+    else:
+        cautions.append(f"{ext:+.0f}% מעל ממוצע 50 — בקצה העליון של מה שהמסננת מרשה")
+
+    if rs >= 150:
+        strengths.append(f"מובילה את השוק ב-{rs:+.0f}% בחצי שנה — מהחזקות בכל השוק")
+    elif rs >= 80:
+        strengths.append(f"עוקפת את השוק ב-{rs:+.0f}% בחצי שנה")
+    else:
+        strengths.append(f"מקדימה את השוק ב-{rs:+.0f}% בחצי שנה — מובילה, אך לא מהבולטות")
+
+    pw = d.get("positive_weeks_pct") or 0
+    if pw >= 70:
+        strengths.append(f"{pw}% מהשבועות ירוקים — טיפוס יוצא דופן בעקביותו")
+    elif pw >= 60:
+        strengths.append(f"{pw}% מהשבועות ירוקים")
+    else:
+        cautions.append(f"רק {pw}% מהשבועות ירוקים — הדרך למעלה מקוטעת")
+
+    mw = d.get("max_week_pct")
+    if mw is not None:
+        if mw <= 20:
+            strengths.append(f"השבוע הגדול ביותר {mw}% — עלתה בלי אף קפיצה חדה, כלומר צבירה ולא פאמפ")
+        elif mw <= 35:
+            strengths.append(f"השבוע הגדול ביותר {mw}% — בלי קפיצות קיצוניות")
+        else:
+            cautions.append(f"היה לה שבוע של {mw}% — חלק מהעלייה מגיע מקפיצה, לא מטיפוס")
+
+    vr = d.get("vol_ratio")
+    if vr and vr >= 1.4:
+        strengths.append(f"המחזור פי {vr} מהרגיל — קונים נכנסים, לא רק היעדר מוכרים")
+    elif vr and vr < 0.85:
+        cautions.append(f"המחזור רק פי {vr} מהרגיל — הטיפוס קורה בלי אישור של נפח")
+
+    if scan_appearances == 0:
+        strengths.append("מעולם לא הופיעה ברשימת המזנקות השבועיות שלנו — בדיוק סוג המטפסת השקטה שהמערכת נבנתה לתפוס")
+
+    if d.get("pct_above_200dma") is None:
+        cautions.append("אין לה ממוצע 200 יום — נסחרת פחות משנה ולא נבחנה במחזור שוק שלם")
+
+    txt = "**למה היא ברשימה:** " + "; ".join(strengths) + "."
+    if cautions:
+        txt += " **לשים לב:** " + "; ".join(cautions) + "."
+    return txt
+
+
 def compute_entry_zone(price_data, names_dict, target=15):
     """THE BUY LIST — stocks that are in a confirmed uptrend but have NOT yet
     gone parabolic, i.e. the only profile our forward-tested data ever made
@@ -643,6 +704,25 @@ def compute_entry_zone(price_data, names_dict, target=15):
     Everything here is arithmetic on price and volume. No AI, no API keys."""
     spy_3mo, spy_6mo = _spy_baseline()
     print(f"\nEntry Zone: SPY 6mo baseline {spy_6mo:+.1f}% — hunting confirmed-but-not-extended")
+
+
+    # How often has each name already shown up in our weekly top-40? A candidate
+    # that has NEVER been there is the quiet climber this screen exists to find,
+    # and that is worth saying in its reason.
+    ticker_scans = {}
+    try:
+        r = supabase.table("weekly_scans").select("week_label,stocks_json").order("created_at", desc=True).limit(30).execute()
+        for row in (r.data or []):
+            try:
+                pl = json.loads(row["stocks_json"])
+                for st in (pl.get("stocks") or []):
+                    tk = st.get("ticker")
+                    if tk:
+                        ticker_scans.setdefault(tk, []).append(row["week_label"])
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"  (scan-history lookup failed: {e})")
 
     scored = []
     rejected = {"no_data": 0, "downtrend": 0, "too_extended": 0, "spiky": 0, "weak_rs": 0, "just_exploded": 0}
@@ -710,13 +790,8 @@ def compute_entry_zone(price_data, names_dict, target=15):
             "this_week_pct": d.get("change_pct"),
             "plan": _trade_plan(d),
             # Plain-language reason, so the list explains itself without an AI.
-            "why": (
-                f"במגמה מאושרת (מעל ממוצעי 50 ו-200), "
-                f"{ext:+.0f}% מעל ממוצע 50 — {'בתוך אזור הכניסה' if ext <= 20 else 'מעט מתוחה' if ext <= 30 else 'בקצה העליון של הטווח'}. "
-                f"עוקפת את השוק ב-{d['ret_6mo'] - spy_6mo:+.0f}% בחצי שנה, "
-                f"{d.get('positive_weeks_pct', 0)}% שבועות ירוקים, "
-                f"השבוע הגדול ביותר {d.get('max_week_pct', 0)}%."
-            ),
+            "why": _entry_reason(d, parts, ext, d["ret_6mo"] - spy_6mo,
+                                 len(ticker_scans.get(t, []))),
         })
         print(f"  [{len(picks)}/{target}] {t}: entry {score} | {ext:+.0f}% vs 50dma | "
               f"RS {d['ret_6mo']-spy_6mo:+.0f}% | ${mc/1e9:.2f}B")
