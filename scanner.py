@@ -318,6 +318,21 @@ def fetch_weekly_changes(tickers, reference_date=None):
                             rec["above_200dma"] = bool(this_close > ma200)
                             if ma200 > 0:
                                 rec["pct_above_200dma"] = round((this_close - ma200) / ma200 * 100, 1)
+                        # ATR(14) — how much this stock moves on a normal day. A
+                        # stop has to sit outside the noise or it gets hit by the
+                        # noise; without this every stop level is a guess.
+                        try:
+                            if all(k in ticker_df.columns for k in ("High", "Low")) and len(closes) >= 20:
+                                hi = ticker_df["High"].reindex(closes.index)
+                                lo = ticker_df["Low"].reindex(closes.index)
+                                prev_c = closes.shift(1)
+                                tr = pd.concat([hi - lo, (hi - prev_c).abs(), (lo - prev_c).abs()], axis=1).max(axis=1)
+                                atr = float(tr.tail(14).mean())
+                                if atr > 0 and this_close > 0:
+                                    rec["atr14"] = round(atr, 3)
+                                    rec["atr_pct"] = round(atr / this_close * 100, 2)
+                        except Exception:
+                            pass
                         # Volume expansion: are buyers actually showing up lately?
                         try:
                             if len(volumes) >= 60:
@@ -565,6 +580,56 @@ def _entry_zone_score(d, spy_6mo):
     return round(min(100, sum(parts.values())), 1), parts
 
 
+def _trade_plan(d):
+    """Mechanical risk levels for a candidate — the part that was missing.
+
+    Knowing WHAT looks good is half a decision; the other half is knowing where
+    you are wrong and what you would do about it. These are arithmetic outputs of
+    a stated rule, not a recommendation:
+
+      invalidation : the 50-day average. The entire reason this stock is on the
+                     list is that it is trending above it, so a close below it
+                     ends the thesis by definition.
+      stop         : the tighter of 2xATR below price and 3% below the 50-day
+                     average. Two ATRs is the classic "outside the daily noise"
+                     distance; a stop inside the noise gets hit by the noise.
+      targets      : 2R and 4R, where R is the distance from entry to stop.
+      size         : what fraction of a portfolio a 1% risk budget implies. The
+                     user picks the risk budget; this only does the division.
+    """
+    price = d.get("price")
+    atr = d.get("atr14")
+    ext = d.get("pct_above_50dma")
+    if not price or not atr or ext is None:
+        return None
+    ma50 = price / (1 + ext / 100) if ext != -100 else None
+    if not ma50 or ma50 <= 0:
+        return None
+
+    stop_atr = price - 2 * atr
+    stop_ma = ma50 * 0.97
+    stop = max(stop_atr, stop_ma)          # the tighter (higher) of the two
+    if stop <= 0 or stop >= price:
+        return None
+
+    r = price - stop
+    stop_pct = round((stop - price) / price * 100, 1)
+    return {
+        "invalidation_price": round(ma50, 2),
+        "stop_price": round(stop, 2),
+        "stop_pct": stop_pct,
+        "stop_basis": "2xATR" if stop_atr >= stop_ma else "below the 50-day average",
+        "atr_pct": d.get("atr_pct"),
+        "target_1": round(price + 2 * r, 2),
+        "target_2": round(price + 4 * r, 2),
+        "target_1_pct": round(2 * r / price * 100, 1),
+        "target_2_pct": round(4 * r / price * 100, 1),
+        # A 1% risk budget divided by the stop distance. Wide stop -> small position.
+        "position_pct_at_1pct_risk": round(1.0 / abs(stop_pct) * 100, 1),
+        "pullback_entry": round(ma50 * 1.02, 2),
+    }
+
+
 def compute_entry_zone(price_data, names_dict, target=15):
     """THE BUY LIST — stocks that are in a confirmed uptrend but have NOT yet
     gone parabolic, i.e. the only profile our forward-tested data ever made
@@ -638,6 +703,7 @@ def compute_entry_zone(price_data, names_dict, target=15):
             "max_week_pct": d.get("max_week_pct"),
             "vol_ratio": d.get("vol_ratio"),
             "this_week_pct": d.get("change_pct"),
+            "plan": _trade_plan(d),
             # Plain-language reason, so the list explains itself without an AI.
             "why": (
                 f"במגמה מאושרת (מעל ממוצעי 50 ו-200), "

@@ -3401,6 +3401,56 @@ function EntryZone({ entryZone, c, dark, lang }) {
                     {s.vol_ratio && <span>{he ? 'מחזור' : 'volume'} <b style={{ color: c.text }}>×{s.vol_ratio}</b></span>}
                     {s.sector && <span>{s.sector}</span>}
                   </div>
+                  {/* The trade plan. Knowing what looks good is half a decision;
+                      the other half is knowing where you are wrong beforehand. */}
+                  {s.plan && (
+                    <div style={{
+                      marginTop: 16, padding: '14px 16px', borderRadius: 10,
+                      background: dark ? '#101c2c' : '#f2f6fb', border: `1px solid ${c.border}`,
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: c.text, marginBottom: 10 }}>
+                        📐 {he ? 'מסגרת סיכון — רמות מחושבות' : 'Risk framework — computed levels'}
+                      </div>
+                      <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'סטופ' : 'stop'}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: '#c0392b' }}>${s.plan.stop_price}</div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{s.plan.stop_pct}%</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'יעד 1 (2R)' : 'target 1 (2R)'}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: '#097c3e' }}>${s.plan.target_1}</div>
+                          <div style={{ fontSize: 10, color: c.muted }}>+{s.plan.target_1_pct}%</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'יעד 2 (4R)' : 'target 2 (4R)'}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: '#097c3e' }}>${s.plan.target_2}</div>
+                          <div style={{ fontSize: 10, color: c.muted }}>+{s.plan.target_2_pct}%</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'התזה נשברת מתחת ל' : 'thesis breaks below'}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>${s.plan.invalidation_price}</div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'ממוצע 50 יום' : '50-day average'}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'כניסה בפולבק' : 'pullback entry'}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>${s.plan.pullback_entry}</div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'ליד הממוצע' : 'near the average'}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'תנודתיות יומית' : 'daily volatility'}</div>
+                          <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{s.plan.atr_pct}%</div>
+                          <div style={{ fontSize: 10, color: c.muted }}>ATR</div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 11, color: c.muted, marginTop: 12, lineHeight: 1.6, borderTop: `1px solid ${c.border}`, paddingTop: 10 }}>
+                        {he
+                          ? `הסטופ מחושב לפי ${s.plan.stop_basis === '2xATR' ? 'פעמיים ATR מתחת למחיר' : '3% מתחת לממוצע 50'} — מחוץ לרעש היומי. אם מסכנים 1% מהתיק בעסקה, מרחק הסטופ הזה מתאים לפוזיציה של כ-${s.plan.position_pct_at_1pct_risk}% מהתיק. הרמות מחושבות מהמחיר והתנודתיות — לא המלצה.`
+                          : `Stop set ${s.plan.stop_basis} — outside the daily noise. Risking 1% of a portfolio on this trade, that stop distance implies a position of about ${s.plan.position_pct_at_1pct_risk}% of the portfolio. Computed levels, not a recommendation.`}
+                      </div>
+                    </div>
+                  )}
+
                   {s.entry_breakdown && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
                       {Object.entries(s.entry_breakdown).map(([k, v]) => (
