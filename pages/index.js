@@ -3289,6 +3289,126 @@ function _formatMcapShort(n) {
 // Built straight from what our 109 forward-tested picks measured: a confirmed
 // uptrend that has NOT yet stretched away from its 50-day average.
 
+// The expanded row. The first version dumped every number into one flat strip
+// with no order and no chart, while every other tab in the system opens into a
+// proper deep-dive. This gives it the same treatment: the trend first (these
+// stocks have no scan history to draw from, so the weekly path is fetched live),
+// then the risk levels, then the identity card and the live chart.
+function EntryZoneDetail({ stock: s, c, dark, lang }) {
+  const he = lang === 'he'
+  const [weekly, setWeekly] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/price-history?weeks=13&ticker=' + encodeURIComponent(s.ticker))
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setWeekly(d?.weekly || []) })
+      .catch(() => { if (!cancelled) setWeekly([]) })
+    return () => { cancelled = true }
+  }, [s.ticker])
+
+  const ext = s.pct_above_50dma
+  const zone = ext <= 20
+    ? { t: he ? 'בתוך אזור הכניסה' : 'in the entry zone', color: '#097c3e' }
+    : ext <= 30
+      ? { t: he ? 'מעט מתוחה' : 'slightly extended', color: '#b8860b' }
+      : { t: he ? 'בקצה העליון של הטווח' : 'at the upper edge', color: '#c0662b' }
+
+  const Section = ({ title, children }) => (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{
+        fontSize: 11, color: c.muted, textTransform: 'uppercase',
+        fontWeight: 700, letterSpacing: '.06em', marginBottom: 9,
+      }}>{title}</div>
+      {children}
+    </div>
+  )
+
+  const Stat = ({ label, value, tone }) => (
+    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ fontSize: 10, color: c.muted, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 800, color: tone || c.text, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+    </div>
+  )
+
+  const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(112px,1fr))', gap: 8 }
+
+  return (
+    <div style={{ background: dark ? '#0a1a12' : '#f4faf6', padding: '20px 24px', borderBottom: `1px solid ${c.border}` }}>
+
+      {/* Why it is on the list at all */}
+      <div style={{
+        background: c.card, border: `1px solid ${c.border}`, borderInlineStart: `3px solid ${zone.color}`,
+        borderRadius: 8, padding: '13px 16px', marginBottom: 18,
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: zone.color, marginBottom: 5 }}>{zone.t}</div>
+        <div style={{ fontSize: 13.5, color: c.text, lineHeight: 1.7 }}>{s.why}</div>
+      </div>
+
+      {/* 1 — the trend, which was missing entirely */}
+      <Section title={`📈 ${he ? 'המגמה — 13 שבועות אחרונים' : 'The trend — last 13 weeks'}`}>
+        {weekly === null ? (
+          <div style={{ fontSize: 12, color: c.muted, padding: '14px 0' }}>{he ? 'טוען מגמה…' : 'loading trend…'}</div>
+        ) : weekly.length === 0 ? (
+          <div style={{ fontSize: 12, color: c.muted, padding: '14px 0' }}>{he ? 'אין נתוני מגמה זמינים' : 'no trend data available'}</div>
+        ) : (
+          <WeeklyBars history={weekly} c={c} dark={dark} he={he} />
+        )}
+        <div style={{ ...grid, marginTop: 4 }}>
+          <Stat label={he ? 'מעל ממוצע 50' : 'above 50dma'} value={`${ext > 0 ? '+' : ''}${ext}%`} tone={zone.color} />
+          <Stat label={he ? 'מעל ממוצע 200' : 'above 200dma'} value={s.pct_above_200dma != null ? `${s.pct_above_200dma > 0 ? '+' : ''}${s.pct_above_200dma}%` : '—'} />
+          <Stat label={he ? 'מול השוק (6ח׳)' : 'vs market (6mo)'} value={`+${s.rs_vs_spy_6mo}%`} tone="#097c3e" />
+          <Stat label={he ? 'שבועות ירוקים' : 'green weeks'} value={`${s.positive_weeks_pct}%`} />
+          <Stat label={he ? 'השבוע הגדול ביותר' : 'biggest week'} value={`${s.max_week_pct}%`} />
+          <Stat label={he ? 'מחזור מול רגיל' : 'volume vs normal'} value={s.vol_ratio ? `×${s.vol_ratio}` : '—'} />
+        </div>
+      </Section>
+
+      {/* 2 — where you are wrong, decided in advance */}
+      {s.plan && (
+        <Section title={`📐 ${he ? 'מסגרת סיכון' : 'Risk framework'}`}>
+          <div style={grid}>
+            <Stat label={he ? 'סטופ' : 'stop'} value={`$${s.plan.stop_price}`} tone="#c0392b" />
+            <Stat label={he ? 'מרחק לסטופ' : 'to stop'} value={`${s.plan.stop_pct}%`} tone="#c0392b" />
+            <Stat label={he ? 'יעד 1 (2R)' : 'target 1 (2R)'} value={`$${s.plan.target_1}`} tone="#097c3e" />
+            <Stat label={he ? 'יעד 2 (4R)' : 'target 2 (4R)'} value={`$${s.plan.target_2}`} tone="#097c3e" />
+            <Stat label={he ? 'התזה נשברת מתחת ל' : 'thesis breaks below'} value={`$${s.plan.invalidation_price}`} />
+            <Stat label={he ? 'כניסה בפולבק' : 'pullback entry'} value={`$${s.plan.pullback_entry}`} />
+          </div>
+          <div style={{ fontSize: 11.5, color: c.muted, marginTop: 10, lineHeight: 1.7 }}>
+            {he
+              ? `הסטופ נקבע ${s.plan.stop_basis === '2xATR' ? 'פעמיים ATR מתחת למחיר' : '3% מתחת לממוצע 50'} — מחוץ לתנודתיות היומית (${s.plan.atr_pct}% ליום). מי שמסכן 1% מהתיק בעסקה, מרחק הסטופ הזה מתאים לפוזיציה של כ-${s.plan.position_pct_at_1pct_risk}% מהתיק. רמות מחושבות מכלל קבוע — לא המלצה.`
+              : `Stop set ${s.plan.stop_basis} — outside the ${s.plan.atr_pct}%/day noise. Risking 1% of a portfolio implies a position of about ${s.plan.position_pct_at_1pct_risk}% of it. Computed levels from a fixed rule, not a recommendation.`}
+          </div>
+        </Section>
+      )}
+
+      {/* 3 — how the entry score was built */}
+      {s.entry_breakdown && (
+        <Section title={`🧮 ${he ? 'מרכיבי ציון הכניסה' : 'What built the entry score'}`}>
+          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+            {Object.entries(s.entry_breakdown).map(([k, v]) => (
+              <span key={k} style={{
+                fontSize: 11, background: c.card, border: `1px solid ${c.border}`,
+                color: c.muted, padding: '5px 11px', borderRadius: 8,
+              }}>
+                {(he ? {
+                  rel_strength: 'חוזק יחסי', entry_position: 'נקודת כניסה',
+                  steadiness: 'עקביות', smooth_climb: 'טיפוס חלק', volume: 'מחזור',
+                }[k] : k.replace(/_/g, ' ')) || k.replace(/_/g, ' ')}
+                {' '}<b style={{ color: c.text }}>{v}</b>
+              </span>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {/* 4 — the identity card and live chart every other tab already had */}
+      <StockDeepDive ticker={s.ticker} weeklyHistory={weekly || []} c={c} dark={dark} lang={lang} />
+    </div>
+  )
+}
+
 function EntryZone({ entryZone, c, dark, lang }) {
   const he = lang === 'he'
   const [open, setOpen] = useState(null)
@@ -3388,80 +3508,7 @@ function EntryZone({ entryZone, c, dark, lang }) {
                 <span style={{ fontSize: 13, color: c.muted }}>{isOpen ? '▲' : '▼'}</span>
               </div>
 
-              {isOpen && (
-                <div style={{ background: dark ? '#0a1a12' : '#f4faf6', padding: '18px 26px', borderBottom: `1px solid ${c.border}` }}>
-                  <div style={{ fontSize: 13.5, color: c.text, lineHeight: 1.7, marginBottom: 14 }}>{s.why}</div>
-                  <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 12, color: c.muted }}>
-                    <span>{he ? 'מחיר' : 'price'} <b style={{ color: c.text }}>${s.price}</b></span>
-                    <span>{he ? 'שווי' : 'cap'} <b style={{ color: c.text }}>${(s.market_cap / 1e9).toFixed(2)}B</b></span>
-                    <span>{he ? 'חודש' : '1mo'} <b style={{ color: c.text }}>{s.ret_1mo}%</b></span>
-                    <span>{he ? '3 ח׳' : '3mo'} <b style={{ color: c.text }}>{s.ret_3mo}%</b></span>
-                    <span>{he ? '6 ח׳' : '6mo'} <b style={{ color: c.text }}>{s.ret_6mo}%</b></span>
-                    <span>{he ? 'שבוע הכי גדול' : 'biggest week'} <b style={{ color: c.text }}>{s.max_week_pct}%</b></span>
-                    {s.vol_ratio && <span>{he ? 'מחזור' : 'volume'} <b style={{ color: c.text }}>×{s.vol_ratio}</b></span>}
-                    {s.sector && <span>{s.sector}</span>}
-                  </div>
-                  {/* The trade plan. Knowing what looks good is half a decision;
-                      the other half is knowing where you are wrong beforehand. */}
-                  {s.plan && (
-                    <div style={{
-                      marginTop: 16, padding: '14px 16px', borderRadius: 10,
-                      background: dark ? '#101c2c' : '#f2f6fb', border: `1px solid ${c.border}`,
-                    }}>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: c.text, marginBottom: 10 }}>
-                        📐 {he ? 'מסגרת סיכון — רמות מחושבות' : 'Risk framework — computed levels'}
-                      </div>
-                      <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap' }}>
-                        <div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'סטופ' : 'stop'}</div>
-                          <div style={{ fontSize: 15, fontWeight: 800, color: '#c0392b' }}>${s.plan.stop_price}</div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{s.plan.stop_pct}%</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'יעד 1 (2R)' : 'target 1 (2R)'}</div>
-                          <div style={{ fontSize: 15, fontWeight: 800, color: '#097c3e' }}>${s.plan.target_1}</div>
-                          <div style={{ fontSize: 10, color: c.muted }}>+{s.plan.target_1_pct}%</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'יעד 2 (4R)' : 'target 2 (4R)'}</div>
-                          <div style={{ fontSize: 15, fontWeight: 800, color: '#097c3e' }}>${s.plan.target_2}</div>
-                          <div style={{ fontSize: 10, color: c.muted }}>+{s.plan.target_2_pct}%</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'התזה נשברת מתחת ל' : 'thesis breaks below'}</div>
-                          <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>${s.plan.invalidation_price}</div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'ממוצע 50 יום' : '50-day average'}</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'כניסה בפולבק' : 'pullback entry'}</div>
-                          <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>${s.plan.pullback_entry}</div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'ליד הממוצע' : 'near the average'}</div>
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 10, color: c.muted }}>{he ? 'תנודתיות יומית' : 'daily volatility'}</div>
-                          <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{s.plan.atr_pct}%</div>
-                          <div style={{ fontSize: 10, color: c.muted }}>ATR</div>
-                        </div>
-                      </div>
-                      <div style={{ fontSize: 11, color: c.muted, marginTop: 12, lineHeight: 1.6, borderTop: `1px solid ${c.border}`, paddingTop: 10 }}>
-                        {he
-                          ? `הסטופ מחושב לפי ${s.plan.stop_basis === '2xATR' ? 'פעמיים ATR מתחת למחיר' : '3% מתחת לממוצע 50'} — מחוץ לרעש היומי. אם מסכנים 1% מהתיק בעסקה, מרחק הסטופ הזה מתאים לפוזיציה של כ-${s.plan.position_pct_at_1pct_risk}% מהתיק. הרמות מחושבות מהמחיר והתנודתיות — לא המלצה.`
-                          : `Stop set ${s.plan.stop_basis} — outside the daily noise. Risking 1% of a portfolio on this trade, that stop distance implies a position of about ${s.plan.position_pct_at_1pct_risk}% of the portfolio. Computed levels, not a recommendation.`}
-                      </div>
-                    </div>
-                  )}
-
-                  {s.entry_breakdown && (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
-                      {Object.entries(s.entry_breakdown).map(([k, v]) => (
-                        <span key={k} style={{ fontSize: 10, background: c.chipBg, color: c.muted, padding: '3px 9px', borderRadius: 8 }}>
-                          {k.replace(/_/g, ' ')}: <b style={{ color: c.text }}>{v}</b>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+              {isOpen && <EntryZoneDetail stock={s} c={c} dark={dark} lang={lang} />}
             </div>
           )
         })}
