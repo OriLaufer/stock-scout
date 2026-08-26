@@ -609,6 +609,11 @@ def _trade_plan(d):
     stop_atr = price - 2 * atr
     stop_ma = ma50 * 0.97
     stop = max(stop_atr, stop_ma)          # the tighter (higher) of the two
+    # ...but never tighter than one ATR. When a volatile stock sits right on its
+    # 50-day average the moving-average stop lands inside the daily noise: STRZ
+    # came out at -4.4% while it moves 7.3% on an average day, so ordinary
+    # volatility would have taken the position out before the thesis was tested.
+    stop = min(stop, price - atr)
     if stop <= 0 or stop >= price:
         return None
 
