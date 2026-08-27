@@ -2843,6 +2843,7 @@ function FloatingAnalyst({ journal, c, dark, lang }) {
 function RisingStars({ stars, c, dark, lang }) {
   const he = lang === 'he'
   const [openTicker, setOpenTicker] = useState(null)
+  const moveOf = useLiveMoves(stars)
 
   if (!stars || stars.length === 0) {
     return (
@@ -2931,6 +2932,7 @@ function RisingStars({ stars, c, dark, lang }) {
                         🤫 {he ? 'שקט' : 'quiet'}
                       </span>
                     )}
+                    <LiveMove move={moveOf(stock.ticker, stock.price)} c={c} he={he} />
                   </div>
                   <div style={{ fontSize: 11, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 195 }}>{stock.name}</div>
                 </div>
@@ -3290,6 +3292,50 @@ function _formatMcapShort(n) {
   return `$${n}`
 }
 
+// ─────────────── LIVE PRICE OVERLAY ───────────────
+// Every list here renders numbers frozen at the weekly scan. SMJF sat in Rising
+// Stars at 92.8/100 and $11.41 for days after it had collapsed to $1.47. A
+// weekly snapshot shown as if it were current is the most dangerous thing this
+// dashboard can do, so any list that says "buy this" checks the live price and
+// says plainly when the stock has moved away from the scan.
+
+function useLiveMoves(items) {
+  const [live, setLive] = useState(null)
+  const tickers = (items || []).map(x => x.ticker).filter(Boolean)
+  const key = tickers.join(',')
+  useEffect(() => {
+    if (!key) return
+    let cancelled = false
+    fetch('/api/quotes?tickers=' + encodeURIComponent(key))
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setLive(d?.prices || {}) })
+      .catch(() => { if (!cancelled) setLive({}) })
+    return () => { cancelled = true }
+  }, [key])
+
+  // % move since the price the scan recorded. null when we cannot tell — never
+  // guess zero, because "unknown" and "unchanged" must not look the same.
+  return (ticker, scanPrice) => {
+    if (!live || !scanPrice || live[ticker] == null) return null
+    return { now: live[ticker], pct: +(((live[ticker] - scanPrice) / scanPrice) * 100).toFixed(1) }
+  }
+}
+
+function LiveMove({ move, c, he }) {
+  if (!move || Math.abs(move.pct) < 8) return null
+  const bad = move.pct <= -15
+  const warn = move.pct < 0
+  const color = bad ? '#c0392b' : warn ? '#b8860b' : '#097c3e'
+  return (
+    <span title={he ? 'שינוי מאז הסריקה' : 'move since the scan'} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 800,
+      border: `1px solid ${color}`, color, borderRadius: 10, padding: '2px 8px', whiteSpace: 'nowrap',
+    }}>
+      {bad ? '⚠️' : ''} {move.pct > 0 ? '+' : ''}{move.pct}% {he ? 'מאז הסריקה' : 'since scan'} · ${move.now}
+    </span>
+  )
+}
+
 // ===================== THEMES — WHAT IS THE MARKET BUYING? =====================
 // A stock does not run hundreds of percent for no reason. SanDisk ran because AI
 // created a memory shortage — and that shortage lifted the whole memory industry,
@@ -3559,6 +3605,7 @@ function EntryZoneDetail({ stock: s, c, dark, lang }) {
 function EntryZone({ entryZone, c, dark, lang }) {
   const he = lang === 'he'
   const [open, setOpen] = useState(null)
+  const moveOf = useLiveMoves(entryZone)
 
   if (!entryZone || entryZone.length === 0) {
     return (
@@ -3629,6 +3676,7 @@ function EntryZone({ entryZone, c, dark, lang }) {
                     <span style={{ fontSize: 10, fontWeight: 800, color: z.color, border: `1px solid ${z.color}`, borderRadius: 10, padding: '1px 7px' }}>
                       {z.icon} {z.label}
                     </span>
+                    <LiveMove move={moveOf(s.ticker, s.price)} c={c} he={he} />
                   </div>
                   <div style={{ fontSize: 11, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 185 }}>{s.name}</div>
                 </div>
