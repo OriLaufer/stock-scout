@@ -1,58 +1,96 @@
-# Stock Scout — Project State (checkpoint)
+# Stock Scout — where the system stands
 
 Live: https://stock-scout-phi.vercel.app · Repo: OriLaufer/stock-scout
-Stack: Next.js dashboard (Vercel) · Python scanner (GitHub Actions, weekly) · Supabase (data) · Resend (email) · yfinance + TradingView + Anthropic Claude.
+Next.js dashboard (Vercel) · Python scanner (GitHub Actions, Sundays) · Supabase · Resend · yfinance.
 
-## THE MISSION (boss's words)
-Be IN the stocks that 5x–50x in a year — caught EARLY, before they hit any year-end "biggest gainers" list. Not read about them after. Then monitor what we hold: news, analysts, web buzz — and decide hold / add more.
+## THE GOAL
+Own the stocks that multiply over a year, entered EARLY — and stop losing money on
+the ones that already ran. Everything below exists to serve that one sentence.
 
-## HOW IT RUNS
-- Weekly scan: GitHub Actions cron, Sunday 06:00 UTC (`weekly-scan.yml`, timeout 120m). Runs `scanner.py`.
-- scanner.py pulls the full US universe, 6 months of prices, computes everything, saves one row per week to Supabase `weekly_scans` (stocks_json), emails the report.
-- Dashboard reads from Supabase in getServerSideProps.
+## THE FINDING THAT REBUILT THE SYSTEM
+Across 109 of our own picks, forward-tested against real prices, bucketed by how
+big the week was that we bought AFTER:
 
-## TABS (dashboard, pages/index.js)
-- 📊 Weekly — top 40 gainers this week (>= $250M cap). Verdict card on top (collapsed by default).
-- ⭐ Rising Stars — full-market 6-month relative-strength scan: quiet base-builders (early-SanDisk pattern).
-- 🎯 Radar — top 10 by DNA score (forward-looking: RS + revenue growth + persistence + acceleration + small-cap + sector).
-- 📈 The Trend — top 10 by COMPOUND return since we started scanning (who built the strongest trend). Per-stock identity card + TradingView chart + weekly bars.
-- 🏆 Hall of Fame — ranked by appearance frequency; dot timeline (adaptive sizing).
-- 📓 Journal — manual trades, live P&L, shared via Supabase (`shared_journal`). Click a trade → full identity card.
-- 🔭 Portfolio Watch — per holding: live P&L + AI research (news/analysts/web buzz) + hold/add call + identity card.
-- 🧠 AI Analyst — floating chat bubble, every tab. Shared history via Supabase (`shared_chats`).
+| bought after a week of | won | compounded |
+|---|---|---|
+| +20–50% | 64% | **+52.9%** |
+| +50–80% | 54% | −15.8% |
+| +80–150% | 45% | **−89.5%** |
+| +150%+ | 17% | **−65.7%** |
 
-## KEY SCORING
-- Weekly "Pick for Next Week" = V3 Conviction: gate (weekly close < 60% of range → reject), then strength/weakness signals, then category (Pick/Candidate/Possible/Avoid/No-Pick). Master signal = weekly close strength (NOT float — learned after the BRUN -18.85% failure).
-- Radar DNA (0-100): RS vs SPY 3/6mo (35) + revenue growth (20) + persistence (15) + acceleration (15) + small-cap room (10) + sector heat (5).
-- Rising Stars (0-100): RS 6mo vs SPY (40) + weekly consistency (25) + above 50/200 MA (20) + still-rising (15) − spike penalty (15).
-- The Verdict = AI written opinion (Opus + web search), NOT a number. Weekly.
+The old system ranked by biggest weekly gain, which put the worst entries at the
+top of the list. A 54% win rate still produced a −33% portfolio because there
+were no stops and every entry was made at maximum extension.
 
-## AI (Anthropic Claude)
-- API key in BOTH Vercel env (chat, research, identity) AND GitHub Secrets (weekly verdict).
-- Model names NOT hardcoded — discovered via GET /v1/models. Chat/research use newest Sonnet (fast, fits Vercel 60s); Verdict uses newest Opus (Actions, no timeout). Account's best = claude-opus-4-8.
-- Web search: ON for Verdict + Portfolio research (capped 2 uses to fit 60s); OFF by default in chat (too slow) — when off, prompt forbids fabricating news/tool calls.
-- /api/chat (chat), /api/position-research (holding research), /api/stock-identity (Yahoo cookie+crumb auth for analyst/52W/business/float), /api/chats + /api/journal (shared state).
+Re-measured at longer horizons, the biggest single winner (+633%) DID come from
+the most extended bucket — so the filter costs us some monsters. But that bucket's
+median at 13 weeks is −21.4%. The 0–20%-above-the-50-day bucket compounded +114.8%
+with a positive median. **The extension test governs the ENTRY, not the holding:
+you buy at 10% above the 50-day average and hold while it becomes 80% above.**
 
-## DATA / SCALE
-- safe_json() in scanner.py sanitizes NaN/Infinity → null (Python writes bare NaN = invalid JSON, which silently dropped a whole scan). Dashboard safeParse() also strips NaN on read.
-- SSR ships LEAN scans (week_label, created_at, stocks, bonus only) + top-level latest trend/radar/rising/verdict. ~316KB. Scales for many weeks.
+## WHERE TO LOOK — in order of usefulness
 
-## ONE-TIME FIX WORKFLOWS (Actions, workflow_dispatch)
-fix-trend, fix-radar, fix-rising-stars, fix-recommendations, fix-verdict, fix-send-email, fix-sectors, check-top5, analyze-winners. (Most auto-detect the latest week.)
+| tab | the question it answers |
+|---|---|
+| ⭐ **Shortlist** | **Which 2–3 names, and why.** Everything converges here. The default view. |
+| 🎯 Entry Zone | The full buy list (15) — confirmed uptrend, not yet extended, each with stop and targets |
+| 🧭 Themes | WHY things are moving — industries leading together, and whether the theme is accelerating or fading |
+| 🔬 Analysis Lab | Paste any ticker → research note + head-to-head. Needs API credits |
+| 📈 The Trend | What already compounded, with a live "is it still running" status |
+| ⭐ Rising Stars | Full-market relative strength — quiet base-builders |
+| 🎯 Radar | Forward-looking DNA score |
+| 📊 Weekly | Top-40 gainers. **Kept for reference — our data says this is the losing lens** |
+| 🏆 Hall of Fame · 📓 Journal · 🔭 Portfolio Watch | History, manual trades with live P&L, holdings research |
 
-## SETUP NOTES
-- Supabase tables: weekly_scans, ticker_buzz, shared_chats, shared_journal (last two: RLS with allow-all policy for anon).
-- Resend: sends from onboarding@resend.dev → can only deliver to the Resend account owner's email. BOSS_EMAIL must = that address (currently the user's), then forward to boss. (Verify a domain to send anywhere.)
+## HOW A DECISION GETS MADE
+1. **Themes** — is there a real need moving a whole industry, and is it early?
+2. **Shortlist** — which names carry that theme AND sit at a good entry
+3. **Risk framework** (on every candidate) — stop at the tighter of 2×ATR or 3%
+   under the 50-day average but never inside one ATR; targets at 2R and 4R; the
+   50-day average is where the thesis is void; position size follows the stop distance
+4. **`/scout TICKER`** — deep research on the finalist, run in the Claude Code session
+5. **`report.py`** — the PDF that goes to the boss
 
-## KNOWN GAPS / ROADMAP (not built yet)
-- Portfolio Watch: "research any ticker" search box (research a candidate not yet held — boss: "I looked at VLO, check what they say").
-- Portfolio progress over time (track total value week-over-week to justify scaling capital — boss: "if it works over months we'll add money").
-- Validation pass: measure if high-score picks actually won (after more weeks).
-- Insider buying (SEC EDGAR), buzz integration into scoring.
+## CONVICTION SCORE (the Shortlist)
+entry quality 30 · market leadership 25 · theme behind it 20 · quality of climb 15
+· cross-lens confirmation 10, then adjusted for revenue growth, analyst upside and
+short interest. Weights come from the table above, not from what sounds impressive.
+Every pick states its case AND what should worry you.
 
-## RECENT FIXES (June 2026)
-- NaN-broke-JSON bug (frozen Trend + missing latest week) — fixed both write & read.
-- Trend cards fetch identity live (reliable even when weekly scan was rate-limited).
-- TradingView embed: yellow/red candles, volume pane, MAs 20/50/150/200, pivots.
-- Email redesign: dashboard CTA on top, pick hero, REAL track record.
-- Markdown rendering + expand button in chat; chat history persistent & shared.
+## NEED CHAINS
+Above the industry themes sits a small static map of industry → need (AI compute,
+AI power, biotech, digital health, software, fintech, defense, commodities). SanDisk
+ran on an AI memory shortage, but that same need lifted utilities, turbines,
+transformers, cooling and uranium — different industries, one need, which industry
+grouping alone can never connect. A need registers only when several of its
+industries move together.
+
+## THE TOOLS OUTSIDE THE DASHBOARD
+- **`/scout`** — `C:\Users\orila\.claude\skills\scout\`. Runs the analysis inside the
+  Claude Code session, so it costs no API credits.
+  - `/scout` → system state · `/scout GEO CXW` → per-ticker research · `/scout --portfolio` → holdings
+  - `brief.py` gathers the facts; `report.py` builds the boss's PDF
+  - Use the real python: `C:\Users\orila\AppData\Local\Programs\Python\Python312\python.exe`
+
+## WHAT RUNS BY ITSELF
+- **Sunday 06:00 UTC** — full scan, self-verification, two emails
+- **Daily 05:17 UTC** — keep-alive: pings Supabase so the free project never pauses
+  again, checks for stale data, emails the moment anything breaks
+- Any failure reaches you by email the same day
+
+## KNOWN LIMITS — stated plainly
+- The 0–20% bucket rests on 9 observations and 20–45% on 18. Enough to show a
+  direction, not enough to prove one. The numbers will sharpen as weeks accumulate.
+- The extension filter will miss some of the biggest winners. That is a real cost,
+  accepted deliberately in exchange for a portfolio that compounds up rather than down.
+- **The Anthropic API balance is empty.** Chat, the weekly Verdict, Portfolio research
+  and the Analysis Lab need credits (console.anthropic.com → Plans & Billing). The
+  Shortlist, Entry Zone, Themes and `/scout` do not.
+- Themes rest on yfinance industry labels, which are occasionally wrong for a
+  small or foreign company.
+
+## STILL OPEN
+- A position-size ceiling: the maths gives 9–14% of a portfolio at 1% risk, which is
+  concentrated. That is a decision for you and the boss, separate from the calculation.
+- Tracking whether the Shortlist actually wins — the honest verdict needs a few
+  months of forward data, measured the same way as the table at the top.
