@@ -655,7 +655,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         )}
 
         {tab === 'themes' && (
-          <Themes themes={themes} c={c} dark={dark} lang={lang} />
+          <Themes themes={themes} needs={needs} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'entry' && (
@@ -3577,34 +3577,32 @@ function Shortlist({ shortlist, needs, c, dark, lang }) {
 // before it appears in the news. Every other tab looks at one stock at a time and
 // is therefore blind to exactly that. This one is the answer to "why".
 
-function Themes({ themes, c, dark, lang }) {
+function Themes({ themes, needs, c, dark, lang }) {
   const he = lang === 'he'
   const [open, setOpen] = useState(null)
 
   if (!themes || themes.length === 0) {
     return (
-      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 40, textAlign: 'center' }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>🧭</div>
-        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 44, textAlign: 'center' }}>
+        <div style={{ fontSize: 34, marginBottom: 14 }}>🧭</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: c.text, marginBottom: 8 }}>
           {he ? 'התמות ייבנו בסריקה הבאה' : 'Themes are built on the next scan'}
         </div>
-        <div style={{ fontSize: 13, color: c.muted }}>
+        <div style={{ fontSize: 15, color: c.muted }}>
           {he ? 'הרץ "Full Run & Verify" ב-Actions.' : 'Run "Full Run & Verify" in Actions.'}
         </div>
       </div>
     )
   }
 
-  // Two axes decide everything here, and the tab exists to make them readable:
-  // WHERE in its life the theme is, and WHICH WAY it is moving right now.
   const TRAJ = {
-    accelerating: { he: 'מתלקחת', en: 'accelerating', icon: '🚀', color: '#097c3e', bg: dark ? '#0d2018' : '#EAF3DE' },
-    steady:       { he: 'יציבה',  en: 'steady',       icon: '➡️', color: '#4a76c9', bg: dark ? '#0e1a2e' : '#E8F0FA' },
-    fading:       { he: 'דועכת',  en: 'fading',       icon: '🔻', color: '#c0392b', bg: dark ? '#2a0e0c' : '#FCEBEB' },
+    accelerating: { he: 'מתלקחת', en: 'accelerating', icon: '🚀', color: '#0a8f47', bg: dark ? '#0d2018' : '#E4F3E9' },
+    steady:       { he: 'יציבה',  en: 'steady',       icon: '➡️', color: '#3d6fc4', bg: dark ? '#0e1a2e' : '#E7EFFB' },
+    fading:       { he: 'דועכת',  en: 'fading',       icon: '🔻', color: '#c0392b', bg: dark ? '#2a0e0c' : '#FBE9E7' },
   }
   const STAGE = {
-    'מוקדם':   { he: 'מוקדם',   en: 'early',    color: '#097c3e' },
-    'בעיצומו': { he: 'בעיצומו', en: 'mid-move', color: '#b8860b' },
+    'מוקדם':   { he: 'מוקדם',   en: 'early',    color: '#0a8f47' },
+    'בעיצומו': { he: 'בעיצומו', en: 'mid-move', color: '#a8760a' },
     'מתקדם':   { he: 'מתקדם',   en: 'late',     color: '#c0392b' },
   }
 
@@ -3612,59 +3610,75 @@ function Themes({ themes, c, dark, lang }) {
 
   return (
     <div style={{ marginBottom: 24 }}>
-      {/* Header */}
       <div style={{
         background: `linear-gradient(135deg, ${dark ? '#2a1206' : '#4a2410'} 0%, ${dark ? '#4a2410' : '#6b3a1a'} 100%)`,
-        borderRadius: '14px 14px 0 0', padding: '24px 28px',
+        borderRadius: '14px 14px 0 0', padding: '28px 30px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 32 }}>🧭</span>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 36 }}>🧭</span>
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <div style={{ fontSize: 25, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
               {he ? 'תמות — מה השוק באמת קונה' : 'Themes — What the market is buying'}
             </div>
-            <div style={{ fontSize: 13, color: '#e0c4a8', marginTop: 4 }}>
+            <div style={{ fontSize: 15, color: '#eBd3bd', marginTop: 6, lineHeight: 1.6 }}>
               {he
-                ? 'מניה לא עולה מאות אחוזים בלי סיבה. כשהרבה חברות מאותה תעשייה מובילות יחד — שם קורה משהו אמיתי, והמחיר יודע לפני החדשות.'
-                : 'A stock does not run hundreds of percent for no reason. When many companies in one industry lead together, something real is happening — and price knows before the news.'}
+                ? 'מניה לא עולה מאות אחוזים בלי סיבה. כשהרבה חברות מאותה תעשייה מובילות יחד — שם קורה משהו אמיתי.'
+                : 'A stock does not run hundreds of percent for no reason. When many companies in one industry lead together, something real is happening.'}
             </div>
           </div>
         </div>
       </div>
 
-      {/* How to read this tab — the two questions, answered up front */}
-      <div style={{
-        background: dark ? '#1a1206' : '#fffaf3', borderInline: `1px solid ${c.border}`,
-        padding: '14px 24px', display: 'flex', gap: 26, flexWrap: 'wrap', fontSize: 12, color: c.text,
-      }}>
-        <div style={{ flex: 1, minWidth: 230 }}>
-          <b style={{ color: c.text }}>{he ? '1. לאן היא הולכת' : '1. Which way is it going'}</b>
-          <div style={{ color: c.muted, marginTop: 3, lineHeight: 1.6 }}>
-            {he ? 'משווה את קצב החודש האחרון לקצב שחצי השנה מרמזת עליו. 🚀 מתלקחת = התזה נדלקת עכשיו.'
-                : 'Compares the last month against the pace six months implies. 🚀 accelerating = the thesis is catching now.'}
-          </div>
-        </div>
-        <div style={{ flex: 1, minWidth: 230 }}>
-          <b style={{ color: c.text }}>{he ? '2. כמה מאוחר זה' : '2. How late is it'}</b>
-          <div style={{ color: c.muted, marginTop: 3, lineHeight: 1.6 }}>
-            {he ? 'כמה החברות מתוחות מעל ממוצע 50. מוקדם = יש עדיין איפה להיכנס.'
-                : 'How far members sit above their 50-day average. Early = there is still somewhere to enter.'}
-          </div>
-        </div>
-      </div>
-
-      {/* The one line that matters most */}
-      {best.length > 0 && (
+      {/* Need chains — the layer above industries */}
+      {needs && needs.length > 0 && (
         <div style={{
-          background: dark ? '#0d2018' : '#EAF3DE', borderInline: `1px solid ${c.border}`,
-          borderTop: `1px solid ${c.border}`, padding: '13px 24px', fontSize: 13, color: c.text, lineHeight: 1.7,
+          background: dark ? '#1a1206' : '#fff8ef', borderInline: `1px solid ${c.border}`,
+          padding: '18px 30px',
         }}>
-          🎯 <b>{he ? 'השילוב שמחפשים' : 'The combination to look for'}:</b>{' '}
-          {he ? 'מתלקחת ועדיין מוקדמת — ' : 'accelerating and still early — '}
-          <b style={{ color: '#097c3e' }}>{best.map(t => t.industry).join(' · ')}</b>
-          {' '}({best.reduce((a, t) => a + t.buyable_now, 0)} {he ? 'חברות בכניסה טובה' : 'members at a good entry'})
+          <div style={{ fontSize: 14, fontWeight: 800, color: '#b8641a', marginBottom: 12 }}>
+            🔗 {he ? 'צרכים שמזיזים כמה תעשיות יחד' : 'Needs moving several industries at once'}
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {needs.slice(0, 4).map(n => (
+              <div key={n.need} style={{
+                background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '13px 17px',
+              }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>{n.need}</div>
+                <div style={{ fontSize: 13, color: c.muted, marginTop: 5 }}>
+                  {n.industry_count} {he ? 'תעשיות' : 'industries'} · {n.member_count} {he ? 'חברות' : 'companies'} ·{' '}
+                  <b style={{ color: '#0a8f47' }}>+{n.median_rs_vs_spy}%</b>
+                  {n.accelerating_industries > 0 && <span style={{ color: '#0a8f47' }}> · 🚀 {n.accelerating_industries}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
+
+      {/* The one combination worth looking for */}
+      {best.length > 0 && (
+        <div style={{
+          background: dark ? '#0d2018' : '#E4F3E9', borderInline: `1px solid ${c.border}`,
+          borderTop: `1px solid ${c.border}`, padding: '17px 30px', fontSize: 16, color: c.text, lineHeight: 1.7,
+        }}>
+          🎯 <b>{he ? 'השילוב שמחפשים — מתלקחת ועדיין מוקדמת:' : 'What to look for — accelerating and still early:'}</b>{' '}
+          <b style={{ color: '#0a8f47' }}>{best.map(t => t.industry).join(' · ')}</b>{' '}
+          <span style={{ color: c.muted }}>
+            ({best.reduce((a, t) => a + t.buyable_now, 0)} {he ? 'חברות בכניסה טובה' : 'members at a good entry'})
+          </span>
+        </div>
+      )}
+
+      {/* Column key — so the numbers below need no decoding */}
+      <div style={{
+        background: dark ? '#12121f' : '#f7f7fa', borderInline: `1px solid ${c.border}`,
+        borderTop: `1px solid ${c.border}`, padding: '14px 30px',
+        display: 'flex', gap: 30, flexWrap: 'wrap', fontSize: 13.5, color: c.muted, lineHeight: 1.6,
+      }}>
+        <span><b style={{ color: c.text }}>{he ? 'לאן היא הולכת' : 'direction'}</b> — {he ? 'קצב החודש מול קצב חצי השנה' : 'this month vs the six-month pace'}</span>
+        <span><b style={{ color: c.text }}>{he ? 'כמה מאוחר' : 'how late'}</b> — {he ? 'כמה החברות מתוחות מעל ממוצע 50' : 'how far above the 50-day average'}</span>
+        <span><b style={{ color: c.text }}>{he ? 'לכניסה' : 'to enter'}</b> — {he ? 'כמה חברות עדיין לא ברחו' : 'members not yet extended'}</span>
+      </div>
 
       {/* Rows */}
       <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
@@ -3677,108 +3691,118 @@ function Themes({ themes, c, dark, lang }) {
             <div key={t.industry}>
               <div onClick={() => setOpen(isOpen ? null : t.industry)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 12, padding: '15px 22px',
+                  display: 'flex', alignItems: 'center', gap: 16, padding: '20px 24px',
                   borderBottom: `1px solid ${c.border}`, cursor: 'pointer',
-                  borderInlineStart: isBest ? '4px solid #097c3e' : '4px solid transparent',
-                  background: isOpen ? (dark ? '#1a1206' : '#fffaf3')
+                  borderInlineStart: isBest ? '5px solid #0a8f47' : '5px solid transparent',
+                  background: isOpen ? (dark ? '#1a1206' : '#fff8ef')
                     : i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa'),
                 }}>
-                <div style={{ width: 26, textAlign: 'center', fontSize: 13, fontWeight: 800, color: c.muted }}>{i + 1}</div>
+                <div style={{ width: 26, textAlign: 'center', fontSize: 16, fontWeight: 800, color: c.muted }}>{i + 1}</div>
 
-                <div style={{ flex: 1, minWidth: 150 }}>
-                  <div style={{ fontSize: 15.5, fontWeight: 800, color: c.text }}>{t.industry}</div>
-                  <div style={{ fontSize: 11, color: c.muted, marginTop: 2 }}>
-                    {t.member_count} {he ? 'חברות מובילות' : 'leading companies'} · {t.sector}
+                <div style={{ flex: 1, minWidth: 170 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: c.text, lineHeight: 1.3 }}>{t.industry}</div>
+                  <div style={{ fontSize: 13.5, color: c.muted, marginTop: 4 }}>
+                    {t.member_count} {he ? 'חברות מובילות' : 'leading companies'}
                   </div>
                 </div>
 
-                {/* trajectory — the headline judgement */}
-                <div style={{ width: 118, flexShrink: 0, textAlign: 'center' }}>
+                <div style={{ width: 148, flexShrink: 0, textAlign: 'center' }}>
                   <span style={{
                     display: 'inline-block', background: tj.bg, color: tj.color,
-                    border: `1px solid ${tj.color}`, padding: '3px 10px',
-                    borderRadius: 12, fontSize: 11, fontWeight: 800,
+                    border: `2px solid ${tj.color}`, padding: '6px 14px',
+                    borderRadius: 16, fontSize: 14.5, fontWeight: 800,
                   }}>{tj.icon} {he ? tj.he : tj.en}</span>
-                  <div style={{ fontSize: 10, color: c.muted, marginTop: 4 }}>
-                    {he ? 'חודש' : '1mo'} {t.median_ret_1mo > 0 ? '+' : ''}{t.median_ret_1mo}%
+                  <div style={{ fontSize: 13, color: c.muted, marginTop: 6 }}>
+                    {he ? 'החודש' : 'this month'} <b style={{ color: t.median_ret_1mo >= 0 ? '#0a8f47' : '#c0392b' }}>
+                      {t.median_ret_1mo > 0 ? '+' : ''}{t.median_ret_1mo}%</b>
                   </div>
                 </div>
 
-                <div style={{ width: 92, flexShrink: 0, textAlign: 'center' }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: '#097c3e' }}>+{t.median_rs_vs_spy}%</div>
-                  <div style={{ fontSize: 9.5, color: c.muted }}>{he ? 'מול השוק, חצי שנה' : 'vs market, 6mo'}</div>
+                <div style={{ width: 116, flexShrink: 0, textAlign: 'center' }}>
+                  <div style={{ fontSize: 21, fontWeight: 800, color: '#0a8f47' }}>+{t.median_rs_vs_spy}%</div>
+                  <div style={{ fontSize: 12.5, color: c.muted, marginTop: 3 }}>{he ? 'מול השוק' : 'vs market'}</div>
                 </div>
 
-                <div style={{ width: 92, flexShrink: 0, textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: sg.color }}>{he ? sg.he : sg.en}</div>
-                  <div style={{ fontSize: 9.5, color: c.muted }}>
-                    {t.median_pct_above_50dma > 0 ? '+' : ''}{t.median_pct_above_50dma}% {he ? 'מעל ממוצע' : 'above MA'}
+                <div style={{ width: 116, flexShrink: 0, textAlign: 'center' }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: sg.color }}>{he ? sg.he : sg.en}</div>
+                  <div style={{ fontSize: 12.5, color: c.muted, marginTop: 3 }}>
+                    {t.median_pct_above_50dma > 0 ? '+' : ''}{t.median_pct_above_50dma}% {he ? 'מעל הממוצע' : 'above MA'}
                   </div>
                 </div>
 
-                <div style={{ width: 62, flexShrink: 0, textAlign: 'center' }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: t.buyable_now > 0 ? '#097c3e' : c.muted }}>{t.buyable_now}</div>
-                  <div style={{ fontSize: 9.5, color: c.muted }}>{he ? 'לכניסה' : 'to enter'}</div>
+                <div style={{ width: 74, flexShrink: 0, textAlign: 'center' }}>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: t.buyable_now > 0 ? '#0a8f47' : c.muted }}>{t.buyable_now}</div>
+                  <div style={{ fontSize: 12.5, color: c.muted, marginTop: 3 }}>{he ? 'לכניסה' : 'to enter'}</div>
                 </div>
 
-                <span style={{ fontSize: 13, color: c.muted }}>{isOpen ? '▲' : '▼'}</span>
+                <span style={{ fontSize: 16, color: c.muted }}>{isOpen ? '▲' : '▼'}</span>
               </div>
 
               {isOpen && (
-                <div style={{ background: dark ? '#1a1206' : '#fffaf3', padding: '18px 26px', borderBottom: `1px solid ${c.border}` }}>
-                  {/* Plain reading of the two axes for this specific theme */}
+                <div style={{ background: dark ? '#1a1206' : '#fff8ef', padding: '22px 30px', borderBottom: `1px solid ${c.border}` }}>
                   <div style={{
-                    background: c.card, border: `1px solid ${c.border}`, borderInlineStart: `3px solid ${tj.color}`,
-                    borderRadius: 8, padding: '13px 16px', marginBottom: 16, fontSize: 13, color: c.text, lineHeight: 1.75,
+                    background: c.card, border: `1px solid ${c.border}`, borderInlineStart: `4px solid ${tj.color}`,
+                    borderRadius: 10, padding: '18px 22px', marginBottom: 20,
+                    fontSize: 16, color: c.text, lineHeight: 1.85,
                   }}>
                     {he ? (
                       <>
                         <b>{t.member_count} חברות</b> מהתעשייה הזו נמצאות בין המובילות בשוק, עם חוזק חציוני של{' '}
-                        <b style={{ color: '#097c3e' }}>+{t.median_rs_vs_spy}%</b> מול השוק בחצי שנה.{' '}
+                        <b style={{ color: '#0a8f47' }}>+{t.median_rs_vs_spy}%</b> מול השוק בחצי שנה.{' '}
                         {t.trajectory === 'accelerating'
-                          ? <>בחודש האחרון הן עלו <b>{t.median_ret_1mo}%</b> — קצב מהיר בהרבה ממה שחצי השנה מרמזת עליו. <b style={{ color: '#097c3e' }}>התזה נדלקת עכשיו.</b></>
+                          ? <>בחודש האחרון הן עלו <b>{t.median_ret_1mo}%</b> — הרבה מעל הקצב שחצי השנה מרמזת עליו.{' '}
+                              <b style={{ color: '#0a8f47' }}>התזה נדלקת עכשיו.</b></>
                           : t.trajectory === 'fading'
-                            ? <>אבל בחודש האחרון הן ירדו <b style={{ color: '#c0392b' }}>{t.median_ret_1mo}%</b> — המהלך מאבד כוח. <b>כנראה הגענו מאוחר.</b></>
-                            : <>בחודש האחרון הן עלו <b>{t.median_ret_1mo}%</b> — בקצב שתואם את המגמה. מהלך יציב, לא התלקחות.</>}
+                            ? <>אבל בחודש האחרון הן ירדו <b style={{ color: '#c0392b' }}>{t.median_ret_1mo}%</b> — המהלך מאבד כוח.{' '}
+                                <b style={{ color: '#c0392b' }}>כנראה הגענו מאוחר.</b></>
+                            : <>בחודש האחרון הן עלו <b>{t.median_ret_1mo}%</b>, בקצב שתואם את המגמה — מהלך יציב, לא התלקחות.</>}
                         {' '}החציון נמצא <b>{t.median_pct_above_50dma}%</b> מעל ממוצע 50, כלומר{' '}
-                        {t.stage === 'מוקדם' ? 'עוד לא ברחו ויש איפה להיכנס'
+                        {t.stage === 'מוקדם' ? <b style={{ color: '#0a8f47' }}>עוד לא ברחו ויש איפה להיכנס</b>
                           : t.stage === 'בעיצומו' ? 'המהלך בעיצומו — לא מאוחר, אבל כבר לא זול'
-                          : 'רוב המהלך כבר מאחורינו'}.
+                          : <b style={{ color: '#c0392b' }}>רוב המהלך כבר מאחורינו</b>}.
                       </>
                     ) : (
                       <>
-                        <b>{t.member_count} companies</b> from this industry are among the market's leaders,
-                        median <b>+{t.median_rs_vs_spy}%</b> vs the market over six months, <b>{t.median_ret_1mo}%</b> in
-                        the last month, sitting <b>{t.median_pct_above_50dma}%</b> above their 50-day average.
+                        <b>{t.member_count} companies</b> here are among the market's leaders, median{' '}
+                        <b>+{t.median_rs_vs_spy}%</b> vs the market over six months, <b>{t.median_ret_1mo}%</b> this
+                        month, sitting <b>{t.median_pct_above_50dma}%</b> above their 50-day average.
                       </>
                     )}
                   </div>
 
-                  <div style={{ fontSize: 10.5, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 9 }}>
-                    {he ? 'החברות — מסומנות בירוק אלו שעדיין בכניסה טובה' : 'members — green ones are still at a good entry'}
+                  <div style={{ fontSize: 14, color: c.text, fontWeight: 700, marginBottom: 12 }}>
+                    {he ? 'החברות בתמה' : 'members'}
+                    <span style={{ color: c.muted, fontWeight: 400 }}>
+                      {' '}— {he ? 'המסגרת הירוקה = עדיין בנקודת כניסה טובה' : 'green border = still at a good entry'}
+                    </span>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(212px,1fr))', gap: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 11 }}>
                     {(t.members || []).map(m => (
                       <div key={m.ticker} style={{
                         background: c.card,
-                        border: `1px solid ${m.at_good_entry ? '#097c3e' : c.border}`,
-                        borderRadius: 8, padding: '10px 13px',
+                        border: `${m.at_good_entry ? 2 : 1}px solid ${m.at_good_entry ? '#0a8f47' : c.border}`,
+                        borderRadius: 10, padding: '14px 16px',
                       }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                          <span style={{ fontSize: 14, fontWeight: 800, color: c.text }}>{m.ticker}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 18, fontWeight: 800, color: c.text }}>{m.ticker}</span>
                           {m.at_good_entry && (
-                            <span style={{ fontSize: 9, fontWeight: 800, color: '#097c3e', border: '1px solid #097c3e', borderRadius: 8, padding: '1px 6px' }}>
+                            <span style={{ fontSize: 12, fontWeight: 800, color: '#0a8f47', border: '1px solid #0a8f47', borderRadius: 10, padding: '2px 9px' }}>
                               {he ? 'כניסה טובה' : 'good entry'}
                             </span>
                           )}
-                          <span style={{ marginInlineStart: 'auto', fontSize: 12, fontWeight: 700, color: '#097c3e' }}>+{m.rs_vs_spy_6mo}%</span>
+                          <span style={{ marginInlineStart: 'auto', fontSize: 16, fontWeight: 800, color: '#0a8f47' }}>+{m.rs_vs_spy_6mo}%</span>
                         </div>
-                        <div style={{ fontSize: 10.5, color: c.muted, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <div style={{ fontSize: 13, color: c.muted, marginTop: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {m.name}
                         </div>
-                        <div style={{ fontSize: 10.5, color: c.muted, marginTop: 4 }}>
-                          ${m.price} · {he ? 'ממוצע 50' : '50dma'} {m.pct_above_50dma > 0 ? '+' : ''}{m.pct_above_50dma}%
-                          {m.ret_1mo != null && <> · {he ? 'חודש' : '1mo'} {m.ret_1mo > 0 ? '+' : ''}{m.ret_1mo}%</>}
+                        <div style={{ fontSize: 13.5, color: c.text, marginTop: 8 }}>
+                          <b>${m.price}</b>
+                          <span style={{ color: c.muted }}> · {he ? 'ממוצע 50' : '50dma'} </span>
+                          <b>{m.pct_above_50dma > 0 ? '+' : ''}{m.pct_above_50dma}%</b>
+                          {m.ret_1mo != null && <>
+                            <span style={{ color: c.muted }}> · {he ? 'חודש' : '1mo'} </span>
+                            <b style={{ color: m.ret_1mo >= 0 ? '#0a8f47' : '#c0392b' }}>{m.ret_1mo > 0 ? '+' : ''}{m.ret_1mo}%</b>
+                          </>}
                         </div>
                       </div>
                     ))}
