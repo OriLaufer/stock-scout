@@ -1168,6 +1168,41 @@ def _business_quality(ticker):
     Reads five to seven quarters from the income statement — one extra call per
     candidate, and only for names that already passed every gate."""
     out = {}
+    # --- cash runway: how long can it fund itself? ---
+    # Profitability is NOT required for a large move — plenty of the biggest
+    # winners ran for years while losing money. What decides whether that ends
+    # in a multi-bagger or a dilution is how long the company can wait. Without
+    # this the system could not tell a company with two years of cash from one
+    # about to issue shares at any price.
+    try:
+        tk = yf.Ticker(ticker)
+        bs, cf = tk.quarterly_balance_sheet, tk.quarterly_cashflow
+
+        def _row(df, *names):
+            for n in names:
+                if df is not None and not df.empty and n in df.index:
+                    return [None if pd.isna(v) else float(v) for v in df.loc[n].values]
+            return []
+
+        cash = _row(bs, "Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments")
+        sti = _row(bs, "Other Short Term Investments", "Short Term Investments")
+        ocf = _row(cf, "Operating Cash Flow")
+        capex = _row(cf, "Capital Expenditure")
+
+        total = (cash[0] or 0 if cash else 0) + (sti[0] or 0 if sti else 0)
+        recent_ocf = [x for x in ocf[:4] if x is not None]
+        if total > 0 and recent_ocf:
+            recent_capex = [x for x in (capex[:4] if capex else []) if x is not None]
+            fcf = sum(recent_ocf) / len(recent_ocf) + (
+                sum(recent_capex) / len(recent_capex) if recent_capex else 0)
+            out["cash_musd"] = round(total / 1e6, 1)
+            out["quarterly_fcf_musd"] = round(fcf / 1e6, 1)
+            out["self_funding"] = bool(fcf >= 0)
+            if fcf < 0:
+                out["runway_quarters"] = round(total / abs(fcf), 1)
+    except Exception:
+        pass
+
     try:
         q = yf.Ticker(ticker).quarterly_income_stmt
         if q is None or q.empty:
@@ -1214,6 +1249,19 @@ def _business_quality(ticker):
             out["gross_margin_pct"] = round(gm_now, 1)
             if gm_then is not None:
                 out["gross_margin_change"] = round(gm_now - gm_then, 1)
+                # A large change is only suspicious if it arrived in ONE quarter.
+                # Hinge Health went 70.3 -> 81.8 -> 84.4 -> 84.6 -> 86.4: sixteen
+                # points, every quarter better than the last, and entirely real.
+                # Karat jumped in a single quarter on a tariff refund. Judging
+                # both by the size of the change alone flagged the wrong one.
+                path = [margin(gp, k) for k in range(min(5, len(gp)))]
+                path = [x for x in path if x is not None]
+                if len(path) >= 4:
+                    ups = sum(1 for k in range(len(path) - 1) if path[k] > path[k + 1])
+                    out["gross_margin_steps_up"] = ups
+                    out["gross_margin_steady"] = bool(ups >= len(path) - 2)
+                    biggest = max(path[k] - path[k + 1] for k in range(len(path) - 1))
+                    out["gross_margin_biggest_step"] = round(biggest, 1)
 
         om_now, om_then = margin(op, 0), margin(op, 4) if len(op) >= 5 else None
         if om_now is not None:
@@ -1268,8 +1316,11 @@ def _business_score(b):
         # never operations — it is a refund, a settlement, or an accounting
         # change. KRT showed +17pp that turned out to be a one-off tariff
         # refund, and this scored it as pricing power. Flag, do not reward.
-        if gmc >= 10:
-            flags.append(f"המרווח הגולמי קפץ ב-{gmc:.0f} נקודות אחוז בשנה — קפיצה כזו מגיעה כמעט תמיד מסעיף חד-פעמי ולא מהעסק. לבדוק בדוח")
+        if gmc >= 10 and b.get("gross_margin_steady"):
+            pts += 5
+            notes.append(f"המרווח הגולמי עלה ב-{gmc:.0f} נקודות אחוז — והוא השתפר רבעון אחר רבעון, כלומר שיפור תפעולי אמיתי ולא סעיף חד-פעמי")
+        elif gmc >= 10:
+            flags.append(f"המרווח הגולמי קפץ ב-{gmc:.0f} נקודות אחוז, רובן ברבעון אחד — קפיצה כזו מגיעה כמעט תמיד מסעיף חד-פעמי. לבדוק בדוח")
         elif gmc >= 3:
             pts += 3
             notes.append(f"המרווח הגולמי התרחב ב-{gmc:.0f} נקודות אחוז — סימן לכוח תמחור")
@@ -1290,7 +1341,30 @@ def _business_score(b):
             pts -= 4
             flags.append(f"ההכנסות ירדו {abs(yoy):.0f}% בשנה — הגרף עולה בזמן שהעסק מתכווץ")
 
-    return max(-8, min(20, pts)), notes, flags
+    # --- can it fund itself long enough to matter? ---
+    # Losing money is not disqualifying; many of the largest winners lost money
+    # for years. Running OUT of money is. A company with two years of cash can
+    # wait for its catalyst; one with two quarters will issue shares at whatever
+    # price it can get, and existing holders pay for it.
+    rw = b.get("runway_quarters")
+    if b.get("self_funding"):
+        pts += 3
+        notes.append("מייצרת מזומן בעצמה — לא תלויה בגיוס")
+    elif rw is not None:
+        if rw >= 8:
+            pts += 3
+            notes.append(f"מסלול מזומנים של {rw/4:.1f} שנים (${b.get('cash_musd'):,.0f}M בקופה) — יש לה זמן לממש את התזה בלי לדלל")
+        elif rw >= 5:
+            pts += 1
+            notes.append(f"מסלול מזומנים של {rw/4:.1f} שנים — מספיק, אך לא בשפע")
+        elif rw >= 3:
+            pts -= 3
+            flags.append(f"מסלול מזומנים של {rw/4:.1f} שנים בלבד — גיוס בטווח הנראה לעין")
+        else:
+            pts -= 7
+            flags.append(f"נשארו לה כ-{rw:.0f} רבעונים של מזומן — סכנת דילול ממשית")
+
+    return max(-10, min(22, pts)), notes, flags
 
 
 def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None):
