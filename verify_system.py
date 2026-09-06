@@ -142,6 +142,15 @@ def main():
         check(True if not leaked else None, "Verdict starts with the report",
               "clean" if not leaked else f"pre-answer narration leaked in: {head[:70]}...")
 
+    # ---- 5b. Did any step of the scan die quietly? ----
+    # A failed enrichment leaves the PREVIOUS scan's list in place, which looks
+    # identical to fresh data. The scanner now records what broke; refuse to call
+    # the run healthy when something did.
+    failed = payload.get("failed_steps") or []
+    check(not failed, "Every scan step completed",
+          "all steps ran" if not failed else "steps that failed (their tabs still show LAST scan's data): "
+          + " | ".join(failed[:4]))
+
     # ---- 6. Is The Trend quality, or is it single-week spikes? ----
     # A stock whose entire compound comes from one explosive week is noise. The
     # scanner filters these out; this proves the filter is actually working.

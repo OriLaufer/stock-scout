@@ -1018,7 +1018,10 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
             rejected["just_exploded"] += 1; continue
 
         score, parts = _entry_zone_score(d, spy_6mo)
-        th = theme_of.get(t)
+        # This loop iterates over `d`; `t` only exists in the loop below. Reading
+        # it here raised NameError, _safe swallowed it, and the whole Entry Zone
+        # came back None — which then silently left LAST week's list on screen.
+        th = theme_of.get(d["ticker"])
         if th:
             # Breadth of the industry behind it, extra when that industry is
             # accelerating rather than merely strong. Capped so a theme can
@@ -1038,6 +1041,7 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
         if len(picks) >= target:
             break
         t = d["ticker"]
+        th = theme_of.get(t)          # resolve per row; never inherit from above
         try:
             time.sleep(0.4)
             mc = getattr(yf.Ticker(t).fast_info, "market_cap", None) or 0
@@ -3535,11 +3539,17 @@ def main():
 
     # Each enrichment step is wrapped so that ONE failure never blocks the
     # email or the rest. The core scan (top picks) is already saved above.
+    # Which enrichments failed this run. A step that dies must not leave last
+    # week's list quietly on screen pretending to be current — that is exactly
+    # how a NameError in the Entry Zone showed stale picks for a whole scan.
+    failed_steps = []
+
     def _safe(label, fn, default=None):
         try:
             return fn()
         except Exception as e:
-            print(f"  ⚠️ {label} failed (continuing): {type(e).__name__}: {e}")
+            print(f"  WARNING: {label} failed (continuing): {type(e).__name__}: {e}")
+            failed_steps.append(f"{label}: {type(e).__name__}: {e}")
             return default
 
     # 6. Build the REAL track record (yfinance actual gains) for the email
@@ -3595,6 +3605,10 @@ def main():
                 if themes: pl["themes"] = themes
                 if shortlist: pl["shortlist"] = shortlist
                 if needs: pl["needs"] = needs
+                # Record what broke, so the dashboard can say "this list is from
+                # the previous scan" instead of presenting it as this week's.
+                pl["failed_steps"] = failed_steps
+                pl["enriched_at"] = datetime.now().isoformat()
                 if industry_map: pl["industry_map"] = industry_map
                 if verdict: pl["verdict"] = verdict
                 supabase.table("weekly_scans").update({"stocks_json": safe_json(pl)}).eq("week_label", week_label).execute()
