@@ -1085,6 +1085,15 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
             info = yf.Ticker(t).info
             name = info.get("longName") or info.get("shortName") or name
             sector = info.get("sector") or ""
+            # WHAT THE COMPANY ACTUALLY DOES. Ordinary companies do not rise 25%
+            # above the market in six months — something is happening at each of
+            # these, and the business is the first place to look, not the last.
+            # Ranking on numbers alone once buried Similarweb behind a modest
+            # growth figure while it was quietly selling web data to the large
+            # language models. Carry the description so the business leads.
+            bs = info.get("longBusinessSummary") or ""
+            fund["business_summary"] = (bs[:700] + "..." if len(bs) > 700 else bs)
+            fund["industry"] = info.get("industry") or ""
             # We are already paying for this call — take the fundamentals too.
             # Whether the business behind the chart is actually growing is the
             # difference between a real leader and a squeeze.
@@ -1114,6 +1123,8 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
             "vol_ratio": d.get("vol_ratio"),
             "this_week_pct": d.get("change_pct"),
             "plan": _trade_plan(d),
+            "business_summary": fund.get("business_summary"),
+            "industry": fund.get("industry"),
             "revenue_growth_pct": fund.get("revenue_growth_pct"),
             "target_mean": fund.get("target_mean"),
             "analyst_count": fund.get("analyst_count"),
@@ -1418,6 +1429,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
                 "ticker", "name", "sector", "price", "market_cap", "pct_above_50dma",
                 "pct_above_200dma", "rs_vs_spy_6mo", "positive_weeks_pct", "max_week_pct",
                 "vol_ratio", "ret_1mo", "ret_3mo", "ret_6mo", "plan", "theme",
+                "business_summary", "industry",
                 "revenue_growth_pct", "target_upside_pct", "analyst_count", "short_pct")},
             "business": biz,
             "conviction": conviction,

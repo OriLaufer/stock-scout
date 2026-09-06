@@ -3541,6 +3541,25 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
 
               {isOpen && (
                 <div style={{ background: dark ? '#0a1620' : '#f6fafd', padding: '20px 26px', borderBottom: `1px solid ${c.border}` }}>
+                  {/* What the company does, before any number. Ordinary companies
+                      do not beat the market by 25% in six months — the business is
+                      the first thing to understand, not a footnote. */}
+                  {s.business_summary && (
+                    <div style={{
+                      background: c.card, border: `1px solid ${c.border}`,
+                      borderInlineStart: '4px solid #4a76c9', borderRadius: 10,
+                      padding: '16px 19px', marginBottom: 18,
+                    }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 800, color: '#5b87d6', marginBottom: 8 }}>
+                        🏢 {he ? 'מה החברה עושה' : 'What the company does'}
+                        {s.industry && <span style={{ color: c.muted, fontWeight: 400 }}> · {s.industry}</span>}
+                      </div>
+                      <div style={{ fontSize: 14.5, color: c.text, lineHeight: 1.8, direction: 'ltr', textAlign: 'left' }}>
+                        {s.business_summary}
+                      </div>
+                    </div>
+                  )}
+
                   <PickWeeklyBars ticker={s.ticker} c={c} dark={dark} he={he} />
 
                   {/* The case for it */}
