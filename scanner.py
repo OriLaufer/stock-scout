@@ -1242,7 +1242,9 @@ def _business_score(b):
 
     omc = b.get("operating_margin_change")
     if omc is not None and not b.get("swing_to_profit"):
-        if omc >= 3:
+        if omc >= 20:
+            flags.append(f"המרווח התפעולי זינק ב-{omc:.0f} נקודות אחוז — כנראה סעיף חד-פעמי, לא שיפור תפעולי")
+        elif omc >= 3:
             pts += 4
             notes.append(f"המרווח התפעולי התרחב ב-{omc:.0f} נקודות אחוז בשנה")
         elif omc <= -3:
@@ -1251,7 +1253,13 @@ def _business_score(b):
 
     gmc = b.get("gross_margin_change")
     if gmc is not None:
-        if gmc >= 3:
+        # A gross margin that moves more than ten points in a year is almost
+        # never operations — it is a refund, a settlement, or an accounting
+        # change. KRT showed +17pp that turned out to be a one-off tariff
+        # refund, and this scored it as pricing power. Flag, do not reward.
+        if gmc >= 10:
+            flags.append(f"המרווח הגולמי קפץ ב-{gmc:.0f} נקודות אחוז בשנה — קפיצה כזו מגיעה כמעט תמיד מסעיף חד-פעמי ולא מהעסק. לבדוק בדוח")
+        elif gmc >= 3:
             pts += 3
             notes.append(f"המרווח הגולמי התרחב ב-{gmc:.0f} נקודות אחוז — סימן לכוח תמחור")
         elif gmc <= -4:
