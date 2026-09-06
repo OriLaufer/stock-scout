@@ -352,6 +352,21 @@ def fetch_weekly_changes(tickers, reference_date=None):
                                 pos = int((wk_returns > 0).sum())
                                 rec["positive_weeks_pct"] = round(pos / len(wk_returns) * 100)
                                 rec["max_week_pct"] = round(float(wk_returns.max()), 1)
+                                # The big week is the ALARM, not the disqualifier.
+                                # Measured over six months, one +60% week in May
+                                # banned a stock for the rest of the year even if
+                                # it spent the summer consolidating — which is
+                                # exactly the SanDisk pattern we set out to catch.
+                                # Judge the RECENT weeks for "do not chase", and
+                                # keep the older spike as information.
+                                rec["max_week_recent_pct"] = round(float(wk_returns.tail(8).max()), 1)
+                                older = wk_returns.iloc[:-8]
+                                if len(older) >= 3:
+                                    big = float(older.max())
+                                    rec["earlier_big_week_pct"] = round(big, 1)
+                                    # An advance that already happened, followed by
+                                    # orderly behaviour since: the alarm has rung.
+                                    rec["alarm_rang"] = bool(big >= 35)
                             # The advance pattern: legs, bases, higher lows.
                             # Free here — the weekly series is already built.
                             rec["structure"] = _price_structure(weekly)
@@ -1038,8 +1053,11 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
         # Not already stretched. This single line is the lesson of the -89.5%.
         if d["pct_above_50dma"] > 45:
             rejected["too_extended"] += 1; continue
-        # Not carried by one explosive week.
-        if (d.get("max_week_pct") or 0) > 55:
+        # Not exploding RIGHT NOW. A violent week months ago that has since been
+        # digested is the signal we wanted; a violent week last month is the
+        # thing our own data says loses money.
+        if (d.get("max_week_recent_pct") if d.get("max_week_recent_pct") is not None
+                else d.get("max_week_pct") or 0) > 55:
             rejected["spiky"] += 1; continue
         # Must actually be leading the market.
         if (d["ret_6mo"] - spy_6mo) < 25:
@@ -1127,6 +1145,9 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
             "this_week_pct": d.get("change_pct"),
             "plan": _trade_plan(d),
             "structure": d.get("structure"),
+            "alarm_rang": d.get("alarm_rang"),
+            "earlier_big_week_pct": d.get("earlier_big_week_pct"),
+            "max_week_recent_pct": d.get("max_week_recent_pct"),
             "business_summary": fund.get("business_summary"),
             "industry": fund.get("industry"),
             "revenue_growth_pct": fund.get("revenue_growth_pct"),
@@ -1598,7 +1619,18 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
         # climb" actively marked it down because the consolidations between the
         # legs are red weeks. This measures the shape that produces big moves.
         spts, snotes, sflags = _structure_score(e.get("structure"))
-        parts["structure"] = spts
+        # THE ORIGINAL BRIEF, restated: we will not catch the first leg and we
+        # never expected to. A violent advance is the alarm; then we wait for a
+        # price, join, and add on the pullbacks. A stock that already made its
+        # big move and has since built a base is not late — it is the setup.
+        if e.get("alarm_rang"):
+            st = e.get("structure") or {}
+            if st.get("position") in ("basing", "advancing") and (e.get("pct_above_50dma") or 99) <= 30:
+                spts += 6
+                snotes.append(
+                    f"עשתה מהלך של {e.get('earlier_big_week_pct'):.0f}% בשבוע אחד לפני חודשיים ומאז "
+                    f"בנתה בסיס — זו בדיוק ההזדמנות להצטרף למהלך שכבר הוכיח את עצמו, במקום לרדוף אחריו")
+        parts["structure"] = min(24, spts)
         why.extend(snotes)
         watch.extend(sflags)
 
@@ -1650,7 +1682,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
                 "ticker", "name", "sector", "price", "market_cap", "pct_above_50dma",
                 "pct_above_200dma", "rs_vs_spy_6mo", "positive_weeks_pct", "max_week_pct",
                 "vol_ratio", "ret_1mo", "ret_3mo", "ret_6mo", "plan", "theme",
-                "business_summary", "industry", "structure",
+                "business_summary", "industry", "structure", "alarm_rang", "earlier_big_week_pct",
                 "revenue_growth_pct", "target_upside_pct", "analyst_count", "short_pct")},
             "business": biz,
             "conviction": conviction,
