@@ -605,10 +605,9 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         {/* Tab switcher */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[
-            ['short',     `⭐ ${lang === 'he' ? 'הרשימה הקצרה' : 'Shortlist'}`],
+            ['short',     `⭐ ${lang === 'he' ? 'מניות לכניסה' : 'The Picks'}`],
             ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
             ['themes',    `🧭 ${lang === 'he' ? 'תמות' : 'Themes'}`],
-            ['entry',     `🎯 ${lang === 'he' ? 'אזור כניסה' : 'Entry Zone'}`],
             ['stars',     `⭐ ${lang === 'he' ? 'כוכבים עולים' : 'Rising Stars'}`],
             ['radar',     `🎯 ${lang === 'he' ? 'ראדאר' : 'Radar'}`],
             ['trend',     `📈 ${lang === 'he' ? 'המגמה' : 'The Trend'}`],
@@ -651,16 +650,13 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         )}
 
         {tab === 'short' && (
-          <Shortlist shortlist={shortlist} needs={needs} c={c} dark={dark} lang={lang} />
+          <Shortlist shortlist={shortlist} entryZone={entryZone} needs={needs} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'themes' && (
           <Themes themes={themes} needs={needs} c={c} dark={dark} lang={lang} />
         )}
 
-        {tab === 'entry' && (
-          <EntryZone entryZone={entryZone} c={c} dark={dark} lang={lang} />
-        )}
 
         {tab === 'lab' && (
           <AnalysisLab risingStars={risingStars} radar={radar} trend={trend} c={c} dark={dark} lang={lang} />
@@ -3351,23 +3347,36 @@ function LiveMove({ move, c, he }) {
 // tab is the answer to the only question that ever mattered here: which two or
 // three names do we actually put money behind, and why.
 
-function Shortlist({ shortlist, needs, c, dark, lang }) {
+function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
   const he = lang === 'he'
   const [open, setOpen] = useState(shortlist?.[0]?.ticker || null)
 
   if (!shortlist || shortlist.length === 0) {
     return (
-      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 40, textAlign: 'center' }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>⭐</div>
-        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
-          {he ? 'הרשימה הקצרה תיבנה בסריקה הבאה' : 'The shortlist is built on the next scan'}
+      <div>
+        <div style={{
+          background: dark ? '#3a2a0a' : '#FFF8E1', border: '1px solid #d9a406',
+          borderRadius: 12, padding: '18px 22px', marginBottom: 18,
+        }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: '#8a6d0b', marginBottom: 6 }}>
+            ⚠️ {he ? 'הדירוג לא חושב בסריקה האחרונה' : 'The ranking did not run on the last scan'}
+          </div>
+          <div style={{ fontSize: 14, color: c.text, lineHeight: 1.7 }}>
+            {he
+              ? 'מוצגת למטה רשימת המועמדות הגולמית — היא עברה את כל השערים (במגמה, לא מתוחות, לא קפיצתיות), אבל בלי הדירוג לפי קונביקציה, בלי התמות ובלי הפונדמנטלס. הרץ "Full Run & Verify" ב-Actions כדי לבנות אותו.'
+              : 'Below is the raw candidate list — it passed every gate, but without the conviction ranking, themes or fundamentals. Run "Full Run & Verify" to build it.'}
+          </div>
         </div>
-        <div style={{ fontSize: 13, color: c.muted }}>
-          {he ? 'הרץ "Full Run & Verify" ב-Actions.' : 'Run "Full Run & Verify" in Actions.'}
-        </div>
+        <EntryZone entryZone={entryZone} c={c} dark={dark} lang={lang} />
       </div>
     )
   }
+
+  // How many get the full treatment. Beyond this they are a watchlist, not a
+  // decision — the whole point of merging the two tabs was to stop pretending
+  // fifteen names are all equally actionable.
+  const PICKS = 4
+  const rest = shortlist.slice(PICKS)
 
   const band = (v) => v >= 70 ? { t: he ? 'קונביקציה גבוהה' : 'high conviction', color: '#097c3e' }
     : v >= 55 ? { t: he ? 'קונביקציה בינונית' : 'medium conviction', color: '#b8860b' }
@@ -3432,7 +3441,7 @@ function Shortlist({ shortlist, needs, c, dark, lang }) {
       )}
 
       <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
-        {shortlist.map((s, i) => {
+        {shortlist.slice(0, PICKS).map((s, i) => {
           const b = band(s.conviction)
           const isOpen = open === s.ticker
           const medals = ['🥇', '🥈', '🥉']
@@ -3560,6 +3569,58 @@ function Shortlist({ shortlist, needs, c, dark, lang }) {
           )
         })}
       </div>
+
+      {/* Everything that passed the gates but did not make the top few. Same
+          score, same ranking — just not where the money goes first. */}
+      {rest.length > 0 && (
+        <div style={{ marginTop: 26 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: c.text, marginBottom: 6 }}>
+            👀 {he ? 'רשימת מעקב' : 'Watchlist'}
+          </div>
+          <div style={{ fontSize: 14, color: c.muted, marginBottom: 14, lineHeight: 1.6 }}>
+            {he
+              ? `עוד ${rest.length} מניות שעברו את אותם שערים בדיוק — במגמה, לא מתוחות, לא קפיצתיות — אבל בקונביקציה נמוכה יותר. שוות מעקב, לא כסף ראשון.`
+              : `${rest.length} more that passed the same gates but rank lower. Worth watching, not first money.`}
+          </div>
+          <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, overflow: 'hidden' }}>
+            {rest.map((s, i) => (
+              <div key={s.ticker} style={{
+                display: 'flex', alignItems: 'center', gap: 14, padding: '13px 20px',
+                borderBottom: i === rest.length - 1 ? 'none' : `1px solid ${c.border}`,
+                background: i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa'),
+              }}>
+                <div style={{ width: 30, textAlign: 'center', fontSize: 14, fontWeight: 700, color: c.muted }}>
+                  #{i + PICKS + 1}
+                </div>
+                <div style={{ width: 190, flexShrink: 0 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: c.text }}>{s.ticker}</div>
+                  <div style={{ fontSize: 12.5, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 185 }}>
+                    {s.name}
+                  </div>
+                </div>
+                {s.theme
+                  ? <div style={{ flex: 1, minWidth: 130, fontSize: 12.5, color: '#b8641a', fontWeight: 600 }}>
+                      🧭 {s.theme.industry}
+                    </div>
+                  : <div style={{ flex: 1, minWidth: 130 }} />}
+                <div style={{ width: 96, textAlign: 'center' }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: c.text }}>
+                    {s.pct_above_50dma > 0 ? '+' : ''}{s.pct_above_50dma}%
+                  </div>
+                  <div style={{ fontSize: 11, color: c.muted }}>{he ? 'מעל ממוצע 50' : 'above 50dma'}</div>
+                </div>
+                <div style={{ width: 96, textAlign: 'center' }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: '#097c3e' }}>+{s.rs_vs_spy_6mo}%</div>
+                  <div style={{ fontSize: 11, color: c.muted }}>{he ? 'מול השוק' : 'vs market'}</div>
+                </div>
+                <div style={{ width: 70, textAlign: 'right' }}>
+                  <div style={{ fontSize: 19, fontWeight: 800, color: band(s.conviction).color }}>{s.conviction}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ fontSize: 11.5, color: c.muted, marginTop: 14, lineHeight: 1.7, padding: '0 4px' }}>
         {he

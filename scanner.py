@@ -1107,7 +1107,7 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
     return picks
 
 
-def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=5):
+def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None):
     """THE SHORTLIST — the two or three names to actually put in front of the boss.
 
     Six lenses is six opinions, and a person still has to turn them into a
@@ -1232,8 +1232,12 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=5):
             "watch": watch,
         })
 
+    # Rank the entire gated list. Two tabs showing the same stocks under two
+    # different scores was the confusing part; one ranked list is not less
+    # information, it is the same information with the ordering made explicit.
     picks.sort(key=lambda x: -x["conviction"])
-    picks = picks[:top_n]
+    if top_n:
+        picks = picks[:top_n]
     if picks:
         print(f"  Shortlist — the {len(picks)} highest-conviction ideas:")
         for i, p in enumerate(picks, 1):
@@ -3581,12 +3585,12 @@ def main():
     # 10. ENTRY ZONE - the buy list. Pure arithmetic: no AI, no API key, so
     # this tab keeps working even when the Anthropic balance is empty.
     print("\nComputing Entry Zone (confirmed uptrend, not yet extended)...")
-    entry_zone = _safe("entry zone", lambda: compute_entry_zone(price_data, names, target=15, themes=themes))
+    entry_zone = _safe("entry zone", lambda: compute_entry_zone(price_data, names, target=18, themes=themes))
 
     # 10b. THE SHORTLIST - six lenses is six opinions; this is the decision.
     print("\nBuilding the Shortlist (the highest-conviction ideas)...")
     shortlist = _safe("shortlist", lambda: compute_shortlist(
-        entry_zone, rising_stars, radar, trend, themes, top_n=5))
+        entry_zone, rising_stars, radar, trend, themes))
 
     # 11. THE VERDICT - the analyst's real written opinion
     print("\nGenerating The Verdict (AI analyst's real opinion)...")
