@@ -3453,8 +3453,8 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
         padding: '12px 24px', fontSize: 11.5, color: c.muted, lineHeight: 1.7,
       }}>
         {he
-          ? 'הקונביקציה מורכבת מ: נקודת הכניסה (30) · הובלת השוק (25) · התמה מאחוריה (20) · איכות הטיפוס (15) · אישור בין עדשות (10), בתוספת התאמה לפי פונדמנטלס ויעדי אנליסטים. המשקלות נגזרות ממה ש-109 הבחירות שנבדקו קדימה באמת מדדו.'
-          : 'Conviction = entry quality (30) · market leadership (25) · the theme behind it (20) · quality of climb (15) · cross-lens confirmation (10), adjusted for fundamentals and analyst targets. Weights come from what our 109 forward-tested picks measured.'}
+          ? 'הקונביקציה מורכבת מנקודת הכניסה (30), העסק עצמו (20), התמה מאחוריה (18), הובלת השוק (16), מקום לגדול (14), איכות הטיפוס (10) ואישור בין עדשות (8), בתוספת התאמה לפי יעדי אנליסטים.'
+          : 'Conviction = entry quality (30) · the business itself (20) · the theme behind it (18) · market leadership (16) · room to run (14) · quality of climb (10) · cross-lens confirmation (8), adjusted for analyst targets. Weights come from what our 109 forward-tested picks measured.'}
       </div>
 
       {/* Need chains — the layer above industries */}
