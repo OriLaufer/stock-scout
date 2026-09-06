@@ -224,10 +224,12 @@ export async function getServerSideProps() {
         _rising: parsed.rising_stars || null,
         _entry: parsed.entry_zone || null,
         _themes: parsed.themes || null,
+        _short: parsed.shortlist || null,
+        _needs: parsed.needs || null,
         _verdict: parsed.verdict || null,
       }
     } catch {
-      return { week_label: scan.week_label, created_at: scan.created_at, stocks: [], bonus: [], backtest: null, _trend: null, _radar: null, _rising: null, _entry: null, _themes: null, _verdict: null }
+      return { week_label: scan.week_label, created_at: scan.created_at, stocks: [], bonus: [], backtest: null, _trend: null, _radar: null, _rising: null, _entry: null, _themes: null, _short: null, _needs: null, _verdict: null }
     }
   })
 
@@ -391,6 +393,8 @@ export async function getServerSideProps() {
   const risingStars = (unique.find(s => s._rising)?._rising) || null
   const entryZone = (unique.find(s => s._entry)?._entry) || null
   const themes = (unique.find(s => s._themes)?._themes) || null
+  const shortlist = (unique.find(s => s._short)?._short) || null
+  const needs = (unique.find(s => s._needs)?._needs) || null
   const verdict = (unique.find(s => s._verdict)?._verdict) || null
 
   // Ship LEAN scans — only what the client renders (week, date, stocks, bonus).
@@ -398,13 +402,13 @@ export async function getServerSideProps() {
   // scalable as scans accumulate week after week.
   const scansLean = unique.map(s => ({ week_label: s.week_label, created_at: s.created_at, stocks: s.stocks, bonus: s.bonus }))
 
-  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, themes, verdict, dbError } }
+  return { props: { scans: scansLean, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, themes, shortlist, needs, verdict, dbError } }
 }
 
-export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, themes, verdict, dbError }) {
+export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfFame, weekLabelsOldestFirst, buzzByTicker, winRateByTicker, backtest, trend, radar, risingStars, entryZone, themes, shortlist, needs, verdict, dbError }) {
   const [dark, setDark] = useState(false)
   const [lang, setLang] = useState('he')
-  const [tab, setTab] = useState('weekly')
+  const [tab, setTab] = useState('short')
   const [selectedWeek, setSelectedWeek] = useState(0)
   const [openStock, setOpenStock] = useState(null)
   const [marketCapInput, setMarketCapInput] = useState('250')
@@ -601,6 +605,7 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
         {/* Tab switcher */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
           {[
+            ['short',     `⭐ ${lang === 'he' ? 'הרשימה הקצרה' : 'Shortlist'}`],
             ['weekly',    `📊 ${lang === 'he' ? 'שבועי' : 'Weekly'}`],
             ['themes',    `🧭 ${lang === 'he' ? 'תמות' : 'Themes'}`],
             ['entry',     `🎯 ${lang === 'he' ? 'אזור כניסה' : 'Entry Zone'}`],
@@ -643,6 +648,10 @@ export default function Dashboard({ scans, appearanceCounts, totalScans, hallOfF
 
         {tab === 'portfolio' && (
           <PortfolioWatch journal={journal} weeklyHistoryByTicker={weeklyHistoryByTicker} c={c} dark={dark} lang={lang} />
+        )}
+
+        {tab === 'short' && (
+          <Shortlist shortlist={shortlist} needs={needs} c={c} dark={dark} lang={lang} />
         )}
 
         {tab === 'themes' && (
@@ -3333,6 +3342,231 @@ function LiveMove({ move, c, he }) {
     }}>
       {bad ? '⚠️' : ''} {move.pct > 0 ? '+' : ''}{move.pct}% {he ? 'מאז הסריקה' : 'since scan'} · ${move.now}
     </span>
+  )
+}
+
+// ===================== THE SHORTLIST =====================
+// Six lenses is six opinions, and a person still has to turn them into a
+// decision. That gap is where a good tool stops being a good investment. This
+// tab is the answer to the only question that ever mattered here: which two or
+// three names do we actually put money behind, and why.
+
+function Shortlist({ shortlist, needs, c, dark, lang }) {
+  const he = lang === 'he'
+  const [open, setOpen] = useState(shortlist?.[0]?.ticker || null)
+
+  if (!shortlist || shortlist.length === 0) {
+    return (
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 12, padding: 40, textAlign: 'center' }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>⭐</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: c.text, marginBottom: 6 }}>
+          {he ? 'הרשימה הקצרה תיבנה בסריקה הבאה' : 'The shortlist is built on the next scan'}
+        </div>
+        <div style={{ fontSize: 13, color: c.muted }}>
+          {he ? 'הרץ "Full Run & Verify" ב-Actions.' : 'Run "Full Run & Verify" in Actions.'}
+        </div>
+      </div>
+    )
+  }
+
+  const band = (v) => v >= 70 ? { t: he ? 'קונביקציה גבוהה' : 'high conviction', color: '#097c3e' }
+    : v >= 55 ? { t: he ? 'קונביקציה בינונית' : 'medium conviction', color: '#b8860b' }
+    : { t: he ? 'קונביקציה נמוכה' : 'low conviction', color: '#c0662b' }
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{
+        background: `linear-gradient(135deg, ${dark ? '#0a2033' : '#0c2f4a'} 0%, ${dark ? '#124a63' : '#17618a'} 100%)`,
+        borderRadius: '14px 14px 0 0', padding: '26px 28px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 34 }}>⭐</span>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 23, fontWeight: 800, color: 'white', letterSpacing: '-.02em' }}>
+              {he ? 'הרשימה הקצרה' : 'The Shortlist'}
+            </div>
+            <div style={{ fontSize: 13, color: '#a9cbe0', marginTop: 4 }}>
+              {he
+                ? 'כל העדשות של המערכת מתכנסות כאן לתשובה אחת מדורגת. רק מועמדות שכבר עברו את שערי אזור הכניסה — אף אחת מהן לא מתוחה ולא קפיצתית.'
+                : 'Every lens converges here into one ranked answer. Only candidates that already passed the Entry Zone gates — none extended, none spiky.'}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* How conviction is built — stated openly, because a score you cannot audit is a score you cannot trust */}
+      <div style={{
+        background: dark ? '#0e1a24' : '#f2f8fc', borderInline: `1px solid ${c.border}`,
+        padding: '12px 24px', fontSize: 11.5, color: c.muted, lineHeight: 1.7,
+      }}>
+        {he
+          ? 'הקונביקציה מורכבת מ: נקודת הכניסה (30) · הובלת השוק (25) · התמה מאחוריה (20) · איכות הטיפוס (15) · אישור בין עדשות (10), בתוספת התאמה לפי פונדמנטלס ויעדי אנליסטים. המשקלות נגזרות ממה ש-109 הבחירות שנבדקו קדימה באמת מדדו.'
+          : 'Conviction = entry quality (30) · market leadership (25) · the theme behind it (20) · quality of climb (15) · cross-lens confirmation (10), adjusted for fundamentals and analyst targets. Weights come from what our 109 forward-tested picks measured.'}
+      </div>
+
+      {/* Need chains — the layer above industries */}
+      {needs && needs.length > 0 && (
+        <div style={{
+          background: dark ? '#1a1206' : '#fffaf3', borderInline: `1px solid ${c.border}`,
+          borderTop: `1px solid ${c.border}`, padding: '14px 24px',
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: '#b8641a', marginBottom: 8 }}>
+            🔗 {he ? 'צרכים שמזיזים כמה תעשיות יחד' : 'Needs moving several industries at once'}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {needs.slice(0, 4).map(n => (
+              <div key={n.need} style={{
+                background: c.card, border: `1px solid ${c.border}`, borderRadius: 8,
+                padding: '9px 13px', fontSize: 11.5,
+              }}>
+                <div style={{ fontWeight: 800, color: c.text }}>{n.need}</div>
+                <div style={{ color: c.muted, marginTop: 3 }}>
+                  {n.industry_count} {he ? 'תעשיות' : 'industries'} · {n.member_count} {he ? 'חברות' : 'companies'} ·{' '}
+                  <span style={{ color: '#097c3e', fontWeight: 700 }}>+{n.median_rs_vs_spy}%</span>
+                  {n.accelerating_industries > 0 && <span style={{ color: '#097c3e' }}> · 🚀 {n.accelerating_industries}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: '0 0 14px 14px', overflow: 'hidden' }}>
+        {shortlist.map((s, i) => {
+          const b = band(s.conviction)
+          const isOpen = open === s.ticker
+          const medals = ['🥇', '🥈', '🥉']
+          return (
+            <div key={s.ticker}>
+              <div onClick={() => setOpen(isOpen ? null : s.ticker)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 13, padding: '16px 22px',
+                  borderBottom: `1px solid ${c.border}`, cursor: 'pointer',
+                  borderInlineStart: `4px solid ${i < 3 ? b.color : 'transparent'}`,
+                  background: isOpen ? (dark ? '#0e1a24' : '#f2f8fc')
+                    : i % 2 === 0 ? c.card : (dark ? '#141428' : '#fafafa'),
+                }}>
+                <div style={{ width: 34, textAlign: 'center', fontSize: i < 3 ? 22 : 14, fontWeight: 800, color: c.muted }}>
+                  {i < 3 ? medals[i] : `#${i + 1}`}
+                </div>
+
+                <div style={{ width: 200, flexShrink: 0 }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: c.text }}>{s.ticker}</div>
+                  <div style={{ fontSize: 11, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 195 }}>
+                    {s.name}
+                  </div>
+                  {s.theme && (
+                    <div style={{ fontSize: 9.5, fontWeight: 700, color: '#b8641a', marginTop: 3 }}>
+                      🧭 {s.theme.industry}{s.theme.trajectory === 'accelerating' ? ' 🚀' : ''}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ flex: 1, minWidth: 80, textAlign: 'center' }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>
+                    {s.pct_above_50dma > 0 ? '+' : ''}{s.pct_above_50dma}%
+                  </div>
+                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'מעל ממוצע 50' : 'above 50dma'}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80, textAlign: 'center' }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: '#097c3e' }}>+{s.rs_vs_spy_6mo}%</div>
+                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'מול השוק' : 'vs market'}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 74, textAlign: 'center' }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>{s.lenses?.length || 1}</div>
+                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'עדשות' : 'lenses'}</div>
+                </div>
+
+                <div style={{ textAlign: 'right', minWidth: 96 }}>
+                  <div style={{ fontSize: 25, fontWeight: 800, color: b.color, lineHeight: 1 }}>{s.conviction}</div>
+                  <div style={{ fontSize: 9, color: b.color, marginTop: 3, fontWeight: 700 }}>{b.t}</div>
+                </div>
+                <span style={{ fontSize: 13, color: c.muted }}>{isOpen ? '▲' : '▼'}</span>
+              </div>
+
+              {isOpen && (
+                <div style={{ background: dark ? '#0a1620' : '#f6fafd', padding: '20px 26px', borderBottom: `1px solid ${c.border}` }}>
+                  {/* The case for it */}
+                  <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 9 }}>
+                    ✅ {he ? 'למה היא כאן' : 'the case'}
+                  </div>
+                  <ul style={{ margin: '0 0 18px', paddingInlineStart: 20 }}>
+                    {(s.why || []).map((w, k) => (
+                      <li key={k} style={{ fontSize: 13.5, color: c.text, marginBottom: 6, lineHeight: 1.65 }}>{w}</li>
+                    ))}
+                  </ul>
+
+                  {/* And against it — a list that only flatters itself is worthless */}
+                  {s.watch && s.watch.length > 0 && (
+                    <>
+                      <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 9 }}>
+                        ⚠️ {he ? 'מה שצריך להטריד' : 'what should worry you'}
+                      </div>
+                      <ul style={{ margin: '0 0 18px', paddingInlineStart: 20 }}>
+                        {s.watch.map((w, k) => (
+                          <li key={k} style={{ fontSize: 13.5, color: '#c0662b', marginBottom: 6, lineHeight: 1.65 }}>{w}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+
+                  {/* Numbers */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(118px,1fr))', gap: 8, marginBottom: 16 }}>
+                    {[
+                      [he ? 'מחיר' : 'price', `$${s.price}`, null],
+                      [he ? 'שווי שוק' : 'market cap', `$${((s.market_cap || 0) / 1e9).toFixed(2)}B`, null],
+                      [he ? 'צמיחת הכנסות' : 'revenue growth',
+                        s.revenue_growth_pct != null ? `${s.revenue_growth_pct > 0 ? '+' : ''}${s.revenue_growth_pct}%` : '—',
+                        s.revenue_growth_pct != null ? (s.revenue_growth_pct >= 0 ? '#097c3e' : '#c0392b') : null],
+                      [he ? 'מרווח ליעד' : 'to analyst target',
+                        s.target_upside_pct != null ? `${s.target_upside_pct > 0 ? '+' : ''}${s.target_upside_pct}%` : '—',
+                        s.target_upside_pct != null ? (s.target_upside_pct >= 0 ? '#097c3e' : '#c0392b') : null],
+                      [he ? 'שבועות ירוקים' : 'green weeks', `${s.positive_weeks_pct}%`, null],
+                      [he ? 'שבוע הכי גדול' : 'biggest week', `${s.max_week_pct}%`, null],
+                    ].map(([lab, val, col]) => (
+                      <div key={lab} style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 8, padding: '10px 12px' }}>
+                        <div style={{ fontSize: 9.5, color: c.muted, marginBottom: 4 }}>{lab}</div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: col || c.text }}>{val}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Risk levels, decided before the trade */}
+                  {s.plan && (
+                    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 8, padding: '14px 16px' }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: c.text, marginBottom: 10 }}>
+                        📐 {he ? 'רמות שנקבעות לפני הקנייה' : 'levels decided before the trade'}
+                      </div>
+                      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                        {[
+                          [he ? 'סטופ' : 'stop', `$${s.plan.stop_price}`, `${s.plan.stop_pct}%`, '#c0392b'],
+                          [he ? 'יעד 1' : 'target 1', `$${s.plan.target_1}`, `+${s.plan.target_1_pct}%`, '#097c3e'],
+                          [he ? 'יעד 2' : 'target 2', `$${s.plan.target_2}`, `+${s.plan.target_2_pct}%`, '#097c3e'],
+                          [he ? 'התזה נשברת' : 'thesis breaks', `$${s.plan.invalidation_price}`, he ? 'ממוצע 50' : '50dma', c.text],
+                          [he ? 'גודל ב-1% סיכון' : 'size at 1% risk', `${s.plan.position_pct_at_1pct_risk}%`, he ? 'מהתיק' : 'of portfolio', c.text],
+                        ].map(([lab, v, sub, col]) => (
+                          <div key={lab}>
+                            <div style={{ fontSize: 9.5, color: c.muted }}>{lab}</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: col }}>{v}</div>
+                            <div style={{ fontSize: 10, color: c.muted }}>{sub}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ fontSize: 11.5, color: c.muted, marginTop: 14, lineHeight: 1.7, padding: '0 4px' }}>
+        {he
+          ? '⚠️ מחקר לתמיכה בהחלטה, לא ייעוץ השקעות. הרמות מחושבות מכלל קבוע; גודל החשיפה וההחלטה הם שלך.'
+          : '⚠️ Decision-support research, not investment advice. Levels are computed from a fixed rule; exposure and the decision are yours.'}
+      </div>
+    </div>
   )
 }
 

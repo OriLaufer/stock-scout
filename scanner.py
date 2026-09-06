@@ -696,6 +696,103 @@ def _entry_reason(d, parts, ext, rs, scan_appearances):
     return txt
 
 
+# ============== NEED CHAINS ==============
+# The insight this encodes: a stock does not run for hundreds of percent because
+# of its chart — it runs because a NEED appeared underneath it. SanDisk ran on an
+# AI-driven memory shortage. But that same AI need also lifted power producers,
+# turbine makers, transformer suppliers, cooling and uranium — DIFFERENT
+# industries serving ONE need. Grouping by industry alone can never connect them.
+#
+# This is a small static map (industries -> needs), not per-ticker tagging: the
+# industry comes from the data, and roughly 40 lines of mapping turn it into the
+# thing we actually care about. It is the one place where human judgement about
+# how the world works is worth more than any amount of price history.
+NEED_CHAINS = {
+    "AI - מחשוב ושבבים": [
+        "semiconductors", "semiconductor equipment", "semiconductor memory",
+        "computer hardware", "electronic components", "information technology services",
+        "communication equipment", "scientific & technical instruments",
+    ],
+    "AI - חשמל ותשתית": [
+        "utilities - regulated electric", "utilities - independent power producers",
+        "utilities - renewable", "utilities - diversified", "specialty industrial machinery",
+        "electrical equipment & parts", "engineering & construction", "uranium",
+        "solar", "oil & gas midstream", "building products & equipment",
+    ],
+    "ביוטק ותרופות": [
+        "biotechnology", "drug manufacturers - specialty & generic",
+        "drug manufacturers - general", "diagnostics & research", "medical devices",
+        "medical instruments & supplies", "pharmaceutical retailers",
+    ],
+    "בריאות דיגיטלית": [
+        "health information services", "healthcare plans", "medical care facilities",
+        "health care equipment & services",
+    ],
+    "תוכנה וענן": [
+        "software - infrastructure", "software - application", "internet content & information",
+    ],
+    "פינטק ותשלומים": [
+        "credit services", "capital markets", "financial data & stock exchanges",
+        "insurance brokers", "banks - regional", "asset management",
+    ],
+    "ביטחון וחלל": [
+        "aerospace & defense", "conglomerates",
+    ],
+    "אנרגיה וסחורות": [
+        "oil & gas e&p", "oil & gas equipment & services", "oil & gas refining & marketing",
+        "gold", "silver", "copper", "other industrial metals & mining", "steel", "coking coal",
+    ],
+}
+_INDUSTRY_TO_NEED = {ind: need for need, inds in NEED_CHAINS.items() for ind in inds}
+
+
+def compute_need_chains(themes):
+    """Roll the industry themes up into the NEEDS they serve.
+
+    A need is only interesting when SEVERAL of its industries are strong at once
+    — that is the shape of a real structural shift rather than one hot corner."""
+    if not themes:
+        return []
+    buckets = {}
+    for t in themes:
+        need = _INDUSTRY_TO_NEED.get((t.get("industry") or "").strip().lower())
+        if not need:
+            continue
+        b = buckets.setdefault(need, {"need": need, "industries": [], "members": 0,
+                                      "buyable": 0, "rs": [], "accelerating": 0})
+        b["industries"].append(t["industry"])
+        b["members"] += t["member_count"]
+        b["buyable"] += t.get("buyable_now") or 0
+        b["rs"].append(t["median_rs_vs_spy"])
+        if t.get("trajectory") == "accelerating":
+            b["accelerating"] += 1
+
+    out = []
+    for b in buckets.values():
+        if len(b["industries"]) < 2:      # one industry is a theme, not a need
+            continue
+        rs = sorted(b["rs"])
+        out.append({
+            "need": b["need"],
+            "industry_count": len(b["industries"]),
+            "industries": b["industries"],
+            "member_count": b["members"],
+            "buyable_now": b["buyable"],
+            "median_rs_vs_spy": round(rs[len(rs) // 2], 1),
+            "accelerating_industries": b["accelerating"],
+            "breadth_score": round(min(100, len(b["industries"]) * 14
+                                       + min(30, b["members"] * 0.5)
+                                       + b["accelerating"] * 10), 1),
+        })
+    out.sort(key=lambda x: -x["breadth_score"])
+    if out:
+        print("  Need chains (several industries moving on one underlying need):")
+        for n in out:
+            print(f"    {n['need']:26} {n['industry_count']} industries, {n['member_count']} companies, "
+                  f"median RS {n['median_rs_vs_spy']:+.0f}%, {n['accelerating_industries']} accelerating")
+    return out
+
+
 def _load_industry_cache():
     """Carry the ticker->industry map forward between scans.
 
@@ -950,11 +1047,22 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
             continue
 
         sector, name = "", names_dict.get(t, t)
+        fund = {}
         try:
             time.sleep(0.6)
             info = yf.Ticker(t).info
             name = info.get("longName") or info.get("shortName") or name
             sector = info.get("sector") or ""
+            # We are already paying for this call — take the fundamentals too.
+            # Whether the business behind the chart is actually growing is the
+            # difference between a real leader and a squeeze.
+            rg = info.get("revenueGrowth")
+            fund["revenue_growth_pct"] = round(rg * 100, 1) if rg is not None else None
+            fund["target_mean"] = info.get("targetMeanPrice")
+            fund["analyst_count"] = info.get("numberOfAnalystOpinions")
+            fund["short_pct"] = (round(info.get("shortPercentOfFloat") * 100, 1)
+                                 if info.get("shortPercentOfFloat") is not None else None)
+            fund["industry"] = info.get("industry") or ""
         except Exception:
             pass
         if len(name) > 60:
@@ -974,6 +1082,12 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
             "vol_ratio": d.get("vol_ratio"),
             "this_week_pct": d.get("change_pct"),
             "plan": _trade_plan(d),
+            "revenue_growth_pct": fund.get("revenue_growth_pct"),
+            "target_mean": fund.get("target_mean"),
+            "analyst_count": fund.get("analyst_count"),
+            "short_pct": fund.get("short_pct"),
+            "target_upside_pct": (round((fund["target_mean"] - d["price"]) / d["price"] * 100, 1)
+                                  if fund.get("target_mean") and d.get("price") else None),
             "theme": ({"industry": th["industry"], "member_count": th["member_count"],
                        "trajectory": th["trajectory"], "trajectory_he": th["trajectory_he"],
                        "stage": th["stage"], "median_rs_vs_spy": th["median_rs_vs_spy"]}
@@ -986,6 +1100,143 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
               f"RS {d['ret_6mo']-spy_6mo:+.0f}% | ${mc/1e9:.2f}B")
 
     print(f"Entry Zone: {len(picks)} stocks in the buy zone")
+    return picks
+
+
+def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=5):
+    """THE SHORTLIST — the two or three names to actually put in front of the boss.
+
+    Six lenses is six opinions, and a person still has to turn them into a
+    decision. That gap is where a good tool stops being a good investment. This
+    collapses everything into one ranked answer, built only from candidates that
+    already passed the Entry Zone gates, so nothing here is extended or spiky.
+
+    Conviction is weighted by what our own 109 forward-tested picks actually
+    measured, not by what sounds impressive:
+      entry quality  30 - where in the move it is. The single biggest driver of
+                          whether money was made, so it carries the most weight.
+      leadership     25 - is it genuinely beating the market
+      theme          20 - is there a NEED behind it. SanDisk ran on an AI memory
+                          shortage; a stock with a reason outlasts one without.
+      climb quality  15 - accumulation rather than a pump
+      confirmation   10 - how many independent lenses arrived at it separately
+    """
+    if not entry_zone:
+        print("Shortlist: no entry-zone candidates")
+        return []
+
+    rs_by = {x["ticker"]: x for x in (rising_stars or [])}
+    radar_by = {x["ticker"]: x for x in (radar or [])}
+    trend_by = {x["ticker"]: x for x in (trend or [])}
+
+    picks = []
+    for e in entry_zone:
+        t = e["ticker"]
+        ext = e.get("pct_above_50dma")
+        parts, why, watch = {}, [], []
+
+        # --- entry quality (0-30): the money-maker ---
+        if ext is None:
+            parts["entry"] = 0
+        elif ext <= 12:
+            parts["entry"] = 30
+            why.append(f"צמודה לממוצע 50 ({ext:+.0f}%) — הסטופ קצר והסיכון לעסקה קטן")
+        elif ext <= 20:
+            parts["entry"] = 26
+            why.append(f"{ext:+.0f}% מעל ממוצע 50 — עדיין בתוך אזור הכניסה")
+        elif ext <= 30:
+            parts["entry"] = 17
+            watch.append(f"{ext:+.0f}% מעל הממוצע — הסטופ יוצא רחוק יותר")
+        else:
+            parts["entry"] = 8
+            watch.append(f"{ext:+.0f}% מעל הממוצע — בקצה העליון של מה שהמסננת מרשה")
+
+        # --- leadership (0-25) ---
+        rs = e.get("rs_vs_spy_6mo") or 0
+        parts["leadership"] = round(min(25, max(0, rs / 6)), 1)
+        if rs >= 150:
+            why.append(f"מובילה את השוק ב-{rs:+.0f}% בחצי שנה — מהחזקות בכל השוק")
+        elif rs >= 80:
+            why.append(f"עוקפת את השוק ב-{rs:+.0f}% בחצי שנה")
+
+        # --- theme: is there a need behind it (0-20) ---
+        th = e.get("theme")
+        if th:
+            base = min(14, 4 + th["member_count"] * 0.4)
+            if th.get("trajectory") == "accelerating":
+                base += 6
+                why.append(f"התמה שלה ({th['industry']}) מתלקחת עכשיו — {th['member_count']} חברות מהתעשייה מובילות את השוק יחד")
+            else:
+                why.append(f"נתמכת בתמה חיה: {th['member_count']} חברות מ-{th['industry']} מובילות יחד")
+            parts["theme"] = round(min(20, base), 1)
+        else:
+            parts["theme"] = 0
+            watch.append("אין תמה מזוהה מאחוריה — היא עולה לבדה, בלי סיפור שמרים ענף שלם")
+
+        # --- quality of the climb (0-15) ---
+        pw = e.get("positive_weeks_pct") or 0
+        mw = e.get("max_week_pct") or 0
+        q = min(9, max(0, (pw - 40) / 4.0)) + (6 if mw <= 20 else 3 if mw <= 35 else 0)
+        parts["climb"] = round(q, 1)
+        if pw >= 68 and mw <= 25:
+            why.append(f"{pw}% שבועות ירוקים והשבוע הגדול ביותר רק {mw}% — צבירה שקטה, לא פאמפ")
+        elif mw > 40:
+            watch.append(f"היה לה שבוע של {mw}% — חלק מהעלייה מגיע מקפיצה")
+
+        # --- confirmation: independent lenses that found it too (0-10) ---
+        lenses = ["אזור כניסה"]
+        if t in rs_by: lenses.append("כוכבים עולים")
+        if t in radar_by: lenses.append("ראדאר")
+        if t in trend_by: lenses.append("המגמה")
+        parts["confirmation"] = min(10, (len(lenses) - 1) * 4)
+        if len(lenses) >= 3:
+            why.append(f"אותרה במקביל ב-{len(lenses)} עדשות שונות של המערכת ({', '.join(lenses)})")
+
+        # --- fundamentals: colour the case, and flag when they contradict it ---
+        rg = e.get("revenue_growth_pct")
+        if rg is not None:
+            if rg >= 30:
+                why.append(f"ההכנסות צומחות {rg:+.0f}% — יש עסק אמיתי מאחורי הגרף")
+                parts["fundamentals_bonus"] = 5
+            elif rg < 0:
+                watch.append(f"ההכנסות יורדות {rg:.0f}% — הגרף עולה בזמן שהעסק מתכווץ")
+                parts["fundamentals_bonus"] = -6
+            else:
+                parts["fundamentals_bonus"] = 1
+        up = e.get("target_upside_pct")
+        if up is not None and (e.get("analyst_count") or 0) >= 3:
+            if up >= 15:
+                why.append(f"עוד {up:+.0f}% עד יעד האנליסטים הממוצע ({e.get('analyst_count')} מכסים)")
+                parts["analyst_bonus"] = 4
+            elif up <= -10:
+                watch.append(f"המחיר כבר {abs(up):.0f}% מעל יעד האנליסטים — הרחוב חושב שהיא מתומחרת מלא")
+                parts["analyst_bonus"] = -5
+        if e.get("short_pct") and e["short_pct"] >= 15:
+            watch.append(f"{e['short_pct']}% מהמניות בשורט — חלק מהעלייה עשוי להיות סגירת שורטים")
+
+        conviction = round(max(0, min(100, sum(parts.values()))), 1)
+        picks.append({
+            **{k: e.get(k) for k in (
+                "ticker", "name", "sector", "price", "market_cap", "pct_above_50dma",
+                "pct_above_200dma", "rs_vs_spy_6mo", "positive_weeks_pct", "max_week_pct",
+                "vol_ratio", "ret_1mo", "ret_3mo", "ret_6mo", "plan", "theme",
+                "revenue_growth_pct", "target_upside_pct", "analyst_count", "short_pct")},
+            "conviction": conviction,
+            "conviction_breakdown": parts,
+            "lenses": lenses,
+            "why": why,
+            "watch": watch,
+        })
+
+    picks.sort(key=lambda x: -x["conviction"])
+    picks = picks[:top_n]
+    if picks:
+        print(f"  Shortlist — the {len(picks)} highest-conviction ideas:")
+        for i, p in enumerate(picks, 1):
+            th = p.get("theme")
+            print(f"    #{i} {p['ticker']:6} conviction {p['conviction']:5} | "
+                  f"{p['pct_above_50dma']:+5.0f}% vs 50dma | RS {p['rs_vs_spy_6mo']:+6.0f}% | "
+                  f"{len(p['lenses'])} lenses | theme: {th['industry'] if th else 'none'}")
     return picks
 
 
@@ -3315,18 +3566,24 @@ def main():
     print("\nComputing Themes (industry clusters among the market leaders)...")
     _themes = _safe("themes", lambda: compute_themes(price_data, names, pool=300))
     themes, industry_map = (_themes if _themes else ([], {}))
+    needs = _safe("need chains", lambda: compute_need_chains(themes)) or []
 
     # 10. ENTRY ZONE - the buy list. Pure arithmetic: no AI, no API key, so
     # this tab keeps working even when the Anthropic balance is empty.
     print("\nComputing Entry Zone (confirmed uptrend, not yet extended)...")
     entry_zone = _safe("entry zone", lambda: compute_entry_zone(price_data, names, target=15, themes=themes))
 
+    # 10b. THE SHORTLIST - six lenses is six opinions; this is the decision.
+    print("\nBuilding the Shortlist (the highest-conviction ideas)...")
+    shortlist = _safe("shortlist", lambda: compute_shortlist(
+        entry_zone, rising_stars, radar, trend, themes, top_n=5))
+
     # 11. THE VERDICT - the analyst's real written opinion
     print("\nGenerating The Verdict (AI analyst's real opinion)...")
     verdict = _safe("verdict", lambda: generate_ai_verdict(top_picks, trend, radar, rising_stars))
 
     # Save trend + radar + rising_stars + verdict into the just-saved row
-    if trend or radar or rising_stars or verdict or entry_zone or themes:
+    if trend or radar or rising_stars or verdict or entry_zone or themes or shortlist or needs:
         try:
             r = supabase.table("weekly_scans").select("stocks_json").eq("week_label", week_label).execute()
             if r.data:
@@ -3336,10 +3593,12 @@ def main():
                 if rising_stars: pl["rising_stars"] = rising_stars
                 if entry_zone: pl["entry_zone"] = entry_zone
                 if themes: pl["themes"] = themes
+                if shortlist: pl["shortlist"] = shortlist
+                if needs: pl["needs"] = needs
                 if industry_map: pl["industry_map"] = industry_map
                 if verdict: pl["verdict"] = verdict
                 supabase.table("weekly_scans").update({"stocks_json": safe_json(pl)}).eq("week_label", week_label).execute()
-                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}, entry_zone={len(entry_zone or [])}, themes={len(themes or [])}, verdict={'yes' if verdict else 'no'}.")
+                print(f"  Saved: trend={len(trend or [])}, radar={len(radar or [])}, rising_stars={len(rising_stars or [])}, entry_zone={len(entry_zone or [])}, themes={len(themes or [])}, shortlist={len(shortlist or [])}, verdict={'yes' if verdict else 'no'}.")
         except Exception as e:
             print(f"  Save error: {e}")
 
