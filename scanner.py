@@ -1677,6 +1677,21 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
             watch.append(f"{e['short_pct']}% מהמניות בשורט — חלק מהעלייה עשוי להיות סגירת שורטים")
 
         conviction = round(max(0, min(100, sum(parts.values()))), 1)
+
+        # A SHRINKING BUSINESS CANNOT BE RESCUED BY A GOOD CHART.
+        # Treace ranked 6th of 18 on a strong advance pattern and plenty of room
+        # to grow, while its revenue fell on BOTH horizons — the business score
+        # of -3 was simply outvoted. Points can be traded off against each other;
+        # a company selling less than it did a year ago and less than last
+        # quarter should not out-rank one that is growing, whatever its chart
+        # looks like. Cap it and say so.
+        bq = biz or {}
+        if (bq.get("rev_yoy_pct") is not None and bq["rev_yoy_pct"] < 0
+                and bq.get("rev_qoq_pct") is not None and bq["rev_qoq_pct"] < 0):
+            if conviction > 62:
+                conviction = 62.0
+            watch.append("ההכנסות יורדות גם בשנה וגם ברבעון — הגרף עולה בזמן "
+                         "שהעסק מתכווץ, ולכן הציון מוגבל בתקרה")
         picks.append({
             **{k: e.get(k) for k in (
                 "ticker", "name", "sector", "price", "market_cap", "pct_above_50dma",
