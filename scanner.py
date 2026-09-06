@@ -1157,7 +1157,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
 
         # --- leadership (0-25) ---
         rs = e.get("rs_vs_spy_6mo") or 0
-        parts["leadership"] = round(min(25, max(0, rs / 6)), 1)
+        parts["leadership"] = round(min(20, max(0, rs / 7.5)), 1)
         if rs >= 150:
             why.append(f"מובילה את השוק ב-{rs:+.0f}% בחצי שנה — מהחזקות בכל השוק")
         elif rs >= 80:
@@ -1177,10 +1177,28 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
             parts["theme"] = 0
             watch.append("אין תמה מזוהה מאחוריה — היא עולה לבדה, בלי סיפור שמרים ענף שלם")
 
+        # --- room to run (0-14) ---
+        # The mission is multi-baggers, and size is the single biggest limit on
+        # how far anything can travel: a $12B company doing 5x has to become
+        # $60B, a $370M company only has to reach $1.9B. Leaving this out of the
+        # score quietly ranked the safest, best-covered large caps at the top —
+        # good trades, but not the ones that answer the brief.
+        cap = e.get("market_cap") or 0
+        if   cap and cap < 500e6:  parts["room"] = 14
+        elif cap and cap < 1e9:    parts["room"] = 12
+        elif cap and cap < 3e9:    parts["room"] = 9
+        elif cap and cap < 10e9:   parts["room"] = 5
+        elif cap:                  parts["room"] = 1
+        else:                      parts["room"] = 6
+        if cap and cap < 1e9:
+            why.append(f"שווי שוק ${cap/1e9:.2f} מיליארד — קטנה מספיק כדי שהכפלה תהיה אפשרית, לא רק עלייה")
+        elif cap and cap > 10e9:
+            watch.append(f"שווי שוק ${cap/1e9:.1f} מיליארד — עסקה טובה, אבל גדולה מכדי להכפיל את עצמה כמה פעמים")
+
         # --- quality of the climb (0-15) ---
         pw = e.get("positive_weeks_pct") or 0
         mw = e.get("max_week_pct") or 0
-        q = min(9, max(0, (pw - 40) / 4.0)) + (6 if mw <= 20 else 3 if mw <= 35 else 0)
+        q = min(7, max(0, (pw - 40) / 5.0)) + (5 if mw <= 20 else 3 if mw <= 35 else 0)
         parts["climb"] = round(q, 1)
         if pw >= 68 and mw <= 25:
             why.append(f"{pw}% שבועות ירוקים והשבוע הגדול ביותר רק {mw}% — צבירה שקטה, לא פאמפ")

@@ -3347,6 +3347,50 @@ function LiveMove({ move, c, he }) {
 // tab is the answer to the only question that ever mattered here: which two or
 // three names do we actually put money behind, and why.
 
+// One pick card. Every other tab in the system shows a stock's weekly trend;
+// this one was asking people to judge a name from numbers alone. These stocks
+// are by design absent from our scan history, so the series is fetched live.
+function PickWeeklyBars({ ticker, c, dark, he }) {
+  const [weekly, setWeekly] = useState(null)
+  useEffect(() => {
+    let dead = false
+    fetch('/api/price-history?weeks=13&ticker=' + encodeURIComponent(ticker))
+      .then(r => r.json())
+      .then(d => { if (!dead) setWeekly(d?.weekly || []) })
+      .catch(() => { if (!dead) setWeekly([]) })
+    return () => { dead = true }
+  }, [ticker])
+
+  if (weekly === null) return <div style={{ fontSize: 13, color: c.muted, padding: '10px 0' }}>{he ? 'טוען מגמה…' : 'loading trend…'}</div>
+  if (!weekly.length) return null
+  const max = Math.max(8, ...weekly.map(w => Math.abs(w.change_pct)))
+  return (
+    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 10, padding: '16px 18px', marginBottom: 18 }}>
+      <div style={{ fontSize: 13, color: c.muted, fontWeight: 700, marginBottom: 12 }}>
+        📅 {he ? 'המגמה השבועית — 13 שבועות אחרונים' : 'Weekly trend — last 13 weeks'}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 78 }}>
+        {weekly.map((w, i) => {
+          const up = w.change_pct >= 0
+          return (
+            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: up ? '#0a8f47' : '#c0392b' }}>
+                {up ? '+' : ''}{Math.round(w.change_pct)}%
+              </span>
+              <div title={`${w.week}: ${w.change_pct}%`} style={{
+                width: '100%', maxWidth: 30,
+                height: Math.max(3, (Math.abs(w.change_pct) / max) * 44),
+                background: up ? '#0a8f47' : '#c0392b', borderRadius: 3,
+              }} />
+              <span style={{ fontSize: 10, color: c.muted }}>{w.week}</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
   const he = lang === 'he'
   const [open, setOpen] = useState(shortlist?.[0]?.ticker || null)
@@ -3449,7 +3493,7 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
             <div key={s.ticker}>
               <div onClick={() => setOpen(isOpen ? null : s.ticker)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 13, padding: '16px 22px',
+                  display: 'flex', alignItems: 'center', gap: 15, padding: '20px 24px',
                   borderBottom: `1px solid ${c.border}`, cursor: 'pointer',
                   borderInlineStart: `4px solid ${i < 3 ? b.color : 'transparent'}`,
                   background: isOpen ? (dark ? '#0e1a24' : '#f2f8fc')
@@ -3459,61 +3503,65 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
                   {i < 3 ? medals[i] : `#${i + 1}`}
                 </div>
 
-                <div style={{ width: 200, flexShrink: 0 }}>
-                  <div style={{ fontSize: 17, fontWeight: 800, color: c.text }}>{s.ticker}</div>
-                  <div style={{ fontSize: 11, color: c.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 195 }}>
+                <div style={{ width: 218, flexShrink: 0 }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: c.text }}>{s.ticker}</div>
+                  <div style={{ fontSize: 13, color: c.muted, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 212 }}>
                     {s.name}
                   </div>
                   {s.theme && (
-                    <div style={{ fontSize: 9.5, fontWeight: 700, color: '#b8641a', marginTop: 3 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#b8641a', marginTop: 5 }}>
                       🧭 {s.theme.industry}{s.theme.trajectory === 'accelerating' ? ' 🚀' : ''}
                     </div>
                   )}
                 </div>
 
-                <div style={{ flex: 1, minWidth: 80, textAlign: 'center' }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>
+                <div style={{ flex: 1, minWidth: 92, textAlign: 'center' }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: c.text }}>
                     {s.pct_above_50dma > 0 ? '+' : ''}{s.pct_above_50dma}%
                   </div>
-                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'מעל ממוצע 50' : 'above 50dma'}</div>
+                  <div style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>{he ? 'מעל ממוצע 50' : 'above 50dma'}</div>
                 </div>
-                <div style={{ flex: 1, minWidth: 80, textAlign: 'center' }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: '#097c3e' }}>+{s.rs_vs_spy_6mo}%</div>
-                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'מול השוק' : 'vs market'}</div>
+                <div style={{ flex: 1, minWidth: 92, textAlign: 'center' }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: '#0a8f47' }}>+{s.rs_vs_spy_6mo}%</div>
+                  <div style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>{he ? 'מול השוק' : 'vs market'}</div>
                 </div>
-                <div style={{ flex: 1, minWidth: 74, textAlign: 'center' }}>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>{s.lenses?.length || 1}</div>
-                  <div style={{ fontSize: 9, color: c.muted }}>{he ? 'עדשות' : 'lenses'}</div>
+                <div style={{ flex: 1, minWidth: 96, textAlign: 'center' }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: (s.market_cap || 0) < 2e9 ? '#0a8f47' : c.text }}>
+                    ${((s.market_cap || 0) / 1e9).toFixed(2)}B
+                  </div>
+                  <div style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>{he ? 'שווי שוק' : 'market cap'}</div>
                 </div>
 
                 <div style={{ textAlign: 'right', minWidth: 96 }}>
-                  <div style={{ fontSize: 25, fontWeight: 800, color: b.color, lineHeight: 1 }}>{s.conviction}</div>
-                  <div style={{ fontSize: 9, color: b.color, marginTop: 3, fontWeight: 700 }}>{b.t}</div>
+                  <div style={{ fontSize: 30, fontWeight: 800, color: b.color, lineHeight: 1 }}>{s.conviction}</div>
+                  <div style={{ fontSize: 12, color: b.color, marginTop: 5, fontWeight: 700 }}>{b.t}</div>
                 </div>
                 <span style={{ fontSize: 13, color: c.muted }}>{isOpen ? '▲' : '▼'}</span>
               </div>
 
               {isOpen && (
                 <div style={{ background: dark ? '#0a1620' : '#f6fafd', padding: '20px 26px', borderBottom: `1px solid ${c.border}` }}>
+                  <PickWeeklyBars ticker={s.ticker} c={c} dark={dark} he={he} />
+
                   {/* The case for it */}
-                  <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 9 }}>
+                  <div style={{ fontSize: 14, color: c.text, fontWeight: 800, marginBottom: 11 }}>
                     ✅ {he ? 'למה היא כאן' : 'the case'}
                   </div>
                   <ul style={{ margin: '0 0 18px', paddingInlineStart: 20 }}>
                     {(s.why || []).map((w, k) => (
-                      <li key={k} style={{ fontSize: 13.5, color: c.text, marginBottom: 6, lineHeight: 1.65 }}>{w}</li>
+                      <li key={k} style={{ fontSize: 15.5, color: c.text, marginBottom: 8, lineHeight: 1.75 }}>{w}</li>
                     ))}
                   </ul>
 
                   {/* And against it — a list that only flatters itself is worthless */}
                   {s.watch && s.watch.length > 0 && (
                     <>
-                      <div style={{ fontSize: 11, color: c.muted, textTransform: 'uppercase', fontWeight: 700, letterSpacing: '.06em', marginBottom: 9 }}>
+                      <div style={{ fontSize: 14, color: c.text, fontWeight: 800, marginBottom: 11 }}>
                         ⚠️ {he ? 'מה שצריך להטריד' : 'what should worry you'}
                       </div>
                       <ul style={{ margin: '0 0 18px', paddingInlineStart: 20 }}>
                         {s.watch.map((w, k) => (
-                          <li key={k} style={{ fontSize: 13.5, color: '#c0662b', marginBottom: 6, lineHeight: 1.65 }}>{w}</li>
+                          <li key={k} style={{ fontSize: 15.5, color: '#d1743a', marginBottom: 8, lineHeight: 1.75 }}>{w}</li>
                         ))}
                       </ul>
                     </>
@@ -3534,8 +3582,8 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
                       [he ? 'שבוע הכי גדול' : 'biggest week', `${s.max_week_pct}%`, null],
                     ].map(([lab, val, col]) => (
                       <div key={lab} style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 8, padding: '10px 12px' }}>
-                        <div style={{ fontSize: 9.5, color: c.muted, marginBottom: 4 }}>{lab}</div>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: col || c.text }}>{val}</div>
+                        <div style={{ fontSize: 12, color: c.muted, marginBottom: 6 }}>{lab}</div>
+                        <div style={{ fontSize: 19, fontWeight: 800, color: col || c.text }}>{val}</div>
                       </div>
                     ))}
                   </div>
@@ -3543,7 +3591,7 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
                   {/* Risk levels, decided before the trade */}
                   {s.plan && (
                     <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 8, padding: '14px 16px' }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, color: c.text, marginBottom: 10 }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: c.text, marginBottom: 12 }}>
                         📐 {he ? 'רמות שנקבעות לפני הקנייה' : 'levels decided before the trade'}
                       </div>
                       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
@@ -3555,9 +3603,9 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
                           [he ? 'גודל ב-1% סיכון' : 'size at 1% risk', `${s.plan.position_pct_at_1pct_risk}%`, he ? 'מהתיק' : 'of portfolio', c.text],
                         ].map(([lab, v, sub, col]) => (
                           <div key={lab}>
-                            <div style={{ fontSize: 9.5, color: c.muted }}>{lab}</div>
-                            <div style={{ fontSize: 16, fontWeight: 800, color: col }}>{v}</div>
-                            <div style={{ fontSize: 10, color: c.muted }}>{sub}</div>
+                            <div style={{ fontSize: 12, color: c.muted }}>{lab}</div>
+                            <div style={{ fontSize: 20, fontWeight: 800, color: col, margin: '3px 0' }}>{v}</div>
+                            <div style={{ fontSize: 12, color: c.muted }}>{sub}</div>
                           </div>
                         ))}
                       </div>
