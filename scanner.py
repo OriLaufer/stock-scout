@@ -352,6 +352,9 @@ def fetch_weekly_changes(tickers, reference_date=None):
                                 pos = int((wk_returns > 0).sum())
                                 rec["positive_weeks_pct"] = round(pos / len(wk_returns) * 100)
                                 rec["max_week_pct"] = round(float(wk_returns.max()), 1)
+                            # The advance pattern: legs, bases, higher lows.
+                            # Free here — the weekly series is already built.
+                            rec["structure"] = _price_structure(weekly)
                         except Exception:
                             pass
 
@@ -1123,6 +1126,7 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
             "vol_ratio": d.get("vol_ratio"),
             "this_week_pct": d.get("change_pct"),
             "plan": _trade_plan(d),
+            "structure": d.get("structure"),
             "business_summary": fund.get("business_summary"),
             "industry": fund.get("industry"),
             "revenue_growth_pct": fund.get("revenue_growth_pct"),
@@ -1144,6 +1148,139 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
 
     print(f"Entry Zone: {len(picks)} stocks in the buy zone")
     return picks
+
+
+def _price_structure(weekly_closes):
+    """How a stock ADVANCES — the pattern that actually produces the big moves.
+
+    Personalis went from $4.96 in May to $17.20, +247%, in four distinct legs:
+    advance, consolidate above a rising average, advance again. That stair-step
+    is the signature of a real trend, and every large winner is built from it.
+
+    Our other measures were blind to it, and worse than blind: "quality of climb"
+    rewarded a smooth line and many green weeks, which actively PENALISES this
+    shape — the consolidations between legs are red weeks by construction.
+
+    Returns the number of completed advance-and-base cycles, whether each pull
+    back held above the last one (higher lows), and where the stock sits right
+    now: freshly out of a base, mid-advance, or extended far from its last base.
+    """
+    out = {}
+    try:
+        vals = [float(v) for v in weekly_closes.values if v == v and v > 0]
+        if len(vals) < 14:
+            return out
+
+        # Zigzag: mark a turn once price reverses more than 8% from an extreme.
+        # Below that it is noise, not a base.
+        THRESH = 8.0
+        pivots = []                       # (index, price, 'H' or 'L')
+        direction = None
+        ext_i, ext_p = 0, vals[0]
+        for i, p in enumerate(vals):
+            if direction in (None, "up"):
+                if p >= ext_p:
+                    ext_i, ext_p = i, p
+                elif (ext_p - p) / ext_p * 100 >= THRESH:
+                    pivots.append((ext_i, ext_p, "H"))
+                    direction, ext_i, ext_p = "down", i, p
+                    continue
+            if direction in (None, "down"):
+                if p <= ext_p:
+                    ext_i, ext_p = i, p
+                elif (p - ext_p) / ext_p * 100 >= THRESH:
+                    pivots.append((ext_i, ext_p, "L"))
+                    direction, ext_i, ext_p = "up", i, p
+            if direction is None:
+                direction = "up" if p >= vals[0] else "down"
+
+        lows = [p for p in pivots if p[2] == "L"]
+        highs = [p for p in pivots if p[2] == "H"]
+
+        # A leg is a rise of 15%+ from a trough to the next peak.
+        legs = []
+        for lo in lows:
+            nxt = [h for h in highs if h[0] > lo[0]]
+            if not nxt:
+                continue
+            hi = nxt[0]
+            gain = (hi[1] - lo[1]) / lo[1] * 100
+            if gain >= 15:
+                legs.append(round(gain, 1))
+        out["legs"] = len(legs)
+        out["leg_gains"] = legs[-4:]
+
+        # Judge the LAST three troughs, with a small tolerance. Requiring every
+        # pivot in nine months to be higher than the one before it fails on a
+        # single wiggle and calls a healthy stair-step "broken".
+        recent_lows = lows[-3:]
+        if len(recent_lows) >= 2:
+            out["higher_lows"] = bool(all(
+                recent_lows[k][1] >= recent_lows[k - 1][1] * 0.97
+                for k in range(1, len(recent_lows))))
+
+        price = vals[-1]
+        # Measure the pullback against the highest close of the recent window,
+        # not against the last CONFIRMED pivot high. A stock still making new
+        # highs has not printed a pivot yet, so comparing to the last one
+        # produced negative "distance below the high" — which is nonsense.
+        recent_high = max(vals[-13:]) if len(vals) >= 13 else max(vals)
+        off_high = (recent_high - price) / recent_high * 100
+        out["pct_off_recent_high"] = round(off_high, 1)
+        if off_high >= 8:
+            out["position"] = "basing"        # consolidating after an advance
+        elif off_high <= 2:
+            out["position"] = "breaking_out"  # at or near the high
+        else:
+            out["position"] = "advancing"
+
+        # Distance above the last base — the honest measure of extension for a
+        # stair-stepping stock, better than distance from a moving average.
+        if lows:
+            base = lows[-1][1]
+            out["pct_above_last_base"] = round((price - base) / base * 100, 1)
+    except Exception:
+        pass
+    return out
+
+
+def _structure_score(st):
+    """Points and plain-language notes for the advance pattern."""
+    pts, notes, flags = 0, [], []
+    if not st:
+        return 0, notes, flags
+
+    legs = st.get("legs", 0)
+    if legs >= 3:
+        pts += 10
+        notes.append(f"בנתה {legs} לגים של עלייה מאז תחילת המהלך, כל אחד אחרי דשדוש — "
+                     f"זה המבנה של מניה במהלך אמיתי, לא של קפיצה בודדת")
+    elif legs == 2:
+        pts += 6
+        notes.append("שני לגים של עלייה עם דשדוש ביניהם — המבנה מתחיל להיבנות")
+    elif legs == 1:
+        pts += 2
+
+    if st.get("higher_lows"):
+        pts += 5
+        notes.append("כל תיקון עצר גבוה מקודמו — הקונים נכנסים מוקדם יותר בכל פעם")
+    elif st.get("higher_lows") is False and legs >= 2:
+        flags.append("התיקון האחרון ירד מתחת לקודמו — המבנה העולה נשבר")
+
+    pos = st.get("position")
+    if pos == "basing":
+        pts += 6
+        notes.append(f"כרגע בדשדוש, {st.get('pct_off_recent_high')}% מתחת לשיא האחרון — "
+                     f"זו נקודת הכניסה הזולה בתוך מהלך, לא רדיפה")
+    elif pos == "breaking_out":
+        pts += 3
+        notes.append("נמצאת בשיא של המהלך — פורצת, אך ללא מרווח ביטחון מתחת")
+
+    above_base = st.get("pct_above_last_base")
+    if above_base is not None and above_base > 60:
+        flags.append(f"{above_base:.0f}% מעל הדשדוש האחרון — רחוקה מהתמיכה הקרובה")
+
+    return max(-5, min(20, pts)), notes, flags
 
 
 def _business_quality(ticker):
@@ -1403,10 +1540,10 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
         if ext is None:
             parts["entry"] = 0
         elif ext <= 12:
-            parts["entry"] = 30
+            parts["entry"] = 26
             why.append(f"צמודה לממוצע 50 ({ext:+.0f}%) — הסטופ קצר והסיכון לעסקה קטן")
         elif ext <= 20:
-            parts["entry"] = 26
+            parts["entry"] = 22
             why.append(f"{ext:+.0f}% מעל ממוצע 50 — עדיין בתוך אזור הכניסה")
         elif ext <= 30:
             parts["entry"] = 17
@@ -1417,7 +1554,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
 
         # --- leadership (0-25) ---
         rs = e.get("rs_vs_spy_6mo") or 0
-        parts["leadership"] = round(min(16, max(0, rs / 9.0)), 1)
+        parts["leadership"] = round(min(13, max(0, rs / 11.0)), 1)
         if rs >= 150:
             why.append(f"מובילה את השוק ב-{rs:+.0f}% בחצי שנה — מהחזקות בכל השוק")
         elif rs >= 80:
@@ -1432,7 +1569,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
                 why.append(f"התמה שלה ({th['industry']}) מתלקחת עכשיו — {th['member_count']} חברות מהתעשייה מובילות את השוק יחד")
             else:
                 why.append(f"נתמכת בתמה חיה: {th['member_count']} חברות מ-{th['industry']} מובילות יחד")
-            parts["theme"] = round(min(18, base), 1)
+            parts["theme"] = round(min(15, base), 1)
         else:
             parts["theme"] = 0
             watch.append("אין תמה מזוהה מאחוריה — היא עולה לבדה, בלי סיפור שמרים ענף שלם")
@@ -1455,10 +1592,20 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
         elif cap and cap > 10e9:
             watch.append(f"שווי שוק ${cap/1e9:.1f} מיליארד — עסקה טובה, אבל גדולה מכדי להכפיל את עצמה כמה פעמים")
 
+        # --- the advance pattern (0-20) ---
+        # Legs, bases and higher lows. Personalis rose 247% since May in four
+        # such steps; the system could not see that at all, and "quality of
+        # climb" actively marked it down because the consolidations between the
+        # legs are red weeks. This measures the shape that produces big moves.
+        spts, snotes, sflags = _structure_score(e.get("structure"))
+        parts["structure"] = spts
+        why.extend(snotes)
+        watch.extend(sflags)
+
         # --- quality of the climb (0-15) ---
         pw = e.get("positive_weeks_pct") or 0
         mw = e.get("max_week_pct") or 0
-        q = min(6, max(0, (pw - 40) / 6.0)) + (4 if mw <= 20 else 2 if mw <= 35 else 0)
+        q = (5 if mw <= 20 else 3 if mw <= 35 else 0)   # anti-pump only
         parts["climb"] = round(q, 1)
         if pw >= 68 and mw <= 25:
             why.append(f"{pw}% שבועות ירוקים והשבוע הגדול ביותר רק {mw}% — צבירה שקטה, לא פאמפ")
@@ -1470,7 +1617,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
         if t in rs_by: lenses.append("כוכבים עולים")
         if t in radar_by: lenses.append("ראדאר")
         if t in trend_by: lenses.append("המגמה")
-        parts["confirmation"] = min(8, (len(lenses) - 1) * 3)
+        parts["confirmation"] = min(6, (len(lenses) - 1) * 2)
         if len(lenses) >= 3:
             why.append(f"אותרה במקביל ב-{len(lenses)} עדשות שונות של המערכת ({', '.join(lenses)})")
 
@@ -1503,7 +1650,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
                 "ticker", "name", "sector", "price", "market_cap", "pct_above_50dma",
                 "pct_above_200dma", "rs_vs_spy_6mo", "positive_weeks_pct", "max_week_pct",
                 "vol_ratio", "ret_1mo", "ret_3mo", "ret_6mo", "plan", "theme",
-                "business_summary", "industry",
+                "business_summary", "industry", "structure",
                 "revenue_growth_pct", "target_upside_pct", "analyst_count", "short_pct")},
             "business": biz,
             "conviction": conviction,

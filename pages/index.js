@@ -3453,7 +3453,7 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
         padding: '12px 24px', fontSize: 11.5, color: c.muted, lineHeight: 1.7,
       }}>
         {he
-          ? 'הקונביקציה מורכבת מנקודת הכניסה (30), העסק עצמו (20), התמה מאחוריה (18), הובלת השוק (16), מקום לגדול (14), איכות הטיפוס (10) ואישור בין עדשות (8), בתוספת התאמה לפי יעדי אנליסטים.'
+          ? 'הקונביקציה מורכבת מנקודת הכניסה (26), העסק עצמו (22), מבנה העלייה — לגים ודשדושים (20), התמה מאחוריה (15), הובלת השוק (13), מקום לגדול (14) ואישור בין עדשות (6).'
           : 'Conviction = entry quality (30) · the business itself (20) · the theme behind it (18) · market leadership (16) · room to run (14) · quality of climb (10) · cross-lens confirmation (8), adjusted for analyst targets. Weights come from what our 109 forward-tested picks measured.'}
       </div>
 
