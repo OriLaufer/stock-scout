@@ -737,14 +737,27 @@ def compute_themes(price_data, names_dict, pool=300, lookup_budget=180):
     gone parabolic is a theme we found too late."""
     spy_3mo, spy_6mo = _spy_baseline()
 
-    ranked = sorted(
-        (d for d in price_data.values() if d.get("ret_6mo") is not None),
-        key=lambda d: d["ret_6mo"], reverse=True,
-    )[:pool]
+    # Ranking on six-month strength alone only ever finds MATURE themes — by the
+    # time an industry leads over six months, most of the move has happened. A
+    # theme that started five weeks ago (which is exactly what we want to catch)
+    # would be invisible. So build the pool from BOTH horizons: the established
+    # leaders and the names that have come alive in the last month.
+    have6 = [d for d in price_data.values() if d.get("ret_6mo") is not None]
+    top_6mo = sorted(have6, key=lambda d: d["ret_6mo"], reverse=True)[:pool]
+    have1 = [d for d in price_data.values() if d.get("ret_1mo") is not None]
+    top_1mo = sorted(have1, key=lambda d: d["ret_1mo"], reverse=True)[:pool // 2]
+
+    seen, ranked = set(), []
+    for d in top_6mo + top_1mo:
+        if d["ticker"] in seen:
+            continue
+        seen.add(d["ticker"])
+        ranked.append(d)
     if not ranked:
         print("Themes: no ranked universe")
         return []
-    print(f"\nThemes: grouping the top {len(ranked)} names in the market by industry")
+    print(f"\nThemes: {len(ranked)} names ({len(top_6mo)} strongest over 6 months, "
+          f"plus {len(ranked) - len(top_6mo)} that only came alive in the last month)")
 
     cache = _load_industry_cache()
     missing = [d["ticker"] for d in ranked if d["ticker"] not in cache]
@@ -764,30 +777,61 @@ def compute_themes(price_data, names_dict, pool=300, lookup_budget=180):
             continue
         groups.setdefault(ind, {"industry": ind, "sector": sec, "members": []})["members"].append(d)
 
+    def _median(vals):
+        v = sorted(x for x in vals if x is not None)
+        return v[len(v) // 2] if v else None
+
     themes = []
     for ind, g in groups.items():
         mem = g["members"]
         if len(mem) < 3:            # one or two names is a story, not a theme
             continue
-        rs = sorted(d["ret_6mo"] - spy_6mo for d in mem)
-        median_rs = rs[len(rs) // 2]
-        exts = [d.get("pct_above_50dma") for d in mem if d.get("pct_above_50dma") is not None]
-        median_ext = sorted(exts)[len(exts) // 2] if exts else None
-        # Members still buyable: leading, confirmed, and not yet stretched.
+
+        med6 = _median([d["ret_6mo"] - spy_6mo for d in mem if d.get("ret_6mo") is not None])
+        med3 = _median([d["ret_3mo"] - spy_3mo for d in mem if d.get("ret_3mo") is not None])
+        med1 = _median([d.get("ret_1mo") for d in mem])
+        if med6 is None:
+            continue
+        median_ext = _median([d.get("pct_above_50dma") for d in mem])
+
+        # TRAJECTORY - the part that decides whether we are early or late.
+        # Compare the pace of the last month against the pace the last six months
+        # implies. An industry running far faster than its own six-month average
+        # is a theme catching fire NOW; one whose last month is negative is a
+        # theme we are reading about after the fact.
+        implied_monthly = med6 / 6.0
+        acceleration = (med1 - implied_monthly) if med1 is not None else 0.0
+        if med1 is not None and med1 < 0:
+            trajectory, traj_he = "fading", "דועך"
+        elif acceleration > 6:
+            trajectory, traj_he = "accelerating", "מתלקח"
+        else:
+            trajectory, traj_he = "steady", "יציב"
+
         early = [d for d in mem
                  if d.get("above_50dma") and d.get("above_200dma")
                  and (d.get("pct_above_50dma") or 99) <= 30]
 
-        # Breadth x strength. Ten names up 40% is a sector move; three up 400% is
-        # three lucky tickers. Both matter, so neither is allowed to dominate.
-        heat = round(min(100, (len(mem) ** 0.7) * 6 + min(40, median_rs / 6)), 1)
+        # Breadth x strength, then rewarded for accelerating and penalised for
+        # fading — because WHEN we find a theme matters as much as how strong it is.
+        heat = (len(mem) ** 0.7) * 6 + min(40, med6 / 6)
+        if trajectory == "accelerating":
+            heat += 12
+        elif trajectory == "fading":
+            heat -= 15
+        heat = round(max(0, min(100, heat)), 1)
 
         themes.append({
             "industry": ind,
             "sector": g["sector"],
             "member_count": len(mem),
             "heat": heat,
-            "median_rs_vs_spy": round(median_rs, 1),
+            "median_rs_vs_spy": round(med6, 1),
+            "median_rs_3mo": round(med3, 1) if med3 is not None else None,
+            "median_ret_1mo": round(med1, 1) if med1 is not None else None,
+            "acceleration": round(acceleration, 1),
+            "trajectory": trajectory,
+            "trajectory_he": traj_he,
             "median_pct_above_50dma": round(median_ext, 1) if median_ext is not None else None,
             "stage": ("מוקדם" if median_ext is not None and median_ext <= 25
                       else "בעיצומו" if median_ext is not None and median_ext <= 55
@@ -796,13 +840,14 @@ def compute_themes(price_data, names_dict, pool=300, lookup_budget=180):
             "members": [{
                 "ticker": d["ticker"],
                 "name": (names_dict.get(d["ticker"]) or d["ticker"])[:44],
-                "rs_vs_spy_6mo": round(d["ret_6mo"] - spy_6mo, 1),
+                "rs_vs_spy_6mo": round(d["ret_6mo"] - spy_6mo, 1) if d.get("ret_6mo") is not None else None,
+                "ret_1mo": d.get("ret_1mo"),
                 "ret_6mo": d.get("ret_6mo"),
                 "pct_above_50dma": d.get("pct_above_50dma"),
                 "price": d.get("price"),
                 "at_good_entry": bool(d.get("above_50dma") and d.get("above_200dma")
                                       and (d.get("pct_above_50dma") or 99) <= 30),
-            } for d in sorted(mem, key=lambda x: -(x["ret_6mo"]))[:12]],
+            } for d in sorted(mem, key=lambda x: -(x.get("ret_6mo") or -999))[:14]],
         })
 
     themes.sort(key=lambda t: -t["heat"])
@@ -816,7 +861,7 @@ def compute_themes(price_data, names_dict, pool=300, lookup_budget=180):
     return themes, cache
 
 
-def compute_entry_zone(price_data, names_dict, target=15):
+def compute_entry_zone(price_data, names_dict, target=15, themes=None):
     """THE BUY LIST — stocks that are in a confirmed uptrend but have NOT yet
     gone parabolic, i.e. the only profile our forward-tested data ever made
     money on. This is the answer to "which stocks do we actually enter?".
@@ -824,6 +869,16 @@ def compute_entry_zone(price_data, names_dict, target=15):
     Everything here is arithmetic on price and volume. No AI, no API keys."""
     spy_3mo, spy_6mo = _spy_baseline()
     print(f"\nEntry Zone: SPY 6mo baseline {spy_6mo:+.1f}% — hunting confirmed-but-not-extended")
+
+    # A stock leading the market on its own is one thing. A stock leading the
+    # market while its whole industry does the same is a stock with a REASON
+    # behind it, and that reason is what separates a good chart from a run.
+    theme_of = {}
+    for th in (themes or []):
+        if th.get("trajectory") == "fading":
+            continue
+        for m in (th.get("members") or []):
+            theme_of[m["ticker"]] = th
 
 
     # How often has each name already shown up in our weekly top-40? A candidate
@@ -866,6 +921,16 @@ def compute_entry_zone(price_data, names_dict, target=15):
             rejected["just_exploded"] += 1; continue
 
         score, parts = _entry_zone_score(d, spy_6mo)
+        th = theme_of.get(t)
+        if th:
+            # Breadth of the industry behind it, extra when that industry is
+            # accelerating rather than merely strong. Capped so a theme can
+            # promote a good setup but never rescue a weak one.
+            bonus = min(12, 3 + th["member_count"] * 0.35)
+            if th.get("trajectory") == "accelerating":
+                bonus += 4
+            parts["theme_backing"] = round(bonus, 1)
+            score = round(min(100, score + bonus), 1)
         scored.append((score, parts, d))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -909,6 +974,10 @@ def compute_entry_zone(price_data, names_dict, target=15):
             "vol_ratio": d.get("vol_ratio"),
             "this_week_pct": d.get("change_pct"),
             "plan": _trade_plan(d),
+            "theme": ({"industry": th["industry"], "member_count": th["member_count"],
+                       "trajectory": th["trajectory"], "trajectory_he": th["trajectory_he"],
+                       "stage": th["stage"], "median_rs_vs_spy": th["median_rs_vs_spy"]}
+                      if th else None),
             # Plain-language reason, so the list explains itself without an AI.
             "why": _entry_reason(d, parts, ext, d["ret_6mo"] - spy_6mo,
                                  len(ticker_scans.get(t, []))),
@@ -3250,7 +3319,7 @@ def main():
     # 10. ENTRY ZONE - the buy list. Pure arithmetic: no AI, no API key, so
     # this tab keeps working even when the Anthropic balance is empty.
     print("\nComputing Entry Zone (confirmed uptrend, not yet extended)...")
-    entry_zone = _safe("entry zone", lambda: compute_entry_zone(price_data, names, target=15))
+    entry_zone = _safe("entry zone", lambda: compute_entry_zone(price_data, names, target=15, themes=themes))
 
     # 11. THE VERDICT - the analyst's real written opinion
     print("\nGenerating The Verdict (AI analyst's real opinion)...")
