@@ -619,7 +619,35 @@ def _trade_plan(d):
 
     r = price - stop
     stop_pct = round((stop - price) / price * 100, 1)
+
+    # TWO WAYS TO OWN THE SAME STOCK, and the difference decides whether a
+    # multi-bagger is possible at all. The tight-stop plan above exits at 4R,
+    # which for these names is +30-50% — so on its own this system could never
+    # have held a stock that went up 400%. It would have sold at +40%.
+    #
+    # The thesis plan is the answer: a WIDER stop under the 200-day average,
+    # no profit target, and therefore a SMALLER position. It survives the 30-40%
+    # drawdowns every large winner puts you through, and it costs the same 1% of
+    # capital because the size is cut to match the wider stop.
+    ma200 = None
+    ext200 = d.get("pct_above_200dma")
+    if ext200 is not None and ext200 != -100:
+        ma200 = price / (1 + ext200 / 100)
+    thesis = None
+    if ma200 and 0 < ma200 < price:
+        t_stop = ma200 * 0.95
+        t_pct = (t_stop - price) / price * 100
+        if -70 < t_pct < -5:
+            thesis = {
+                "stop_price": round(t_stop, 2),
+                "stop_pct": round(t_pct, 1),
+                "basis": "5% מתחת לממוצע 200 יום",
+                "position_pct_at_1pct_risk": round(1.0 / abs(t_pct) * 100, 1),
+                "target": None,     # deliberately none: the point is to hold
+            }
+
     return {
+        "thesis_plan": thesis,
         "invalidation_price": round(ma50, 2),
         "stop_price": round(stop, 2),
         "stop_pct": stop_pct,
@@ -1107,6 +1135,145 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
     return picks
 
 
+def _business_quality(ticker):
+    """Is the BUSINESS inflecting, or is only the chart moving?
+
+    Price momentum tells you the market has noticed something. This tells you
+    whether there is anything to notice. The signals here are the ones that
+    actually precede large multi-year moves, in rough order of how much they
+    matter:
+
+      operating leverage  - profit growing much faster than revenue. This is the
+                            single loudest tell: it means each new dollar of
+                            sales costs far less than the last, which is what
+                            turns a growing company into a re-rated one.
+      swing to profit     - crossing from losing money to making it. ETON went
+                            from -$1.5M to +$12.8M of operating income in a year
+                            while revenue doubled; nothing in our price data
+                            could see that.
+      margin expansion    - pricing power or scale showing up in the numbers
+      revenue acceleration- growth itself speeding up, not merely continuing
+
+    Reads five to seven quarters from the income statement — one extra call per
+    candidate, and only for names that already passed every gate."""
+    out = {}
+    try:
+        q = yf.Ticker(ticker).quarterly_income_stmt
+        if q is None or q.empty:
+            return out
+
+        def series(*names):
+            for n in names:
+                if n in q.index:
+                    vals = []
+                    for v in q.loc[n].values:
+                        try:
+                            vals.append(None if pd.isna(v) else float(v))
+                        except Exception:
+                            vals.append(None)
+                    return vals          # newest first
+            return []
+
+        rev = series("Total Revenue", "Operating Revenue")
+        gp = series("Gross Profit")
+        op = series("Operating Income")
+        if len(rev) < 4 or not rev[0]:
+            return out
+
+        # --- year on year, when four quarters back exists ---
+        if len(rev) >= 5 and rev[4]:
+            out["rev_yoy_pct"] = round((rev[0] - rev[4]) / abs(rev[4]) * 100, 1)
+
+        # --- sequential growth, and whether it is speeding up ---
+        seq = []
+        for i in range(min(3, len(rev) - 1)):
+            a, b = rev[i], rev[i + 1]
+            if a is not None and b:
+                seq.append((a - b) / abs(b) * 100)
+        if len(seq) >= 2:
+            out["rev_qoq_pct"] = round(seq[0], 1)
+            out["rev_accelerating"] = bool(seq[0] > seq[-1] + 2)
+
+        # --- margins now vs a year ago ---
+        def margin(num, i):
+            return (num[i] / rev[i] * 100) if (i < len(num) and num[i] is not None
+                                               and i < len(rev) and rev[i]) else None
+        gm_now, gm_then = margin(gp, 0), margin(gp, 4) if len(gp) >= 5 else None
+        if gm_now is not None:
+            out["gross_margin_pct"] = round(gm_now, 1)
+            if gm_then is not None:
+                out["gross_margin_change"] = round(gm_now - gm_then, 1)
+
+        om_now, om_then = margin(op, 0), margin(op, 4) if len(op) >= 5 else None
+        if om_now is not None:
+            out["operating_margin_pct"] = round(om_now, 1)
+            if om_then is not None:
+                out["operating_margin_change"] = round(om_now - om_then, 1)
+                out["swing_to_profit"] = bool(om_then <= 0 < om_now)
+
+        # --- operating leverage: profit outpacing sales ---
+        if len(op) >= 5 and op[0] is not None and op[4] is not None and rev[4]:
+            rev_g = (rev[0] - rev[4]) / abs(rev[4])
+            if op[4] > 0 and op[0] > 0:
+                op_g = (op[0] - op[4]) / abs(op[4])
+                out["operating_leverage"] = round(op_g - rev_g, 2)
+            elif op[4] <= 0 < op[0]:
+                out["operating_leverage"] = 2.0        # crossed into profit
+    except Exception:
+        pass
+    return out
+
+
+def _business_score(b):
+    """Turn the business signals into points and a plain-language reason."""
+    pts, notes, flags = 0, [], []
+    if not b:
+        return 0, notes, flags
+
+    if b.get("swing_to_profit"):
+        pts += 8
+        notes.append(f"עברה מהפסד לרווח תפעולי — המרווח התפעולי עלה מ-{b['operating_margin_pct'] - b['operating_margin_change']:.0f}% ל-{b['operating_margin_pct']:.0f}%")
+    elif (b.get("operating_leverage") or 0) >= 0.5:
+        pts += 6
+        notes.append("הרווח התפעולי גדל הרבה יותר מהר מההכנסות — כל דולר מכירות נוסף עולה פחות")
+    elif (b.get("operating_leverage") or 0) <= -0.5:
+        pts -= 3
+        flags.append("הרווח התפעולי גדל לאט יותר מההכנסות — הצמיחה נקנית ביוקר")
+
+    omc = b.get("operating_margin_change")
+    if omc is not None and not b.get("swing_to_profit"):
+        if omc >= 3:
+            pts += 4
+            notes.append(f"המרווח התפעולי התרחב ב-{omc:.0f} נקודות אחוז בשנה")
+        elif omc <= -3:
+            pts -= 3
+            flags.append(f"המרווח התפעולי נשחק ב-{abs(omc):.0f} נקודות אחוז")
+
+    gmc = b.get("gross_margin_change")
+    if gmc is not None:
+        if gmc >= 3:
+            pts += 3
+            notes.append(f"המרווח הגולמי התרחב ב-{gmc:.0f} נקודות אחוז — סימן לכוח תמחור")
+        elif gmc <= -4:
+            pts -= 2
+            flags.append(f"המרווח הגולמי נשחק ב-{abs(gmc):.0f} נקודות אחוז")
+
+    if b.get("rev_accelerating"):
+        pts += 4
+        notes.append(f"קצב הצמיחה עצמו מאיץ — {b.get('rev_qoq_pct')}% ברבעון האחרון, מהר יותר מקודמיו")
+
+    yoy = b.get("rev_yoy_pct")
+    if yoy is not None:
+        if yoy >= 40:
+            pts += 3
+            notes.append(f"ההכנסות צמחו {yoy:.0f}% בשנה")
+        elif yoy < 0:
+            pts -= 4
+            flags.append(f"ההכנסות ירדו {abs(yoy):.0f}% בשנה — הגרף עולה בזמן שהעסק מתכווץ")
+
+    return max(-8, min(20, pts)), notes, flags
+
+
 def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None):
     """THE SHORTLIST — the two or three names to actually put in front of the boss.
 
@@ -1157,7 +1324,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
 
         # --- leadership (0-25) ---
         rs = e.get("rs_vs_spy_6mo") or 0
-        parts["leadership"] = round(min(20, max(0, rs / 7.5)), 1)
+        parts["leadership"] = round(min(16, max(0, rs / 9.0)), 1)
         if rs >= 150:
             why.append(f"מובילה את השוק ב-{rs:+.0f}% בחצי שנה — מהחזקות בכל השוק")
         elif rs >= 80:
@@ -1172,7 +1339,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
                 why.append(f"התמה שלה ({th['industry']}) מתלקחת עכשיו — {th['member_count']} חברות מהתעשייה מובילות את השוק יחד")
             else:
                 why.append(f"נתמכת בתמה חיה: {th['member_count']} חברות מ-{th['industry']} מובילות יחד")
-            parts["theme"] = round(min(20, base), 1)
+            parts["theme"] = round(min(18, base), 1)
         else:
             parts["theme"] = 0
             watch.append("אין תמה מזוהה מאחוריה — היא עולה לבדה, בלי סיפור שמרים ענף שלם")
@@ -1198,7 +1365,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
         # --- quality of the climb (0-15) ---
         pw = e.get("positive_weeks_pct") or 0
         mw = e.get("max_week_pct") or 0
-        q = min(7, max(0, (pw - 40) / 5.0)) + (5 if mw <= 20 else 3 if mw <= 35 else 0)
+        q = min(6, max(0, (pw - 40) / 6.0)) + (4 if mw <= 20 else 2 if mw <= 35 else 0)
         parts["climb"] = round(q, 1)
         if pw >= 68 and mw <= 25:
             why.append(f"{pw}% שבועות ירוקים והשבוע הגדול ביותר רק {mw}% — צבירה שקטה, לא פאמפ")
@@ -1210,21 +1377,22 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
         if t in rs_by: lenses.append("כוכבים עולים")
         if t in radar_by: lenses.append("ראדאר")
         if t in trend_by: lenses.append("המגמה")
-        parts["confirmation"] = min(10, (len(lenses) - 1) * 4)
+        parts["confirmation"] = min(8, (len(lenses) - 1) * 3)
         if len(lenses) >= 3:
             why.append(f"אותרה במקביל ב-{len(lenses)} עדשות שונות של המערכת ({', '.join(lenses)})")
 
-        # --- fundamentals: colour the case, and flag when they contradict it ---
-        rg = e.get("revenue_growth_pct")
-        if rg is not None:
-            if rg >= 30:
-                why.append(f"ההכנסות צומחות {rg:+.0f}% — יש עסק אמיתי מאחורי הגרף")
-                parts["fundamentals_bonus"] = 5
-            elif rg < 0:
-                watch.append(f"ההכנסות יורדות {rg:.0f}% — הגרף עולה בזמן שהעסק מתכווץ")
-                parts["fundamentals_bonus"] = -6
-            else:
-                parts["fundamentals_bonus"] = 1
+        # --- the business itself (-8 to +20) ---
+        # A single revenue-growth number could not tell a company whose profits
+        # are inflecting from one whose chart merely rose. This reads five to
+        # seven quarters and looks for the things that precede large moves:
+        # operating leverage, a swing into profit, expanding margins, growth
+        # that is itself speeding up.
+        time.sleep(0.5)
+        biz = _business_quality(t)
+        bpts, bnotes, bflags = _business_score(biz)
+        parts["business"] = bpts
+        why.extend(bnotes)
+        watch.extend(bflags)
         up = e.get("target_upside_pct")
         if up is not None and (e.get("analyst_count") or 0) >= 3:
             if up >= 15:
@@ -1243,6 +1411,7 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
                 "pct_above_200dma", "rs_vs_spy_6mo", "positive_weeks_pct", "max_week_pct",
                 "vol_ratio", "ret_1mo", "ret_3mo", "ret_6mo", "plan", "theme",
                 "revenue_growth_pct", "target_upside_pct", "analyst_count", "short_pct")},
+            "business": biz,
             "conviction": conviction,
             "conviction_breakdown": parts,
             "lenses": lenses,

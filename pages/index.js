@@ -3591,8 +3591,12 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
                   {/* Risk levels, decided before the trade */}
                   {s.plan && (
                     <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 8, padding: '14px 16px' }}>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: c.text, marginBottom: 12 }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: c.text, marginBottom: 4 }}>
                         📐 {he ? 'רמות שנקבעות לפני הקנייה' : 'levels decided before the trade'}
+                      </div>
+                      <div style={{ fontSize: 12.5, color: c.muted, marginBottom: 14, lineHeight: 1.6 }}>
+                        {he ? 'פוזיציית מסחר — סטופ צמוד, יעדים, יוצאים ברווח מוגדר'
+                            : 'Trade position — tight stop, defined targets, exit at a set gain'}
                       </div>
                       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
                         {[
@@ -3608,6 +3612,53 @@ function Shortlist({ shortlist, entryZone, needs, c, dark, lang }) {
                             <div style={{ fontSize: 12, color: c.muted }}>{sub}</div>
                           </div>
                         ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* The other way to own it — the one that can actually hold a
+                      multi-bagger, because it has no profit target at all. */}
+                  {s.plan?.thesis_plan && (
+                    <div style={{
+                      background: c.card, border: `1px solid ${c.border}`,
+                      borderInlineStart: '4px solid #6b3fa0', borderRadius: 8,
+                      padding: '16px 18px', marginTop: 12,
+                    }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: '#8b5fc0', marginBottom: 4 }}>
+                        🎯 {he ? 'פוזיציית תזה — לאחוז במהלך גדול' : 'Thesis position — to hold a big move'}
+                      </div>
+                      <div style={{ fontSize: 12.5, color: c.muted, marginBottom: 14, lineHeight: 1.6 }}>
+                        {he ? 'סטופ רחב, בלי יעד, פוזיציה קטנה יותר — שורדת ירידות של 30% בדרך למעלה'
+                            : 'Wide stop, no target, smaller position — survives the 30% drawdowns on the way up'}
+                      </div>
+                      <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap' }}>
+                        <div>
+                          <div style={{ fontSize: 12, color: c.muted }}>{he ? 'סטופ' : 'stop'}</div>
+                          <div style={{ fontSize: 20, fontWeight: 800, color: '#c0392b', margin: '3px 0' }}>
+                            ${s.plan.thesis_plan.stop_price}
+                          </div>
+                          <div style={{ fontSize: 12, color: c.muted }}>{s.plan.thesis_plan.stop_pct}%</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 12, color: c.muted }}>{he ? 'על מה נשען' : 'based on'}</div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: c.text, margin: '5px 0' }}>
+                            {he ? s.plan.thesis_plan.basis : '5% under the 200-day average'}
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 12, color: c.muted }}>{he ? 'יעד' : 'target'}</div>
+                          <div style={{ fontSize: 20, fontWeight: 800, color: '#8b5fc0', margin: '3px 0' }}>
+                            {he ? 'אין' : 'none'}
+                          </div>
+                          <div style={{ fontSize: 12, color: c.muted }}>{he ? 'מחזיקים כל עוד התזה חיה' : 'hold while the thesis lives'}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 12, color: c.muted }}>{he ? 'גודל ב-1% סיכון' : 'size at 1% risk'}</div>
+                          <div style={{ fontSize: 20, fontWeight: 800, color: c.text, margin: '3px 0' }}>
+                            {s.plan.thesis_plan.position_pct_at_1pct_risk}%
+                          </div>
+                          <div style={{ fontSize: 12, color: c.muted }}>{he ? 'מהתיק' : 'of portfolio'}</div>
+                        </div>
                       </div>
                     </div>
                   )}
