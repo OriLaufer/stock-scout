@@ -1,0 +1,58 @@
+name: Measure Picks
+
+# Fills in what each past pick actually did, then reports which part of the
+# score did the work. Runs weekly, a day after the scan, so every new pick
+# starts its clock and every ripe one gets measured.
+#
+# Run the backfill ONCE manually first (mode: backfill) to load history out of
+# the existing weekly_scans rows — that turns "wait three months for data" into
+# "we already have thirty weeks of it".
+on:
+  schedule:
+    - cron: '0 8 * * 1'          # Monday 08:00 UTC, the day after the scan
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'What to run'
+        type: choice
+        required: true
+        default: measure
+        options: [measure, backfill, analyse]
+      horizon:
+        description: 'Horizon for analyse'
+        type: choice
+        required: false
+        default: ret_12w
+        options: [ret_4w, ret_12w, ret_26w]
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests supabase yfinance pandas
+
+      - name: Run
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          MODE="${{ github.event.inputs.mode || 'measure' }}"
+          case "$MODE" in
+            backfill) python measure.py --backfill && python measure.py ;;
+            analyse)  python measure.py --analyse --horizon "${{ github.event.inputs.horizon || 'ret_12w' }}" ;;
+            *)        python measure.py && python measure.py --analyse || true ;;
+          esac

@@ -1,0 +1,56 @@
+name: Portfolio Watch
+
+# Runs after the US close on every trading weekday and checks what we OWN
+# against the levels the reports already published. Emails only when something
+# happened — a quiet day sends nothing, on purpose.
+#
+# 21:30 UTC is ~30 min after the 16:00 ET close (and ~00:30 Israel time), late
+# enough that the closing prices are settled. Mon-Fri only; US holidays simply
+# produce an unchanged close and no events, which is harmless.
+on:
+  schedule:
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: 'Comma list to check instead of the journal (optional)'
+        required: false
+        default: ''
+      dry:
+        description: 'Print only, do not send email'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests supabase yfinance pandas
+
+      - name: Watch open positions
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BOSS_EMAIL: ${{ secrets.BOSS_EMAIL }}
+          WATCH_EMAIL: ${{ secrets.WATCH_EMAIL }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          python watch.py \
+            ${{ github.event.inputs.tickers && format('--tickers {0}', github.event.inputs.tickers) || '' }} \
+            ${{ github.event.inputs.dry == 'true' && '--dry' || '' }}

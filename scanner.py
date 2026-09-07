@@ -208,7 +208,13 @@ def fetch_weekly_changes(tickers, reference_date=None):
     BATCH = 200
     # Pull ~6.5 months of history → enough for 6-month relative strength,
     # while the last two Fridays still give us the weekly change.
-    start = this_friday - timedelta(days=200)
+    # A full year plus a margin. Six-month relative strength only needs ~200
+    # days, but the advance-structure window is 52 weeks and it must be the SAME
+    # 52 weeks for every stock — fetching less made the leg count depend on the
+    # lookback rather than on the stock. The extra history costs one larger
+    # download and nothing else: every return here is measured in trading-day
+    # offsets from the end, so none of them shift.
+    start = this_friday - timedelta(days=400)
     end = this_friday + timedelta(days=1)
 
     def find_close_on_or_before(closes_series, target_date):
@@ -862,7 +868,33 @@ def _load_industry_cache():
     return {}
 
 
-def compute_themes(price_data, names_dict, pool=300, lookup_budget=180):
+def _gate_passers(price_data, spy_6mo):
+    """Which tickers clear the Entry Zone gates — pure arithmetic, no network.
+
+    Used to spend the industry-lookup budget where it matters. The gates are
+    duplicated from compute_entry_zone deliberately: they must stay cheap enough
+    to run before any lookups happen, which is the whole point."""
+    out = set()
+    for d in price_data.values():
+        if d.get("ret_6mo") is None or d.get("pct_above_50dma") is None:
+            continue
+        if not (d.get("above_50dma") and d.get("above_200dma")):
+            continue
+        if d["pct_above_50dma"] > 45:
+            continue
+        recent = (d.get("max_week_recent_pct") if d.get("max_week_recent_pct") is not None
+                  else d.get("max_week_pct") or 0)
+        if recent > 55:
+            continue
+        if (d["ret_6mo"] - spy_6mo) < 25:
+            continue
+        if (d.get("change_pct") or 0) > 55:
+            continue
+        out.add(d["ticker"])
+    return out
+
+
+def compute_themes(price_data, names_dict, pool=300, lookup_budget=260):
     """WHAT IS THE MARKET ACTUALLY BUYING?
 
     A stock does not go up hundreds of percent for no reason. SanDisk ran because
@@ -904,7 +936,18 @@ def compute_themes(price_data, names_dict, pool=300, lookup_budget=180):
 
     cache = _load_industry_cache()
     missing = [d["ticker"] for d in ranked if d["ticker"] not in cache]
-    print(f"  {len(missing)} of them need an industry lookup (budget {lookup_budget})")
+
+    # SPEND THE BUDGET WHERE IT DECIDES SOMETHING. The list above is ordered by
+    # market strength, so the budget used to run out on names that were never
+    # going to be bought — while an actual candidate sat unlooked-up and
+    # therefore themeless. SiTime and Fennec both reached the final five with a
+    # theme score of zero, and there was no way to tell whether that meant
+    # "no theme exists" or "we never checked". Candidates go first now.
+    gated = _gate_passers(price_data, spy_6mo)
+    missing.sort(key=lambda t: 0 if t in gated else 1)
+    n_gated_missing = sum(1 for t in missing if t in gated)
+    print(f"  {len(missing)} need an industry lookup (budget {lookup_budget}); "
+          f"{n_gated_missing} of them are actual candidates and go first")
     for t in missing[:lookup_budget]:
         try:
             time.sleep(0.45)
@@ -912,6 +955,15 @@ def compute_themes(price_data, names_dict, pool=300, lookup_budget=180):
             cache[t] = [info.get("industry") or "", info.get("sector") or ""]
         except Exception:
             cache[t] = ["", ""]
+
+    # Say out loud how much of the candidate set we actually know, so a thin or
+    # broken cache is visible instead of quietly zeroing a fifth of the score.
+    known = sum(1 for t in gated if (cache.get(t) or ["", ""])[0])
+    if gated:
+        pct = 100.0 * known / len(gated)
+        print(f"  industry coverage of candidates: {known}/{len(gated)} ({pct:.0f}%)")
+        if pct < 80:
+            print("  WARNING: under 80% — theme scores this run are unreliable")
 
     groups = {}
     for d in ranked:
@@ -1171,6 +1223,11 @@ def compute_entry_zone(price_data, names_dict, target=15, themes=None):
     return picks
 
 
+# One year of weekly closes. Long enough to contain several advance-and-base
+# cycles, short enough that a five-year-old trend does not out-score a live one.
+WINDOW_WEEKS = 52
+
+
 def _price_structure(weekly_closes):
     """How a stock ADVANCES — the pattern that actually produces the big moves.
 
@@ -1191,6 +1248,16 @@ def _price_structure(weekly_closes):
         vals = [float(v) for v in weekly_closes.values if v == v and v > 0]
         if len(vals) < 14:
             return out
+
+        # FIXED WINDOW, or the count means nothing. Measured against different
+        # amounts of history the same stock returns different answers — Hinge
+        # Health showed 1 leg over 200 days, 2 over 220 and 3 over 400, and
+        # SiTime 3 / 4 / 6. Leg count was therefore not a property of the stock
+        # but of the lookback, which silently penalised anything recently listed
+        # against anything with a long history. Always judge the same span.
+        vals = vals[-WINDOW_WEEKS:]
+        out["weeks_used"] = len(vals)
+        out["short_history"] = bool(len(vals) < WINDOW_WEEKS * 0.8)
 
         # Zigzag: mark a turn once price reverses more than 8% from an extreme.
         # Below that it is noise, not a base.
@@ -1270,6 +1337,14 @@ def _structure_score(st):
     pts, notes, flags = 0, [], []
     if not st:
         return 0, notes, flags
+
+    # A company listed six months ago cannot have built three legs, and reading
+    # its short history as "no structure" penalises it for its age rather than
+    # its behaviour. Say what we actually know instead of scoring a gap.
+    if st.get("short_history"):
+        flags.append(f"רק {st.get('weeks_used')} שבועות של מסחר — המבנה נמדד על "
+                     f"היסטוריה חלקית, ומספר הלגים נמוך מהסיבה הזאת ולא בהכרח "
+                     f"מפני שאין מהלך")
 
     legs = st.get("legs", 0)
     if legs >= 3:
@@ -1384,19 +1459,52 @@ def _business_quality(ticker):
         if len(rev) < 4 or not rev[0]:
             return out
 
+        # --- is this revenue even a number worth comparing? ---
+        # MeiraGTx scored 18 points on "revenue +8,609% in a year, +109,604% in
+        # a quarter". Both were one licensing milestone landing in a quarter
+        # whose prior-year base was essentially zero. A percentage computed on
+        # nothing is not growth, and the score had no way to know that.
+        prior = [x for x in rev[1:5] if x]
+        if prior and rev[0]:
+            med_prior = sorted(prior)[len(prior) // 2]
+            if med_prior and rev[0] > med_prior * 2.5:
+                out["rev_lumpy"] = True
+            if len(rev) >= 5 and rev[4] and abs(rev[4]) < abs(rev[0]) * 0.10:
+                out["rev_base_negligible"] = True
+
         # --- year on year, when four quarters back exists ---
         if len(rev) >= 5 and rev[4]:
             out["rev_yoy_pct"] = round((rev[0] - rev[4]) / abs(rev[4]) * 100, 1)
 
-        # --- sequential growth, and whether it is speeding up ---
+        # --- growth, measured so a season cannot impersonate a trend ---
+        # Comparing a quarter to the one before it reported AMC "accelerating
+        # 52.7%" and Marcus 50.1%. Both run cinemas: that is summer against
+        # spring, and it happens every year. Comparing each quarter to the SAME
+        # quarter a year earlier removes the season and leaves the trend.
         seq = []
         for i in range(min(3, len(rev) - 1)):
             a, b = rev[i], rev[i + 1]
             if a is not None and b:
                 seq.append((a - b) / abs(b) * 100)
-        if len(seq) >= 2:
+        if seq:
             out["rev_qoq_pct"] = round(seq[0], 1)
-            out["rev_accelerating"] = bool(seq[0] > seq[-1] + 2)
+
+        yoy_pair = []
+        for i in (0, 1):
+            if len(rev) > i + 4 and rev[i] is not None and rev[i + 4]:
+                yoy_pair.append((rev[i] - rev[i + 4]) / abs(rev[i + 4]) * 100)
+        if len(yoy_pair) == 2:
+            out["rev_yoy_prev_pct"] = round(yoy_pair[1], 1)
+            out["rev_accelerating"] = bool(yoy_pair[0] > yoy_pair[1] + 2)
+        elif len(seq) >= 2:
+            # Not enough history for the clean test. Fall back to sequential,
+            # but a big sequential swing next to a small annual one is the
+            # signature of a season, not of a business speeding up.
+            yoy_now = out.get("rev_yoy_pct")
+            looks_seasonal = (yoy_now is not None and abs(seq[0]) >= 25
+                              and abs(seq[0]) > abs(yoy_now) * 2)
+            out["rev_seasonal"] = bool(looks_seasonal)
+            out["rev_accelerating"] = bool(seq[0] > seq[-1] + 2) and not looks_seasonal
 
         # --- margins now vs a year ago ---
         def margin(num, i):
@@ -1426,7 +1534,18 @@ def _business_quality(ticker):
             out["operating_margin_pct"] = round(om_now, 1)
             if om_then is not None:
                 out["operating_margin_change"] = round(om_now - om_then, 1)
-                out["swing_to_profit"] = bool(om_then <= 0 < om_now)
+                # NN Inc crossed from -1% to +1% and collected the full
+                # swing-to-profit award; MeiraGTx crossed from -1214%, which is
+                # not a margin at all but the arithmetic of a near-zero revenue
+                # base. Hinge Health crossed from -418% and that one is real —
+                # a large loss against real, growing revenue. So the test is not
+                # how negative the old margin looks, it is whether there was a
+                # business under it: require a meaningful new margin and revenue
+                # that is not itself a one-off.
+                out["swing_to_profit"] = bool(
+                    om_then <= 0 < om_now and om_now >= 2
+                    and not out.get("rev_base_negligible")
+                    and not out.get("rev_lumpy"))
 
         # --- operating leverage: profit outpacing sales ---
         if len(op) >= 5 and op[0] is not None and op[4] is not None and rev[4]:
@@ -1447,12 +1566,27 @@ def _business_score(b):
     if not b:
         return 0, notes, flags
 
+    # A company crossing into profit BECAUSE it is selling much more is
+    # inflecting. One crossing into profit on flat sales is cutting costs, or
+    # is simply in its good season. Eton swung with revenue up 99%; AMC and
+    # Marcus, both cinema chains, swung with revenue up 14% and 12% in their
+    # summer quarter. The event looked identical to the score. It is not.
+    grew = b.get("rev_yoy_pct")
+    weak_growth = grew is not None and grew < 20
     if b.get("swing_to_profit"):
-        pts += 8
-        notes.append(f"עברה מהפסד לרווח תפעולי — המרווח התפעולי עלה מ-{b['operating_margin_pct'] - b['operating_margin_change']:.0f}% ל-{b['operating_margin_pct']:.0f}%")
+        if weak_growth:
+            pts += 3
+            notes.append(f"עברה לרווח תפעולי, אך ההכנסות צמחו רק {grew:.0f}% — השיפור מגיע מהתייעלות או ממחזור, לא מצמיחה")
+        else:
+            pts += 8
+            notes.append(f"עברה מהפסד לרווח תפעולי — המרווח התפעולי עלה מ-{b['operating_margin_pct'] - b['operating_margin_change']:.0f}% ל-{b['operating_margin_pct']:.0f}%")
     elif (b.get("operating_leverage") or 0) >= 0.5:
-        pts += 6
-        notes.append("הרווח התפעולי גדל הרבה יותר מהר מההכנסות — כל דולר מכירות נוסף עולה פחות")
+        if weak_growth:
+            pts += 2
+            notes.append(f"הרווח התפעולי גדל מהר מההכנסות, אך ההכנסות צמחו רק {grew:.0f}% — שיפור בעלויות, לא מנוף צמיחה")
+        else:
+            pts += 6
+            notes.append("הרווח התפעולי גדל הרבה יותר מהר מההכנסות — כל דולר מכירות נוסף עולה פחות")
     elif (b.get("operating_leverage") or 0) <= -0.5:
         pts -= 3
         flags.append("הרווח התפעולי גדל לאט יותר מההכנסות — הצמיחה נקנית ביוקר")
@@ -1486,12 +1620,26 @@ def _business_score(b):
             pts -= 2
             flags.append(f"המרווח הגולמי נשחק ב-{abs(gmc):.0f} נקודות אחוז")
 
-    if b.get("rev_accelerating"):
+    # Revenue that arrived in one lump, or grew from nothing, is not a rate.
+    # Nothing built on it — growth, acceleration, margins — means anything yet.
+    lumpy = b.get("rev_lumpy") or b.get("rev_base_negligible")
+    if lumpy:
+        flags.append("ההכנסה הרבעונית קפצה מבסיס אפסי או חריג — כנראה תשלום חד-פעמי או אבן דרך, "
+                     "ולא קצב מכירות שאפשר להסתמך עליו")
+    elif b.get("rev_accelerating"):
         pts += 4
-        notes.append(f"קצב הצמיחה עצמו מאיץ — {b.get('rev_qoq_pct')}% ברבעון האחרון, מהר יותר מקודמיו")
+        prev = b.get("rev_yoy_prev_pct")
+        if prev is not None:
+            notes.append(f"קצב הצמיחה עצמו מאיץ — {b.get('rev_yoy_pct')}% השנה מול {prev}% ברבעון הקודם, בהשוואה שנתית")
+        else:
+            notes.append(f"קצב הצמיחה עצמו מאיץ — {b.get('rev_qoq_pct')}% ברבעון האחרון, מהר יותר מקודמיו")
+
+    if b.get("rev_seasonal"):
+        flags.append(f"הקפיצה הרבעונית של {b.get('rev_qoq_pct')}% היא עונתית — ההשוואה השנתית "
+                     f"מראה {b.get('rev_yoy_pct')}% בלבד")
 
     yoy = b.get("rev_yoy_pct")
-    if yoy is not None:
+    if yoy is not None and not lumpy:
         if yoy >= 40:
             pts += 3
             notes.append(f"ההכנסות צמחו {yoy:.0f}% בשנה")
@@ -1721,6 +1869,76 @@ def compute_shortlist(entry_zone, rising_stars, radar, trend, themes, top_n=None
                   f"{p['pct_above_50dma']:+5.0f}% vs 50dma | RS {p['rs_vs_spy_6mo']:+6.0f}% | "
                   f"{len(p['lenses'])} lenses | theme: {th['industry'] if th else 'none'}")
     return picks
+
+
+def log_picks(shortlist, week_label, top_n=25):
+    """Write every pick into picks_log so it can be MEASURED later.
+
+    This is the missing half of the system. The entry gates are the only part
+    that was ever validated against real forward prices — that measurement is
+    why we stopped buying at +100%, and it is the single thing that saved us.
+    Business, structure, theme and size have never been tested against
+    anything; they are arguments, and arguments drift.
+
+    Each component goes into its OWN column, because the question that matters
+    is not "did the picks work" but "which part of the score did the work". In
+    three months this table answers it, and the weights stop being opinions.
+
+    Requires sql/picks_log.sql to have been run once. Failure here must never
+    take down a scan, so everything is swallowed and reported.
+    """
+    if not shortlist:
+        return 0
+    today = datetime.now().date().isoformat()
+    rows = []
+    for i, p in enumerate(shortlist[:top_n], 1):
+        b = p.get("business") or {}
+        st = p.get("structure") or {}
+        th = p.get("theme") or {}
+        cb = p.get("conviction_breakdown") or {}
+        plan = p.get("plan") or {}
+        thesis = plan.get("thesis_plan") or {}
+        rows.append({
+            "id": f"{p['ticker']}-{week_label}",
+            "ticker": p["ticker"], "week_label": week_label,
+            "pick_date": today, "rank_in_week": i,
+            "price": p.get("price"), "market_cap": p.get("market_cap"),
+            "sector": p.get("sector"), "industry": p.get("industry"),
+            "name": (p.get("name") or "")[:120],
+            "conviction": p.get("conviction"),
+            "s_entry": cb.get("entry"), "s_leadership": cb.get("leadership"),
+            "s_theme": cb.get("theme"), "s_structure": cb.get("structure"),
+            "s_climb": cb.get("climb"), "s_confirmation": cb.get("confirmation"),
+            "s_business": cb.get("business"), "s_analyst": cb.get("analyst_bonus"),
+            "s_room": cb.get("room"),
+            "pct_above_50dma": p.get("pct_above_50dma"),
+            "pct_above_200dma": p.get("pct_above_200dma"),
+            "rs_vs_spy_6mo": p.get("rs_vs_spy_6mo"),
+            "rev_yoy_pct": b.get("rev_yoy_pct"), "rev_qoq_pct": b.get("rev_qoq_pct"),
+            "gross_margin_pct": b.get("gross_margin_pct"),
+            "operating_margin_pct": b.get("operating_margin_pct"),
+            "runway_quarters": b.get("runway_quarters"),
+            "self_funding": b.get("self_funding"),
+            "analyst_count": p.get("analyst_count"),
+            "target_upside_pct": p.get("target_upside_pct"),
+            "short_pct": p.get("short_pct"),
+            "legs": st.get("legs"), "higher_lows": st.get("higher_lows"),
+            "structure_position": st.get("position"),
+            "theme_industry": th.get("industry"),
+            "theme_trajectory": th.get("trajectory"),
+            "theme_members": th.get("member_count"),
+            "stop_price": plan.get("stop_price"),
+            "thesis_stop_price": thesis.get("stop_price"),
+            "target_1": plan.get("target_1"), "target_2": plan.get("target_2"),
+        })
+    try:
+        supabase.table("picks_log").upsert(rows).execute()
+        print(f"  picks_log: recorded {len(rows)} picks for {week_label}")
+        return len(rows)
+    except Exception as e:
+        print(f"  picks_log: FAILED ({type(e).__name__}: {e})")
+        print("  (has sql/picks_log.sql been run in the Supabase SQL editor?)")
+        return 0
 
 
 def compute_rising_stars(price_data, names_dict, target=20):
@@ -4066,6 +4284,10 @@ def main():
     print("\nBuilding the Shortlist (the highest-conviction ideas)...")
     shortlist = _safe("shortlist", lambda: compute_shortlist(
         entry_zone, rising_stars, radar, trend, themes))
+
+    # 10c. RECORD THE PICKS so they can be measured in 4/12/26 weeks. Without
+    # this every future "improvement" is a guess about a guess.
+    _safe("log_picks", lambda: log_picks(shortlist, week_label))
 
     # 11. THE VERDICT - the analyst's real written opinion
     print("\nGenerating The Verdict (AI analyst's real opinion)...")

@@ -190,6 +190,42 @@ def main():
     except Exception as e:
         check(False, "Live dashboard shows data", f"{type(e).__name__}: {e}")
 
+    # ---- 8. Is the feedback loop actually collecting? ----
+    # Without this table every future change to the score is a guess about a
+    # guess. A missing table here is not cosmetic — it means we are flying blind.
+    try:
+        _, raw_pl = get(
+            f"{SUPABASE_URL}/rest/v1/picks_log"
+            "?select=id,pick_date,ret_12w&order=pick_date.desc&limit=500", hdr)
+        picks = json.loads(raw_pl)
+        measured = [p for p in picks if p.get("ret_12w") is not None]
+        check(len(picks) > 0, "Picks are being recorded for measurement",
+              f"{len(picks)} picks logged, {len(measured)} already measured"
+              if picks else "picks_log is EMPTY — run sql/picks_log.sql, then "
+                            "the measure workflow in 'backfill' mode")
+    except Exception as e:
+        check(False, "Picks are being recorded for measurement",
+              f"picks_log unreachable ({type(e).__name__}) — has sql/picks_log.sql "
+              f"been run in the Supabase SQL editor?")
+
+    # ---- 9. Is anything watching what we own? ----
+    try:
+        _, raw_j = get(f"{SUPABASE_URL}/rest/v1/shared_journal?select=data&limit=200", hdr)
+        j = json.loads(raw_j)
+        entries = [r["data"] for r in j if isinstance(r.get("data"), dict)]
+        held = {d.get("ticker") for d in entries
+                if d.get("kind") != "watch_snapshot" and d.get("ticker")}
+        snap = [d for d in entries if d.get("kind") == "watch_snapshot"]
+        if not held:
+            check(None, "Positions are being watched daily",
+                  "no open positions in the journal — nothing to watch yet")
+        else:
+            check(bool(snap), "Positions are being watched daily",
+                  f"{len(held)} held; last watch snapshot: "
+                  f"{snap[-1].get('date') if snap else 'NEVER — is watch.yml enabled?'}")
+    except Exception as e:
+        check(None, "Positions are being watched daily", f"{type(e).__name__}: {e}")
+
     return report()
 
 
