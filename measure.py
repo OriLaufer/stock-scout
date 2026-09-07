@@ -35,9 +35,10 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # separating them is that a component can score well and still predict nothing.
 COMPONENTS = ["s_entry", "s_leadership", "s_theme", "s_structure", "s_climb",
               "s_confirmation", "s_business", "s_analyst", "s_room", "conviction"]
-RAW_FACTS = ["pct_above_50dma", "rs_vs_spy_6mo", "rev_yoy_pct", "gross_margin_pct",
-             "operating_margin_pct", "runway_quarters", "analyst_count",
-             "target_upside_pct", "short_pct", "legs", "market_cap"]
+RAW_FACTS = ["pct_above_50dma", "rs_vs_spy_6mo", "ret_6mo_at_pick", "rs_score",
+             "rev_yoy_pct", "gross_margin_pct", "operating_margin_pct",
+             "runway_quarters", "analyst_count", "target_upside_pct",
+             "short_pct", "legs", "market_cap"]
 
 HE = {"s_entry": "נקודת כניסה", "s_leadership": "הובלה מול השוק", "s_theme": "תמה",
       "s_structure": "מבנה העלייה", "s_climb": "איכות הטיפוס",
@@ -47,7 +48,8 @@ HE = {"s_entry": "נקודת כניסה", "s_leadership": "הובלה מול ה�
       "rev_yoy_pct": "צמיחת הכנסות", "gross_margin_pct": "מרווח גולמי",
       "operating_margin_pct": "מרווח תפעולי", "runway_quarters": "מסלול מזומנים",
       "analyst_count": "מס' אנליסטים", "target_upside_pct": "מרווח ליעד",
-      "short_pct": "% בשורט", "legs": "מס' לגים", "market_cap": "שווי שוק"}
+      "short_pct": "% בשורט", "legs": "מס' לגים", "market_cap": "שווי שוק",
+      "rs_score": "ציון כוכב עולה", "ret_6mo_at_pick": "תשואת 6 חודשים בכניסה"}
 
 
 # ------------------------------------------------------------------ backfill
@@ -65,20 +67,42 @@ def backfill():
         print(f"read failed: {type(e).__name__}: {e}")
         return 1
 
-    rows, weeks = [], 0
+    # THREE SOURCES, IN ORDER OF HOW MUCH THEY KNOW.
+    #
+    # The shortlist carries every score component but only exists in the newest
+    # scan; entry_zone in three. Rising Stars is in EVERY scan going back months,
+    # and while it lacks the conviction breakdown it has the two things that
+    # matter most — a ticker and the price we saw it at. That is enough to ask
+    # "did our picks make money", which is the question that produced the -89.5%
+    # finding in the first place, and it can be answered today instead of in
+    # December. Richest source wins per ticker per week; the rest fill the gaps.
+    SOURCES = [("shortlist", "shortlist"),
+               ("entry_zone", "entry_zone"),
+               ("rising_stars", "rising_stars")]
+
+    rows, weeks, claimed = [], 0, set()
     for scan in (r.data or []):
         try:
-            payload = json.loads(scan["stocks_json"])
+            payload = json.loads(scan["stocks_json"])   # tolerant of legacy NaN
         except Exception:
             continue
-        picks = payload.get("shortlist") or payload.get("entry_zone") or []
+        picks, counted = [], False
+        for key, label in SOURCES:
+            for p in (payload.get(key) or []):
+                t = p.get("ticker")
+                if not t or not p.get("price"):
+                    continue
+                if (t, scan["week_label"]) in claimed:
+                    continue
+                claimed.add((t, scan["week_label"]))
+                picks.append((p, label))
+                counted = True
+        if counted:
+            weeks += 1
         if not picks:
             continue
-        weeks += 1
         pick_date = (scan.get("created_at") or "")[:10] or None
-        for i, p in enumerate(picks[:25], 1):
-            if not p.get("ticker") or not p.get("price"):
-                continue
+        for i, (p, source) in enumerate(picks[:60], 1):
             b = p.get("business") or {}
             st = p.get("structure") or {}
             th = p.get("theme") or {}
@@ -88,11 +112,14 @@ def backfill():
             rows.append({
                 "id": f"{p['ticker']}-{scan['week_label']}",
                 "ticker": p["ticker"], "week_label": scan["week_label"],
+                "source": source,
                 "pick_date": pick_date, "rank_in_week": i,
                 "price": p.get("price"), "market_cap": p.get("market_cap"),
                 "sector": p.get("sector"), "industry": p.get("industry"),
                 "name": (p.get("name") or "")[:120],
                 "conviction": p.get("conviction"),
+                "rs_score": p.get("rs_score"),
+                "ret_6mo_at_pick": p.get("ret_6mo"),
                 "s_entry": cb.get("entry"), "s_leadership": cb.get("leadership"),
                 "s_theme": cb.get("theme"), "s_structure": cb.get("structure"),
                 "s_climb": cb.get("climb"), "s_confirmation": cb.get("confirmation"),
@@ -285,6 +312,29 @@ def analyse(ret_key="ret_12w"):
     worst = sorted(rows, key=lambda x: x[ret_key])[:5]
     print("  best:  " + ", ".join(f"{x['ticker']} {x[ret_key]:+.0f}%" for x in best))
     print("  worst: " + ", ".join(f"{x['ticker']} {x[ret_key]:+.0f}%" for x in worst))
+
+    # The lists know different amounts, so never average them together silently.
+    by_src = {}
+    for x in rows:
+        by_src.setdefault(x.get("source") or "?", []).append(x[ret_key])
+    if len(by_src) > 1:
+        print("\n  by list:")
+        for s, v in sorted(by_src.items(), key=lambda kv: -len(kv[1])):
+            print(f"    {s:<14} n={len(v):<5} mean {statistics.mean(v):+6.1f}%  "
+                  f"median {statistics.median(v):+6.1f}%  "
+                  f"win {100*sum(1 for x in v if x>0)/len(v):.0f}%")
+
+    # The entry-quality lesson, re-tested on whatever data we now have: the
+    # -89.5% bucket is the reason the gates exist, so keep checking it holds.
+    buckets = [("<20%", -1e9, 20), ("20-50%", 20, 50), ("50-80%", 50, 80),
+               ("80-150%", 80, 150), (">150%", 150, 1e9)]
+    have = [x for x in rows if x.get("ret_6mo_at_pick") is not None]
+    if len(have) >= 20:
+        print("\n  by how far it had ALREADY run when we picked it (6-month return):")
+        for label, lo, hi in buckets:
+            v = [x[ret_key] for x in have if lo <= x["ret_6mo_at_pick"] < hi]
+            if len(v) >= 5:
+                print(f"    already up {label:<9} n={len(v):<5} → mean {statistics.mean(v):+6.1f}%")
 
     for title, fields in (("SCORE COMPONENTS", COMPONENTS), ("RAW FACTS", RAW_FACTS)):
         print(f"\n{title} — top half vs bottom half of each")

@@ -1901,7 +1901,9 @@ def log_picks(shortlist, week_label, top_n=25):
         rows.append({
             "id": f"{p['ticker']}-{week_label}",
             "ticker": p["ticker"], "week_label": week_label,
+            "source": "shortlist",
             "pick_date": today, "rank_in_week": i,
+            "ret_6mo_at_pick": p.get("ret_6mo"),
             "price": p.get("price"), "market_cap": p.get("market_cap"),
             "sector": p.get("sector"), "industry": p.get("industry"),
             "name": (p.get("name") or "")[:120],
